@@ -149,9 +149,12 @@ export async function accounts() {
 
 // Build the SaveMessage inner request. draft: { csid, from, replyTo, to, cc, bcc, subject, html, text,
 // inReplyTo: { id, replied, forwarded } | null, files: File[], draftFolderId }.
+// d.files: File[] (plain attachments) and d.inline: [{ file, contentId }] for images referenced as cid: in the HTML.
 function saveRequest(d) {
-  const files = d.files || [];
-  const attachments = files.map(f => ({ disposition: "attachment", multipartName: `multipart://${encodeURIComponent(f.name)}` }));
+  const inline = d.inline || [];
+  const files = (d.files || []).concat(inline.map(i => i.file));
+  const attachments = (d.files || []).map(f => ({ disposition: "attachment", multipartName: `multipart://${encodeURIComponent(f.name)}` }))
+    .concat(inline.map(i => ({ disposition: "inline", contentId: i.contentId, multipartName: `multipart://${encodeURIComponent(i.file.name)}` })));
   const message = {
     csid: d.csid, newMessage: !d.inReplyTo,
     headers: { subject: d.subject || "", from: [d.from], replyTo: [d.replyTo || d.from], to: d.to || [], cc: d.cc || [], bcc: d.bcc || [] },
@@ -176,8 +179,10 @@ function saveResult(r) {
   return x.response?.result?.message || null;
 }
 
+const allFiles = d => (d.files || []).concat((d.inline || []).map(i => i.file));
+
 export async function saveDraft(d) {
-  const r = await batch("messages.saveV3", [saveRequest(d)], true, d.files);
+  const r = await batch("messages.saveV3", [saveRequest(d)], true, allFiles(d));
   return { message: saveResult(r), ms: r.ms };
 }
 
@@ -196,7 +201,7 @@ export async function send(d, sentFolderId) {
     { id: "GetSimpleBody", method: "GET", uri: "/ws/v3/mailboxes/@.id==<mb>/messages/@.id==$(messageId)/content/simplebody/full" },
     sendReq,
   ];
-  const r = await batch("messages.saveAndSend", [req], true, d.files);
+  const r = await batch("messages.saveAndSend", [req], true, allFiles(d));
   const message = saveResult(r);
   const sent = r.find(x => x.id === "SendMessage");
   const code = sent?.httpCode ?? 0;

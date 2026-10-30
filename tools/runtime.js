@@ -108,7 +108,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.fill("#c-subject", "Runtime test");
   await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.type("Hello from the runtime test.");
   await page.setInputFiles("#c-files", { name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("attached text") });
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+  await page.locator("#c-editor").click({ position: { x: 200, y: 12 } });
+  await page.setInputFiles("#c-imgfile", { name: "shot.png", mimeType: "image/png", buffer: png });
+  await page.waitForSelector("#c-editor img");
+  await page.selectOption("#c-font", "Georgia");
+  results.editorImgs = await page.locator("#c-editor img").count();
   results.fileChip = await page.locator("#c-filelist").textContent();
+  await page.locator("#c-editor").click({ position: { x: 60, y: 12 } }); await page.keyboard.press("Shift+Home");
   await page.screenshot({ path: path.join(__dirname, "..", "out", "compose.png") }).catch(() => {});
   await page.keyboard.press("Control+Enter");
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Sending in"));
@@ -125,7 +132,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     uri: save.uri, parts: save.payloadParts.map(p => p.partName), fileParts: sendCall.fileParts,
     to: payload.message.headers.to, from: payload.message.headers.from, subject: payload.message.headers.subject, html: payload.simpleBody.html,
     attachments: payload.message.attachments, filters: save.filters, chain: (save.requests || []).map(r => [r.id, r.uri.replace(/@\.id==MB1/, "@.id==<mb>"), r.payload]),
-    flags: payload.message.flags, newMessage: payload.message.newMessage,
+    flags: payload.message.flags, newMessage: payload.message.newMessage, inlineFiles: sendCall.fileParts.filter(p => p[1].startsWith("inline-")),
   };
   results.composeHiddenAfterSend = await page.locator("#compose").isHidden();
   results.readerBack = await page.locator("#reader").isVisible();
@@ -140,8 +147,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.to.length === 3 && results.sent.to.some(a => a.name === "Alice") && results.sent.to[0].email.startsWith("s"), "recipients: autocomplete chip plus two typed: " + JSON.stringify(results.sent.to));
   expect(results.suggestions.length >= 2 && results.suggestions[0].includes("Sender"), "autocomplete suggestions: " + results.suggestions.join(","));
   expect(!results.afterHide.some(s => s.includes("s2@x.com")) && results.afterHide.length >= results.suggestions.length - 1, "hidden address gone: " + results.afterHide.join(","));
-  expect(/^<div><div>Hello from the runtime test\.<\/div>/.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
-  expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.length === 1, "attachment sent");
+  expect(/^<div><div>Hello from the runtime test\./.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
+  expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
+  expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));

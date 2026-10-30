@@ -109,7 +109,23 @@ export function init(h) {
   $("c-mode").onchange = () => switchMode($("c-mode").value);
   $("c-quote-toggle").onclick = () => toggleQuote();
   $("c-cc-toggle").onclick = () => { $("c-cc-row").classList.toggle("hidden"); $("c-bcc-row").classList.toggle("hidden"); };
-  for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); };
+  for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); }; }
+  $("c-font").onchange = () => { if ($("c-font").value) exec("fontName", $("c-font").value); $("c-font").value = ""; };
+  $("c-size").onchange = () => { if ($("c-size").value) exec("fontSize", $("c-size").value); $("c-size").value = ""; };
+  $("c-color").oninput = () => exec("foreColor", $("c-color").value);
+  $("c-hilite").oninput = () => exec("hiliteColor", $("c-hilite").value);
+  $("c-imgfile").onchange = () => { insertImages([...$("c-imgfile").files]); $("c-imgfile").value = ""; };
+  const ed = $("c-editor");
+  ed.addEventListener("paste", e => {
+    const imgs = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
+    if (imgs.length) { e.preventDefault(); insertImages(imgs); }
+  });
+  ed.addEventListener("drop", e => {
+    const imgs = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith("image/"));
+    if (imgs.length) { e.preventDefault(); e.stopPropagation(); placeCaretAt(e.clientX, e.clientY); insertImages(imgs); }
+  });
+  ed.addEventListener("click", e => { ed.querySelectorAll("img.sel").forEach(i => i.classList.remove("sel")); if (e.target.tagName === "IMG") e.target.classList.add("sel"); });
+  ed.addEventListener("keydown", e => { const sel = ed.querySelector("img.sel"); if (sel && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); sel.remove(); dirty = true; } });
   c.addEventListener("input", () => { dirty = true; });
   c.addEventListener("dragover", e => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); c.classList.add("drop"); } });
   c.addEventListener("dragleave", () => c.classList.remove("drop"));
@@ -235,11 +251,59 @@ function switchMode(v) {
   hooks.saveSetting("composeHtml", html);
 }
 
-function format(cmd) {
+function exec(cmd, arg = null) {
   const ed = $("c-editor"); ed.focus();
-  if (cmd === "link") { const url = prompt("Link URL:"); if (url && /^https?:\/\//i.test(url)) document.execCommand("createLink", false, url); return; }
-  if (cmd === "code") { document.execCommand("formatBlock", false, "pre"); return; }
-  document.execCommand(cmd, false, null);
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand(cmd, false, arg);
+  dirty = true;
+}
+
+function format(cmd) {
+  if (cmd === "link") { const url = prompt("Link URL:"); if (url && /^https?:\/\//i.test(url)) exec("createLink", url); return; }
+  if (cmd === "code") { exec("formatBlock", "pre"); return; }
+  if (cmd === "image") { $("c-imgfile").click(); return; }
+  exec(cmd);
+}
+
+// Images pasted, dropped or picked are placed at the caret as data: URLs; on save/send they
+// become inline attachments referenced by cid:.
+function placeCaretAt(x, y) {
+  const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+  if (r) { const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+}
+
+async function insertImages(files) {
+  const ed = $("c-editor"); ed.focus();
+  for (const f of files) {
+    if (f.size > 10 * 1024 * 1024) { hooks.status(`${f.name}: larger than 10 MB, attach it instead`); continue; }
+    const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(f); });
+    const img = document.createElement("img");
+    img.src = dataUrl; img.alt = f.name; img.dataset.name = f.name || `pasted-${Date.now()}.png`;
+    const sel = getSelection();
+    if (sel.rangeCount && ed.contains(sel.anchorNode)) { const r = sel.getRangeAt(0); r.deleteContents(); r.insertNode(img); r.setStartAfter(img); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); }
+    else ed.appendChild(img);
+  }
+  dirty = true;
+}
+
+// Returns { html, inline } with data: images replaced by cid: references and their bytes as Files.
+function extractInline(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const inline = [];
+  let n = 0;
+  for (const img of doc.querySelectorAll("img[src^='data:']")) {
+    const m = img.getAttribute("src").match(/^data:([^;,]+)(;base64)?,(.*)$/s);
+    if (!m) { img.remove(); continue; }
+    const mime = m[1] || "image/png";
+    const bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
+    const ext = (mime.split("/")[1] || "png").replace("jpeg", "jpg");
+    const name = `inline-${++n}.${ext}`;
+    const contentId = `${Date.now()}-${n}@ymail-lite`;
+    inline.push({ file: new File([bytes], name, { type: mime }), contentId });
+    img.setAttribute("src", `cid:${contentId}`);
+    img.removeAttribute("class"); img.removeAttribute("data-name");
+  }
+  return { html: doc.body.innerHTML, inline };
 }
 
 function renderQuote(expanded) {
@@ -300,8 +364,11 @@ function collect() {
     subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files,
     draftFolderId: hooks.folderByType("DRAFT")?.id,
   };
-  if (draft.html) d.html = `<div>${$("c-editor").innerHTML}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : "");
-  else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");
+  if (draft.html) {
+    const { html, inline } = extractInline($("c-editor").innerHTML);
+    d.html = `<div>${html}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : "");
+    d.inline = inline;
+  } else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");
   return d;
 }
 
@@ -327,7 +394,7 @@ async function send() {
   if (!d.subject && !confirm("Send without a subject?")) return;
   const sentId = hooks.folderByType("SENT")?.id;
   if (!sentId || !d.draftFolderId) { hooks.status("Sent or Drafts folder not found"); return; }
-  const snapshot = { ...draft, d };
+  const snapshot = { ...draft, d, editorHtml: draft.html ? $("c-editor").innerHTML : null };
   clearInterval(autosaveTimer);
   $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; dirty = false;
   hooks.onClose();
@@ -347,7 +414,7 @@ async function reopenFrom(snap) {
   $("c-cc-row").classList.toggle("hidden", !snap.d.cc.length); $("c-bcc-row").classList.toggle("hidden", !snap.d.bcc.length);
   $("c-subject").value = snap.d.subject;
   setMode(snap.html);
-  if (snap.html) { const own = snap.d.html.replace(/<br>(<div class="ymq">[\s\S]*)$/, ""); $("c-editor").innerHTML = own.replace(/^<div>/, "").replace(/<\/div>$/, ""); }
+  if (snap.html) $("c-editor").innerHTML = snap.editorHtml || "";
   else $("c-text").value = snap.d.text.replace(/\n\n[\s\S]*$/, m => snap.quoteText && m.trim() === snap.quoteText.trim() ? "" : m);
   renderQuote(false); renderFiles();
   $("compose").classList.remove("hidden");
