@@ -357,6 +357,27 @@ function cleanHtml(html) {
   return doc.body.innerHTML;
 }
 
+// Inline parts (cid images) are served by cloud-apis.mail.yahoo.com and need the session cookies,
+// which the sandboxed frame cannot send. Fetch them here and hand the frame data: URLs instead.
+const partCache = new Map();
+async function inlineYahooParts(html) {
+  const re = /(<img\b[^>]*?\ssrc=)(["'])(https:\/\/[a-z0-9.-]*mail\.yahoo\.com\/[^"']+)\2/gi;
+  const urls = [...new Set([...html.matchAll(re)].map(m => m[3]))].slice(0, 60);
+  if (!urls.length) return html;
+  await Promise.all(urls.map(async u => {
+    if (partCache.has(u)) return;
+    try {
+      const resp = await fetch(u.replace(/&amp;/g, "&"), { credentials: "include" });
+      if (!resp.ok) throw new Error(resp.status);
+      const blob = await resp.blob();
+      if (!/^image\//.test(blob.type) && blob.type) throw new Error(blob.type);
+      const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(blob); });
+      partCache.set(u, dataUrl);
+    } catch { partCache.set(u, null); }
+  }));
+  return html.replace(re, (m, pre, qu, u) => partCache.get(u) ? `${pre}${qu}${partCache.get(u)}${qu}` : m);
+}
+
 function bodyDoc(html, images) {
   const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? "https: data:" : "'none'"};`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
@@ -374,7 +395,7 @@ async function open(i) {
   let r;
   try { r = await api.body(m.id); } catch (e) { showReaderError(e, "fetching the message"); return; }
   if (state.openId !== m.id) return;
-  try { renderMessage(m, r); } catch (e) { showReaderError(e, "rendering the message"); }
+  try { await renderMessage(m, r); } catch (e) { showReaderError(e, "rendering the message"); }
 }
 
 function showReaderError(e, what) {
@@ -398,7 +419,7 @@ function setFrame(doc) {
   old.replaceWith(f);
 }
 
-function renderMessage(m, r) {
+async function renderMessage(m, r) {
   r.html = cleanHtml(r.html);
   currentBody = r;
   const h = r.message.headers || {};
@@ -420,6 +441,7 @@ function renderMessage(m, r) {
   att.innerHTML = r.attachments.filter(a => a.disposition !== "inline" && /^https:\/\//i.test(a.downloadUrl || "")).map(a =>
     `<a href="${esc(a.downloadUrl)}" target="_blank" rel="noopener">${esc(a.filename)}</a><span style="color:var(--fg3)">${Math.round((a.size || 0) / 1024)} KB</span> `).join("");
   att.classList.toggle("hidden", !att.innerHTML);
+  if (auto) { const inlined = await inlineYahooParts(r.html); if (state.openId !== m.id) return; r.html = inlined; }
   setFrame(bodyDoc(r.html, auto));
   status(plainSubject(h.subject).slice(0, 60), r.ms);
   if (settings.markReadSec != null && !m.flags?.read) {
@@ -433,8 +455,11 @@ function renderMessage(m, r) {
   }
 }
 
-function loadImages() {
-  if (currentBody) setFrame(bodyDoc(currentBody.html, true));
+async function loadImages() {
+  if (!currentBody) return;
+  const id = state.openId;
+  currentBody.html = await inlineYahooParts(currentBody.html);
+  if (state.openId === id) setFrame(bodyDoc(currentBody.html, true));
 }
 
 function clearReader() {
