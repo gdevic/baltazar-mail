@@ -875,7 +875,17 @@ function toggleTheme() {
   applySettings(); saveSettings();
 }
 
-function openSettings(show) { $("settings").classList.toggle("hidden", !show); }
+function openSettings(show) {
+  $("settings").classList.toggle("hidden", !show);
+  if (show) renderHidden();
+}
+
+async function renderHidden() {
+  const list = await contacts.hiddenList();
+  $("hidden-summary").textContent = list.length ? `${list.length} hidden from suggestions (× in the dropdown hides; restore here):` : "No hidden addresses. The × in the address dropdown hides one for good.";
+  $("hidden-list").innerHTML = list.map(a => `<div><span>${esc(a.name ? `${a.name} <${a.email}>` : a.email)}</span><button data-restore="${esc(a.email)}">Restore</button></div>`).join("");
+  $("hidden-list").onclick = async e => { const b = e.target.closest("[data-restore]"); if (b) { await contacts.hide(b.dataset.restore, false); renderHidden(); } };
+}
 
 function wireSettings() {
   for (const [sel, dark] of [["darkTheme", true], ["lightTheme", false]]) {

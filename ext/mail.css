@@ -152,6 +152,13 @@ body.dragging iframe { pointer-events: none; }
 .chip a { color: var(--fg2); text-decoration: none; padding: 0 3px; cursor: pointer; }
 .chip.bad { border-color: #c0392b; }
 #c-suggest { position: fixed; z-index: 40; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); min-width: 280px; max-width: 480px; padding: 3px 0; }
-#c-suggest div { padding: 3px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#c-suggest div { display: flex; align-items: center; gap: 8px; padding: 3px 6px 3px 12px; cursor: pointer; white-space: nowrap; }
+#c-suggest div > span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+#c-suggest .hide { color: var(--fg3); text-decoration: none; width: 18px; height: 18px; line-height: 16px; text-align: center; border-radius: 9px; font-size: 13px; flex: none; opacity: 0; }
+#c-suggest div:hover .hide, #c-suggest div.kb .hide { opacity: 1; }
+#c-suggest .hide:hover { background: var(--bg3); color: var(--fg); }
+#hidden-list { max-height: 160px; overflow-y: auto; font-size: 12px; }
+#hidden-list div { display: flex; gap: 8px; padding: 1px 0; }
+#hidden-list span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
 #c-suggest div.kb, #c-suggest div:hover { background: var(--sel); }
 #c-suggest i { font-style: normal; color: var(--fg3); margin-left: 6px; }

@@ -84,7 +84,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
   await page.locator("#c-to input").type("Sen");
   await page.waitForSelector("#c-suggest:not(.hidden)", { timeout: 5000 });
-  results.suggestions = await page.locator("#c-suggest div").allTextContents();
+  results.suggestions = await page.locator("#c-suggest div span").allTextContents();
+  await page.locator("#c-suggest div").nth(1).hover();
+  await page.locator("#c-suggest div").nth(1).locator(".hide").dispatchEvent("mousedown");
+  await page.waitForTimeout(300);
+  results.afterHide = await page.locator("#c-suggest div span").allTextContents();
   await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
   await page.locator("#c-to input").type("Alice <alice@example.com>, bob@example.com");
   await page.keyboard.press("Tab");
@@ -123,6 +127,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.afterCancel.to.includes("alice@example.com") && results.afterCancel.body.includes("Hello"), "undo-send restores draft");
   expect(results.sent.to.length === 3 && results.sent.to.some(a => a.name === "Alice") && results.sent.to[0].email.startsWith("s"), "recipients: autocomplete chip plus two typed: " + JSON.stringify(results.sent.to));
   expect(results.suggestions.length >= 2 && results.suggestions[0].includes("Sender"), "autocomplete suggestions: " + results.suggestions.join(","));
+  expect(!results.afterHide.some(s => s.includes("s2@x.com")) && results.afterHide.length >= results.suggestions.length - 1, "hidden address gone: " + results.afterHide.join(","));
   expect(/^<div><div>Hello from the runtime test\.<\/div>/.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.length === 1, "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");

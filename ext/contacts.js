@@ -122,13 +122,26 @@ function score(e, now) {
   return weight * Math.exp(-days / 120) + (e.sent ? 0.5 : 0) - (isNoReply(e.email) ? 1e6 : 0);
 }
 
+// Addresses the user never wants suggested (newsletters and the like). Still counted, never shown.
+export async function hide(email, hidden = true) {
+  await loadAll();
+  const e = cache.get(email.toLowerCase()); if (!e) return;
+  e.hidden = hidden;
+  await tx(STORE, "readwrite", s => s.put(e));
+}
+
+export async function hiddenList() {
+  await loadAll();
+  return [...cache.values()].filter(e => e.hidden).sort((a, b) => a.email.localeCompare(b.email)).map(e => ({ name: e.name, email: e.email }));
+}
+
 export async function suggest(query, limit = 8, exclude = new Set()) {
   await loadAll();
   const q = (query || "").trim().toLowerCase();
   const now = Math.floor(Date.now() / 1000);
   const rows = [];
   for (const e of cache.values()) {
-    if (exclude.has(e.email)) continue;
+    if (exclude.has(e.email) || e.hidden) continue;
     if (q) {
       const name = e.name.toLowerCase();
       const words = name.split(/\s+/);
