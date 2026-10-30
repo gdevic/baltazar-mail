@@ -24,6 +24,7 @@ const folders = [
   { id: "1", name: "Inbox", types: ["INBOX"], unread: 3, total: 95, highestModSeq: 10 },
   { id: "2", name: "Sent", types: ["SENT"], unread: 0, total: 8, highestModSeq: 11 },
   { id: "4", name: "Trash", types: ["TRASH"], unread: 0, total: 1, highestModSeq: 12 },
+  { id: "62", name: "Archive", types: ["ARCHIVE"], unread: 0, total: 0, highestModSeq: 16 },
   { id: "31", name: "Projects", types: ["USER"], unread: 0, total: 5, highestModSeq: 13 },
   { id: "32", name: "Projects/A-Z80", types: ["USER"], unread: 1, total: 7, highestModSeq: 14 },
   { id: "99", name: "Hidden", types: ["SYNC"], unread: 0, total: 0, highestModSeq: 15 },
@@ -34,7 +35,7 @@ const folders = [
   const port = server.address().port;
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  const errors = [];
+  const errors = [], mutations = [];
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
   page.on("console", m => { if (m.type() === "error") errors.push("console: " + m.text()); });
   await page.addInitScript(() => {
@@ -64,7 +65,10 @@ const folders = [
       result = { messages: Array.from({ length: Math.max(0, Math.min(count, n - offset)) }, (_, i) => msg(offset + i + 1, folder)), query: { type: q.includes("keyword") ? "S" : "L", nextModSeq: 1 } };
     }
     if (!uri) errors.push("batch without uri: " + name);
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses: [{ id: "x", httpCode: 200, response: { result } }], status: { failedRequests: [], successRequests: [] } }, error: null }) });
+    const reqs = (body.match(/"method":"(POST|DELETE)"/g) || []).length;
+    const responses = reqs ? Array.from({ length: reqs }, (_, i) => ({ id: "u" + i, httpCode: 204, responseString: "" })) : [{ id: "x", httpCode: 200, response: { result } }];
+    mutations.push(name + ":" + reqs);
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: { failedRequests: [], successRequests: [] } }, error: null }) });
   });
   await page.goto(`http://localhost:${port}/mail.html`);
   await page.waitForSelector("#rows .row");
@@ -82,7 +86,36 @@ const folders = [
   const sentRows = await page.locator("#rows .row").count();
   await page.keyboard.press("?");
   const helpVisible = await page.locator("#help").isVisible();
+  // actions: go to inbox, select two rows with x, archive, undo; context menu; move picker
   await page.keyboard.press("Escape");
+  await page.keyboard.press("g"); await page.keyboard.press("i");
+  await page.waitForFunction(() => document.getElementById("list-title").textContent === "Inbox");
+  await page.keyboard.press("j"); await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
+  const selectedText = await page.locator("#list-count").textContent();
+  await page.keyboard.press("e");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Undo"));
+  const afterArchive = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
+  await page.keyboard.press("z");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo"));
+  const afterUndo = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
+  await page.locator("#rows .row").nth(3).click({ button: "right" });
+  const ctxItems = await page.locator("#ctx div").allTextContents();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("v");
+  await page.waitForSelector("#movebox:not(.hidden)");
+  await page.keyboard.type("Proj");
+  const moveChoices = await page.locator("#move-list div").allTextContents();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Undo: move"));
+  const afterMove = await page.locator("#st-undo").textContent();
+  await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
+  await page.locator("#rows .row").nth(6).click({ button: "right" });
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "actions.png") });
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("u");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Undo: mark"));
+  const afterRead = await page.locator("#st-undo").textContent();
+  console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   await page.keyboard.press(",");
   await page.click('input[name=layout][value=horizontal]');
   await page.click('input[name=theme][value=light]');

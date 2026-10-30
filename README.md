@@ -2,7 +2,7 @@
 
 A fast, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) extension. Everything works with the mouse; the keyboard shortcuts are there for those who want them. It reuses the Yahoo sign-in already present in the browser and talks to the same `ws/v3` batch API that Yahoo's own web client uses, so it is as quick as the official UI without any of its chrome.
 
-Status: read-only. Browsing, search and reading work; nothing writes to the mailbox yet.
+Status: browsing, search, reading, and mailbox actions (read/unread, star, archive, move, delete) with multi-level undo. Compose, reply and forward are next.
 
 ## Install
 
@@ -19,6 +19,9 @@ Status: read-only. Browsing, search and reading work; nothing writes to the mail
 | `/` | search; `Esc` clears |
 | `g i` `g s` `g t` `g d` | Inbox, Sent, Trash, Drafts |
 | `g f` | focus folder filter; type, arrows, `Enter` |
+| `x` | select / deselect (Ctrl-click toggles, Shift-click ranges, Ctrl+A all) |
+| `e` `#` `v` `u` `s` | archive, delete, move, read/unread, star; apply to the selection |
+| `z` / `Shift+Z` | undo / redo; the status bar names the next undo |
 | `r` | refresh current list |
 | `n` | load next 100 |
 | `i` | load remote images in the open message |

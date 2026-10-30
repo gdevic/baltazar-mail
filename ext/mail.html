@@ -17,6 +17,16 @@
   <div id="split1" class="split"></div>
   <section id="list" tabindex="0">
     <div id="list-head"><span id="list-title"></span><span id="list-count"></span></div>
+    <div id="toolbar">
+      <button data-act="archive" title="Archive (e)">Archive</button>
+      <button data-act="delete" title="Delete (# or Del)">Delete</button>
+      <button data-act="move" title="Move to folder (v)">Move…</button>
+      <button data-act="read" title="Mark read / unread (u)">Read</button>
+      <button data-act="star" title="Star / unstar (s)">Star</button>
+      <span class="sp"></span>
+      <button data-act="undo" title="Undo (z)" disabled>Undo</button>
+      <button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button>
+    </div>
     <div id="rows"></div>
     <div id="more" class="hidden"><button id="more-btn">Load more</button></div>
   </section>
@@ -34,7 +44,7 @@
     </div>
     <iframe id="r-body" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" class="hidden"></iframe>
   </section>
-  <footer id="status"><span id="st-msg"></span><span id="st-lat"></span></footer>
+  <footer id="status"><span id="st-msg"></span><span id="st-undo"></span><span id="st-lat"></span></footer>
 </div>
 <div id="signin" class="hidden">
   <h1>YMail Lite</h1>
@@ -55,7 +65,15 @@
     <b>Behaviour</b>
     <label><input type="number" id="poll" min="5" max="600" step="5" style="width:60px"> seconds between new-mail checks</label>
     <label><input type="number" id="density" min="18" max="32" step="1" style="width:60px"> row height, px</label>
+    <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>
     <p><button id="settings-close">Close</button> <button id="settings-reset">Reset pane sizes</button></p>
+  </div>
+</div>
+<div id="ctx" class="hidden"></div>
+<div id="movebox" class="hidden">
+  <div id="movebox-box">
+    <input id="move-filter" placeholder="Move to folder…" autocomplete="off">
+    <div id="move-list"></div>
   </div>
 </div>
 <div id="help" class="hidden">
@@ -67,6 +85,14 @@
       <tr><td>/</td><td>search (Esc clears)</td></tr>
       <tr><td>g i / g s / g t / g d</td><td>Inbox / Sent / Trash / Drafts</td></tr>
       <tr><td>g f</td><td>focus folder list (type to filter, Enter to open)</td></tr>
+      <tr><td>x</td><td>select / deselect message (Ctrl-click, Shift-click for ranges)</td></tr>
+      <tr><td>Ctrl+A</td><td>select all loaded</td></tr>
+      <tr><td>e</td><td>archive</td></tr>
+      <tr><td>#, Del</td><td>delete (to Trash; permanent if already in Trash)</td></tr>
+      <tr><td>v</td><td>move to folder (or drag rows onto a folder)</td></tr>
+      <tr><td>u</td><td>mark read / unread</td></tr>
+      <tr><td>s</td><td>star / unstar</td></tr>
+      <tr><td>z / Shift+Z</td><td>undo / redo (multi-level; the status bar shows what will be undone)</td></tr>
       <tr><td>r</td><td>refresh current list</td></tr>
       <tr><td>n</td><td>load next 100 messages</td></tr>
       <tr><td>i</td><td>load remote images in open message</td></tr>
@@ -74,7 +100,7 @@
       <tr><td>,</td><td>settings (layout, theme)</td></tr>
       <tr><td>?</td><td>this help</td></tr>
     </table>
-    <p>Read-only build: nothing you do here changes your mailbox. Messages stay unread on Yahoo.</p>
+    <p>Actions apply to the selected messages, or to the highlighted one if none are selected. Right-click a message for the same actions.</p>
   </div>
 </div>
 <script type="module" src="mail.js"></script>

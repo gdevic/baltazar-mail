@@ -106,3 +106,25 @@ export async function body(msgId) {
   if (!res?.message) throw new ApiError("body: message not returned", r[0]);
   return { message: res.message, html: res.simpleBody?.html || "", attachments: res.simpleBody?.attachments || [], ms: r.ms };
 }
+
+// ---------- mutations ----------
+// Each id gets its own inner request, as the web client does; one HTTP round trip for all of them.
+async function perMessage(name, ids, make) {
+  const r = await batch(name, ids.map((id, i) => make(id, i)));
+  const failed = r.filter(x => x.httpCode && x.httpCode >= 300);
+  if (failed.length) throw new ApiError(`${name}: ${failed.length} of ${ids.length} failed (HTTP ${failed[0].httpCode})`, failed);
+  return { ms: r.ms, count: ids.length };
+}
+
+const update = (name, ids, payload) => perMessage(name, ids, (id, i) => ({
+  id: `UnifiedUpdateMessage_${i}`, method: "POST", uri: q(`id:(${id})`), payload,
+}));
+
+export function setRead(ids, read) { return update("messages.readFlagUpdate", ids, { message: { flags: { read } } }); }
+export function setStarred(ids, flagged) { return update("messages.starFlagUpdate", ids, { message: { flags: { flagged } } }); }
+export function move(ids, folderId) { return update("messages.move", ids, { message: { folder: { id: String(folderId) } } }); }
+
+// Permanent removal; the client only calls this for messages already in Trash.
+export function deleteForever(ids) {
+  return perMessage("messages.delete", ids, (id, i) => ({ id: `UnifiedDeleteMessage_${i}`, method: "DELETE", uri: q(`id:(${id})`) }));
+}
