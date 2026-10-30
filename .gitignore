@@ -1,0 +1,8 @@
+out/
+node_modules/
+tools/themeshots.run.js
+tools/cookie.txt
+tools/session.json
+tools/sync.json
+*.har
+*.zip
