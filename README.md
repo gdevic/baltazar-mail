@@ -1,6 +1,6 @@
 # YMail Lite
 
-A fast, keyboard-driven, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) extension. It reuses the Yahoo sign-in already present in the browser and talks to the same `ws/v3` batch API that Yahoo's own web client uses, so it is as quick as the official UI without any of its chrome.
+A fast, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) extension. Everything works with the mouse; the keyboard shortcuts are there for those who want them. It reuses the Yahoo sign-in already present in the browser and talks to the same `ws/v3` batch API that Yahoo's own web client uses, so it is as quick as the official UI without any of its chrome.
 
 Status: read-only. Browsing, search and reading work; nothing writes to the mailbox yet.
 
@@ -10,7 +10,7 @@ Status: read-only. Browsing, search and reading work; nothing writes to the mail
 2. Load unpacked, select the `ext/` folder.
 3. Be signed in to mail.yahoo.com in the same browser profile, then click the toolbar icon.
 
-## Keys
+## Keyboard shortcuts (optional)
 
 | Key | Action |
 |---|---|
