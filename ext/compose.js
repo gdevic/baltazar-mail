@@ -48,15 +48,16 @@ class AddrField {
   }
   async suggest(clicked = false) {
     if (!clicked && !this.input.value.trim()) return;
+    const seq = ++suggestSeq;
     const exclude = new Set(this.list.map(a => a.email.toLowerCase()));
     const items = await contacts.suggest(this.input.value, 8, exclude);
-    if (document.activeElement !== this.input) return;
+    if (seq !== suggestSeq || document.activeElement !== this.input) return;
     showSuggest(this, items);
   }
   onKey(e) {
     const sg = $("c-suggest"), open = !sg.classList.contains("hidden");
     if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); moveSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
-    if (open && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
     if (e.key === "Enter" || e.key === "Tab" || e.key === "," || e.key === ";") {
       if (open && suggestSel >= 0) { e.preventDefault(); this.add(suggestItems[suggestSel]); this.input.value = ""; hideSuggest(); return; }
       if (this.input.value.trim()) { if (e.key !== "Tab") e.preventDefault(); this.commit(true); hideSuggest(); return; }
@@ -67,7 +68,7 @@ class AddrField {
   }
 }
 
-let suggestField = null, suggestItems = [], suggestSel = -1;
+let suggestField = null, suggestItems = [], suggestSel = -1, suggestSeq = 0;
 function showSuggest(field, items) {
   const sg = $("c-suggest");
   suggestField = field; suggestItems = items; suggestSel = items.length ? 0 : -1;
@@ -89,7 +90,7 @@ function moveSuggest(d) {
   suggestSel = (suggestSel + d + suggestItems.length) % suggestItems.length;
   $("c-suggest").querySelectorAll("div").forEach((el, i) => el.classList.toggle("kb", i === suggestSel));
 }
-function hideSuggest() { $("c-suggest").classList.add("hidden"); suggestSel = -1; }
+function hideSuggest() { ++suggestSeq; $("c-suggest").classList.add("hidden"); suggestSel = -1; }
 
 const fields = {};
 let accounts = [];
