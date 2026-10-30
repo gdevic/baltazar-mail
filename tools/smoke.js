@@ -121,7 +121,7 @@ const folders = [
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
   expect(afterUndo.rows === 95, "undo restored rows");
-  expect(ctxItems.length === 6, "context menu items");
+  expect(ctxItems.length === 7 && ctxItems.includes("Spam"), "context menu items");
   expect(moveChoices[0] === "Projects", "move picker filter");
   expect(mutations.includes("messages.move:2") && mutations.includes("messages.readFlagUpdate:1"), "mutation calls");
   await page.keyboard.press(",");
