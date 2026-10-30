@@ -192,7 +192,7 @@ async function loadFolders(silent = false) {
 
 function updateTitle() {
   const inbox = folderByType("INBOX");
-  document.title = (inbox?.unread ? `(${inbox.unread}) ` : "") + "YMail Lite";
+  document.title = (inbox?.unread ? `(${inbox.unread}) ` : "") + "YMail";
 }
 
 // ---------- list ----------

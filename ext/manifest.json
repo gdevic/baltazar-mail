@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "YMail Lite",
-  "version": "0.7.7",
+  "name": "YMail",
+  "version": "0.8.0",
   "description": "A fast, ad-free front end for Yahoo Mail that reuses your existing Yahoo sign-in. Works equally well with mouse or keyboard.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -11,7 +11,7 @@
     "128": "icons/128.png"
   },
   "action": {
-    "default_title": "Open YMail Lite"
+    "default_title": "Open YMail"
   },
   "background": {
     "service_worker": "background.js",
