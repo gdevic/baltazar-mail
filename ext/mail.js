@@ -383,6 +383,18 @@ function showReaderError(e, what) {
   $("r-body").classList.add("hidden");
 }
 
+// A fresh frame per message: a sandboxed srcdoc frame that has been hidden and reused
+// does not reliably repaint in every Chromium build.
+function setFrame(doc) {
+  const old = $("r-body");
+  const f = document.createElement("iframe");
+  f.id = "r-body";
+  f.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.srcdoc = doc;
+  old.replaceWith(f);
+}
+
 function renderMessage(m, r) {
   r.html = cleanHtml(r.html);
   currentBody = r;
@@ -402,7 +414,7 @@ function renderMessage(m, r) {
   att.innerHTML = r.attachments.filter(a => a.disposition !== "inline" && /^https:\/\//i.test(a.downloadUrl || "")).map(a =>
     `<a href="${esc(a.downloadUrl)}" target="_blank" rel="noopener">${esc(a.filename)}</a><span style="color:var(--fg3)">${Math.round((a.size || 0) / 1024)} KB</span> `).join("");
   att.classList.toggle("hidden", !att.innerHTML);
-  $("r-body").srcdoc = bodyDoc(r.html, false);
+  setFrame(bodyDoc(r.html, false));
   status(plainSubject(h.subject).slice(0, 60), r.ms);
   if (settings.markReadSec != null && !m.flags?.read) {
     markReadTimer = setTimeout(() => {
@@ -416,7 +428,7 @@ function renderMessage(m, r) {
 }
 
 function loadImages() {
-  if (currentBody) $("r-body").srcdoc = bodyDoc(currentBody.html, true);
+  if (currentBody) setFrame(bodyDoc(currentBody.html, true));
 }
 
 function clearReader() {
