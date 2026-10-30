@@ -94,6 +94,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("address book:"), null, { timeout: 15000 }).catch(() => {});
   results.addressBook = await page.locator("#st-msg").textContent();
   await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  results.noListOnOpen = await page.locator("#c-suggest").isHidden();
+  await page.locator("#c-to input").click();
+  results.listOnClick = await page.locator("#c-suggest:not(.hidden)").isVisible();
   await page.locator("#c-to input").type("Sen");
   await page.waitForSelector("#c-suggest:not(.hidden)", { timeout: 5000 });
   results.suggestions = await page.locator("#c-suggest div span").allTextContents();
@@ -102,6 +105,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForTimeout(300);
   results.afterHide = await page.locator("#c-suggest div span").allTextContents();
   await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  results.noListAfterPick = await page.locator("#c-suggest").isHidden();
   await page.locator("#c-to input").type("Alice <alice@example.com>, bob@example.com");
   await page.keyboard.press("Tab");
   results.toChips = await chips("c-to");
@@ -151,6 +155,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
+  expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }

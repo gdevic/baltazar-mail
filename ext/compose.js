@@ -17,11 +17,12 @@ class AddrField {
     this.el = el; this.list = [];
     el.innerHTML = `<input autocomplete="off" spellcheck="false" placeholder="${esc(placeholder || "")}">`;
     this.input = el.querySelector("input");
-    el.onclick = e => { if (e.target === el) this.input.focus(); };
-    this.input.oninput = () => { dirty = true; this.suggest(); };
+    // The recent-addresses list opens only on an explicit click in the line; typing filters as usual.
+    el.onclick = e => { if (e.target === el) { this.input.focus(); this.suggest(true); } };
+    this.input.onclick = () => this.suggest(true);
+    this.input.oninput = () => { dirty = true; if (this.input.value.trim()) this.suggest(); else hideSuggest(); };
     this.input.onkeydown = e => this.onKey(e);
     this.input.onblur = () => setTimeout(() => { if (document.activeElement !== this.input) { this.commit(false); hideSuggest(); } }, 150);
-    this.input.onfocus = () => this.suggest();
     this.input.onpaste = e => { const t = e.clipboardData.getData("text"); if (/[,;<]/.test(t)) { e.preventDefault(); this.addText(t); } };
   }
   set(list) { this.list = (list || []).map(a => ({ name: a.name || "", email: a.email })); this.render(); }
@@ -45,7 +46,8 @@ class AddrField {
       this.el.insertBefore(ch, this.input);
     }
   }
-  async suggest() {
+  async suggest(clicked = false) {
+    if (!clicked && !this.input.value.trim()) return;
     const exclude = new Set(this.list.map(a => a.email.toLowerCase()));
     const items = await contacts.suggest(this.input.value, 8, exclude);
     if (document.activeElement !== this.input) return;
@@ -56,7 +58,7 @@ class AddrField {
     if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); moveSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
     if (open && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
     if (e.key === "Enter" || e.key === "Tab" || e.key === "," || e.key === ";") {
-      if (open && suggestSel >= 0) { e.preventDefault(); this.add(suggestItems[suggestSel]); this.input.value = ""; hideSuggest(); this.suggest(); return; }
+      if (open && suggestSel >= 0) { e.preventDefault(); this.add(suggestItems[suggestSel]); this.input.value = ""; hideSuggest(); return; }
       if (this.input.value.trim()) { if (e.key !== "Tab") e.preventDefault(); this.commit(true); hideSuggest(); return; }
       if (e.key === "Enter") e.preventDefault();
       return;
@@ -77,9 +79,9 @@ function showSuggest(field, items) {
   sg.onmousedown = async e => {
     e.preventDefault();
     const h = e.target.closest("[data-hide]");
-    if (h) { await contacts.hide(h.dataset.hide); hooks.status(`${h.dataset.hide} will not be suggested again (restore in settings)`); field.input.focus(); field.suggest(); return; }
+    if (h) { await contacts.hide(h.dataset.hide); hooks.status(`${h.dataset.hide} will not be suggested again (restore in settings)`); field.input.focus(); field.suggest(true); return; }
     const d = e.target.closest("[data-i]"); if (!d) return;
-    field.add(items[Number(d.dataset.i)]); field.input.value = ""; hideSuggest(); field.input.focus(); field.suggest();
+    field.add(items[Number(d.dataset.i)]); field.input.value = ""; hideSuggest(); field.input.focus();
   };
 }
 function moveSuggest(d) {
