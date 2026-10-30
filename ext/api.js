@@ -37,15 +37,13 @@ export async function bootstrap(force = false) {
 const uuid = () => crypto.randomUUID();
 
 // One batch envelope, one HTTP round trip. Returns the inner responses array.
-export async function batch(name, requests, retry = true) {
+export async function batch(name, requests, retry = true, files = []) {
   const s = await bootstrap();
-  const reqs = requests.map(r => ({
-    payloadType: "embedded",
-    ...r,
-    uri: r.uri.replaceAll("<mb>", s.mailboxId),
-  }));
+  const fill = r => ({ payloadType: "embedded", ...r, uri: r.uri.replaceAll("<mb>", s.mailboxId), ...(r.requests ? { requests: r.requests.map(fill) } : {}) });
+  const reqs = requests.map(fill);
   const fd = new FormData();
   fd.append("batchJson", JSON.stringify({ requests: reqs, responseType: "json" }));
+  for (const f of files || []) fd.append(encodeURIComponent(f.name), f, f.name);
   const qs = new URLSearchParams({ name, appId: s.appId, wssid: s.wssid, ymreqid: uuid(), nonblocking: "true" });
   const t0 = performance.now();
   const resp = await fetch(`${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include" });
@@ -54,7 +52,7 @@ export async function batch(name, requests, retry = true) {
     session = null;
     await chrome.storage.session.remove("ymSession");
     await bootstrap(true);
-    return batch(name, requests, false);
+    return batch(name, requests, false, files);
   }
   const text = await resp.text();
   let doc;
@@ -64,7 +62,7 @@ export async function batch(name, requests, retry = true) {
     if (code === "EP-4010" && retry) {
       // Origin rewrite rule not installed yet (worker still starting); ask it and retry once.
       await chrome.runtime.sendMessage({ type: "ensureRules" }).catch(() => {});
-      return batch(name, requests, false);
+      return batch(name, requests, false, files);
     }
     if (code === "EC-4008") { session = null; throw new NotSignedIn(); }
     throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}`, doc.error);
@@ -141,4 +139,67 @@ export function move(ids, folderId) { return update("messages.move", ids, { mess
 // Permanent removal; the client only calls this for messages already in Trash.
 export function deleteForever(ids) {
   return perMessage("messages.delete", ids, (id, i) => ({ id: `UnifiedDeleteMessage_${i}`, method: "DELETE", uri: q(`id:(${id})`) }));
+}
+
+// ---------- accounts, drafts, send ----------
+export async function accounts() {
+  const r = await batch("accounts.get", [{ id: "GetAccounts", uri: "/ws/v3/mailboxes/@.id==<mb>/accounts", method: "GET" }]);
+  return { accounts: first(r).accounts || [], ms: r.ms };
+}
+
+// Build the SaveMessage inner request. draft: { csid, from, replyTo, to, cc, bcc, subject, html, text,
+// inReplyTo: { id, replied, forwarded } | null, files: File[], draftFolderId }.
+function saveRequest(d) {
+  const files = d.files || [];
+  const attachments = files.map(f => ({ disposition: "attachment", multipartName: `multipart://${encodeURIComponent(f.name)}` }));
+  const message = {
+    csid: d.csid, newMessage: !d.inReplyTo,
+    headers: { subject: d.subject || "", from: [d.from], replyTo: [d.replyTo || d.from], to: d.to || [], cc: d.cc || [], bcc: d.bcc || [] },
+    folder: { id: String(d.draftFolderId) }, flags: { spam: "false", read: "true" }, attachments,
+  };
+  if (d.inReplyTo) message.inReplyTo = { messageReference: { id: d.inReplyTo.id }, replied: !!d.inReplyTo.replied, forwarded: !!d.inReplyTo.forwarded };
+  const simpleBody = d.html != null ? { html: d.html } : { text: d.text || "" };
+  return {
+    id: "SaveMessage", method: "POST", payloadType: "multipart",
+    uri: `/ws/v3/mailboxes/@.id==<mb>/messages?uploadCount=${files.length}&totalAttachments=${attachments.length}`,
+    payloadParts: [
+      { partName: "jsonString", contentType: "application/json", payload: { actions: { responseMessage: true }, message, simpleBody } },
+      ...files.map(f => ({ contentType: f.type || "application/octet-stream", partName: encodeURIComponent(f.name), payloadReference: `multipart://${encodeURIComponent(f.name)}` })),
+    ],
+  };
+}
+
+function saveResult(r) {
+  const x = r.find(x => x.id === "SaveMessage");
+  const code = x?.httpCode ?? 0;
+  if (code < 200 || code >= 300) throw new ApiError(`save: HTTP ${code} ${JSON.stringify(x?.response?.error || "").slice(0, 120)}`, x);
+  return x.response?.result?.message || null;
+}
+
+export async function saveDraft(d) {
+  const r = await batch("messages.saveV3", [saveRequest(d)], true, d.files);
+  return { message: saveResult(r), ms: r.ms };
+}
+
+export async function send(d, sentFolderId) {
+  const req = saveRequest(d);
+  req.filters = { select: { messageId: "$..message.immutableid", csid: "$..message.csid", cid: "$..message.conversationId" } };
+  const sendReq = {
+    id: "SendMessage", method: "POST", uri: "/ws/v3/mailboxes/@.id==<mb>/messages/@.id==$(messageId)/send",
+    payload: { csid: "$(csid)", destinationFolder: { id: String(sentFolderId) } }, requests: [],
+  };
+  if (d.inReplyTo && (d.inReplyTo.replied || d.inReplyTo.forwarded)) sendReq.requests.push({
+    id: "UpdateMessages", method: "POST", uri: q(`id:(${d.inReplyTo.id})`),
+    payload: { message: { flags: { answered: !!d.inReplyTo.replied, forwarded: !!d.inReplyTo.forwarded } } },
+  });
+  req.requests = [
+    { id: "GetSimpleBody", method: "GET", uri: "/ws/v3/mailboxes/@.id==<mb>/messages/@.id==$(messageId)/content/simplebody/full" },
+    sendReq,
+  ];
+  const r = await batch("messages.saveAndSend", [req], true, d.files);
+  const message = saveResult(r);
+  const sent = r.find(x => x.id === "SendMessage");
+  const code = sent?.httpCode ?? 0;
+  if (code < 200 || code >= 300) throw new ApiError(`send: HTTP ${code} ${JSON.stringify(sent?.response?.error || "").slice(0, 120)}`, sent);
+  return { message, ms: r.ms };
 }

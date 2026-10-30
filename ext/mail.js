@@ -1,5 +1,6 @@
 import * as api from "./api.js";
 import { THEMES, applyTheme } from "./themes.js";
+import * as compose from "./compose.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -7,7 +8,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-ymail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -44,6 +45,7 @@ function syncSettingsForm() {
   $("poll").value = settings.pollSec;
   $("density").value = settings.rowH;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
+  $("undosend").value = settings.undoSendSec;
 }
 
 function applySettings() { applyLayout(); syncSettingsForm(); startPolling(); }
@@ -257,7 +259,8 @@ function renderList() {
     el.onclick = e => {
       if (e.shiftKey) { markRange(state.anchor < 0 ? i : state.anchor, i); select(i, false); return; }
       if (e.ctrlKey || e.metaKey) { toggleMark(i); select(i, false); return; }
-      clearMarks(); select(i); open(i);
+      clearMarks(); select(i);
+      if (folderType(state.byId.get(state.view.folderId)) === "DRAFT") editDraft(i); else open(i);
     };
     el.oncontextmenu = e => { e.preventDefault(); if (!state.marked.has(m.id)) clearMarks(); select(i, false); showContextMenu(e.clientX, e.clientY); };
     el.ondragstart = e => {
@@ -439,6 +442,59 @@ function clearReader() {
   $("r-body").classList.add("hidden");
 }
 
+// ---------- compose integration ----------
+function hideReaderForCompose(hide) {
+  for (const id of ["reader"]) $(id).classList.toggle("hidden", hide);
+}
+
+async function startCompose(mode) {
+  if (compose.isOpen()) { status("a message is already open"); return; }
+  const me = $("account").textContent;
+  if (mode === "new") { hideReaderForCompose(true); await compose.open({ mode, myEmail: me }); return; }
+  const m = state.messages[state.selected];
+  if (!m || !currentBody || currentBody.message.id !== m.id) { status("open a message first"); return; }
+  hideReaderForCompose(true);
+  await compose.open({ mode, message: currentBody.message, body: currentBody, myEmail: me });
+}
+
+async function editDraft(i) {
+  const m = state.messages[i]; if (!m) return;
+  if (compose.isOpen()) { status("a message is already open"); return; }
+  status("loading draft…");
+  let r;
+  try { r = await api.body(m.id); } catch (e) { handleError(e, "draft"); return; }
+  hideReaderForCompose(true);
+  await compose.open({ mode: "draft", message: r.message, body: r, myEmail: $("account").textContent });
+}
+
+// Undo-send: the message is held client-side for settings.undoSendSec, then sent.
+let pendingSend = null;
+function scheduleSend(job) {
+  const secs = settings.undoSendSec;
+  const fire = async () => {
+    pendingSend = null; showUndo();
+    status(`sending…`);
+    try { const r = await job.run(); status(`sent: ${job.label.replace(/^send /, "")}`, r.ms); await loadFolders(true).catch(() => {}); }
+    catch (e) { handleError(e, "send"); await job.restore(); hideReaderForCompose(true); }
+  };
+  if (!secs) { fire(); return; }
+  pendingSend = { job, timer: setTimeout(fire, secs * 1000), until: Date.now() + secs * 1000 };
+  showUndo();
+  const tick = () => { if (!pendingSend) return; showUndo(); setTimeout(tick, 1000); };
+  tick();
+}
+
+async function cancelSend() {
+  if (!pendingSend) return false;
+  clearTimeout(pendingSend.timer);
+  const job = pendingSend.job; pendingSend = null;
+  showUndo();
+  status("send cancelled; message reopened");
+  hideReaderForCompose(true);
+  await job.restore();
+  return true;
+}
+
 // ---------- local model updates ----------
 function applyFlags(ids, flags) {
   const set = new Set(ids);
@@ -498,8 +554,16 @@ function pushUndo(entry) {
 }
 
 function showUndo() {
-  const u = undoStack[undoStack.length - 1], r = redoStack[redoStack.length - 1];
-  $("st-undo").textContent = (u ? `Undo: ${u.label} (z)` : "") + (u && r ? "   " : "") + (r ? `Redo: ${r.label} (Shift+Z)` : "");
+  const el = $("st-undo");
+  if (pendingSend) {
+    const left = Math.max(0, Math.ceil((pendingSend.until - Date.now()) / 1000));
+    el.textContent = `Sending in ${left} s: ${pendingSend.job.label} — press z to cancel`;
+    el.classList.add("pending");
+  } else {
+    el.classList.remove("pending");
+    const u = undoStack[undoStack.length - 1], r = redoStack[redoStack.length - 1];
+    el.textContent = (u ? `Undo: ${u.label} (z)` : "") + (u && r ? "   " : "") + (r ? `Redo: ${r.label} (Shift+Z)` : "");
+  }
   updateToolbar();
 }
 
@@ -615,7 +679,7 @@ function runAction(act) {
     case "move": return openMovePicker(ids);
     case "read": return run(() => doSetRead(ids, first ? !first.flags?.read : true));
     case "star": return run(() => doSetStarred(ids, first ? !first.flags?.flagged : true));
-    case "undo": return run(undo);
+    case "undo": if (pendingSend) return cancelSend(); return run(undo);
     case "redo": return run(redo);
     case "open": if (state.selected >= 0) open(state.selected); return;
   }
@@ -703,6 +767,7 @@ async function doSearch(term) {
 let pendingG = false;
 const modals = ["help", "settings", "movebox"];
 function onKey(e) {
+  if (e.target.closest && e.target.closest("#compose")) return;
   const openModal = modals.find(id => !$(id).classList.contains("hidden"));
   if (openModal) {
     if (e.key === "Escape") { if (openModal === "movebox") closeMovePicker(); else $(openModal).classList.add("hidden"); }
@@ -749,10 +814,14 @@ function onKey(e) {
   switch (e.key) {
     case "j": case "ArrowDown": e.preventDefault(); select(state.selected + 1); break;
     case "k": case "ArrowUp": e.preventDefault(); select(state.selected - 1); break;
-    case "Enter": case "o": if (state.selected >= 0) open(state.selected); break;
+    case "Enter": case "o": if (state.selected >= 0) (folderType(state.byId.get(state.view.folderId)) === "DRAFT" ? editDraft(state.selected) : open(state.selected)); break;
+    case "c": e.preventDefault(); startCompose("new"); break;
+    case "a": e.preventDefault(); startCompose("replyAll"); break;
+    case "f": e.preventDefault(); startCompose("forward"); break;
     case "/": e.preventDefault(); $("search").focus(); $("search").select(); break;
     case "g": pendingG = true; setTimeout(() => pendingG = false, 1200); break;
-    case "r": loadList("refresh"); break;
+    case "r": e.preventDefault(); startCompose("reply"); break;
+    case "R": loadList("refresh"); break;
     case "n": if (state.more) loadList("more"); break;
     case "i": loadImages(); break;
     case "t": toggleTheme(); break;
@@ -766,8 +835,8 @@ function onKey(e) {
     case "v": e.preventDefault(); runAction("move"); break;
     case "u": runAction("read"); break;
     case "s": runAction("star"); break;
-    case "z": runAction("undo"); break;
-    case "Z": runAction("redo"); break;
+    case "z": e.preventDefault(); runAction("undo"); break;
+    case "Z": e.preventDefault(); runAction("redo"); break;
   }
 }
 
@@ -788,6 +857,7 @@ function wireSettings() {
   for (const el of document.querySelectorAll("#settings input[type=radio]"))
     el.onchange = () => { settings[el.name] = el.value; applySettings(); saveSettings(); };
   $("poll").onchange = () => { settings.pollSec = Math.max(5, Number($("poll").value) || 20); applySettings(); saveSettings(); };
+  $("undosend").onchange = () => { settings.undoSendSec = Math.min(60, Math.max(0, Number($("undosend").value) || 0)); saveSettings(); };
   $("markread").onchange = () => { const v = $("markread").value.trim(); settings.markReadSec = v === "" ? null : Math.max(0, Number(v) || 0); saveSettings(); };
   $("density").onchange = () => { settings.rowH = Math.min(32, Math.max(18, Number($("density").value) || 22)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
@@ -866,6 +936,14 @@ wireSplitters();
 wireMovePicker();
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
+$("compose-btn").onclick = () => startCompose("new");
+for (const b of document.querySelectorAll("[data-reply]")) b.onclick = () => startCompose(b.dataset.reply);
+compose.init({
+  status, folderByType, settings: () => settings,
+  saveSetting: (k, v) => { settings[k] = v; saveSettings(); },
+  onClose: () => { hideReaderForCompose(false); $("list").focus(); if (folderType(state.byId.get(state.view.folderId)) === "DRAFT") loadList("refresh"); },
+  scheduleSend,
+});
 $("more-btn").onclick = () => loadList("more");
 $("help").onclick = e => { if (e.target.id === "help") $("help").classList.add("hidden"); };
 start();

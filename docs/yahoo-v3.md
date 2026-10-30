@@ -94,3 +94,41 @@ Folder list 161 ms, inbox list of 100 messages 227 ms, full body 150 ms, whole-m
 - Search query tokens beyond `keyword:`.
 - Attachment upload flow (`uploadCount`, `totalAttachments` and the upload endpoint).
 - Incremental list refresh using `query.token` / `nextModSeq`.
+
+## Compose, drafts and send (verified live 2026-10-30, from the client bundle)
+
+Accounts: `GET /ws/v3/mailboxes/@.id==<mb>/accounts` returns the primary account and send-as aliases: `id`, `email`, `sendingName`, `isPrimary`, `isSending`, `type` (FREE, ALIAS, DEA), `signature`, `signatureActive`, `replyToAddress`.
+
+Save (draft) and send are one inner request, `SaveMessage`, with `payloadType: "multipart"`:
+
+```json
+{ "id": "SaveMessage", "method": "POST", "payloadType": "multipart",
+  "uri": "/ws/v3/mailboxes/@.id==<mb>/messages?uploadCount=<files>&totalAttachments=<attachments>",
+  "payloadParts": [
+    { "partName": "jsonString", "contentType": "application/json", "payload": {
+      "actions": { "responseMessage": true },
+      "message": { "csid": "<client id, ms epoch>", "newMessage": true,
+        "headers": { "subject": "", "from": [{"name":"","email":""}], "replyTo": [..], "to": [..], "cc": [], "bcc": [] },
+        "folder": { "id": "<Draft folder id>" }, "flags": { "spam": "false", "read": "true" },
+        "inReplyTo": { "messageReference": { "id": "<orig id>" }, "replied": true, "forwarded": false },
+        "attachments": [ { "disposition": "attachment", "multipartName": "multipart://<encoded filename>" } ] },
+      "simpleBody": { "html": "<div>…</div>" } } },
+    { "contentType": "<mime>", "partName": "<encoded filename>", "payloadReference": "multipart://<encoded filename>" }
+  ] }
+```
+
+`newMessage` is `true` unless replying or forwarding (then `inReplyTo` is set). Plain text goes in `simpleBody.text` instead of `html`. `from` and `replyTo` are arrays; passing an object yields HTTP 500 `ET-5016`. The draft is identified by `csid`; saving again with the same `csid` replaces it. Files travel in the same multipart form as `batchJson`, each as a form field named `encodeURIComponent(filename)`, matching the `multipart://` references. Operation name `messages.saveV3` for a draft save.
+
+Send chains two more requests under the save, using the batch's filter/placeholder mechanism, under operation name `messages.saveAndSend`:
+
+```json
+"filters": { "select": { "messageId": "$..message.immutableid", "csid": "$..message.csid", "cid": "$..message.conversationId" } },
+"requests": [
+  { "id": "GetSimpleBody", "method": "GET", "payloadType": "embedded", "uri": "/ws/v3/mailboxes/@.id==<mb>/messages/@.id==$(messageId)/content/simplebody/full" },
+  { "id": "SendMessage", "method": "POST", "payloadType": "embedded", "uri": "/ws/v3/mailboxes/@.id==<mb>/messages/@.id==$(messageId)/send",
+    "payload": { "csid": "$(csid)", "destinationFolder": { "id": "<Sent folder id>" } },
+    "requests": [ { "id": "UpdateMessages", "method": "POST", "payloadType": "embedded", "uri": "/ws/v3/mailboxes/@.id==<mb>/messages/@.select==q?q=id:(<orig id>)", "payload": { "message": { "flags": { "answered": true, "forwarded": false } } } } ] }
+]
+```
+
+The `UpdateMessages` child is only added for replies and forwards. Measured: 829 ms without attachment, 812 ms with a 22-byte one. Search syntax for header fields: `subject:"ymail-lite test"`.

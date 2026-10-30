@@ -10,6 +10,7 @@
   <header id="top">
     <span id="brand">YMail Lite</span>
     <input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+    <button id="compose-btn" title="New message (c)">New message</button>
     <span id="account"></span>
     <button id="gear" title="Settings">⚙</button>
   </header>
@@ -39,10 +40,40 @@
       <div class="r-meta"><span class="k">To</span><span id="r-to"></span></div>
       <div class="r-meta hidden" id="r-cc-row"><span class="k">Cc</span><span id="r-cc"></span></div>
       <div class="r-meta"><span class="k">Date</span><span id="r-date"></span><span id="r-folder"></span>
+        <span class="r-actions"><button data-reply="reply" title="Reply (r)">Reply</button><button data-reply="replyAll" title="Reply all (a)">Reply all</button><button data-reply="forward" title="Forward (f)">Forward</button></span>
         <button id="r-images" class="hidden">Load images</button></div>
       <div id="r-attach" class="hidden"></div>
     </div>
     <iframe id="r-body" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" class="hidden"></iframe>
+  </section>
+  <section id="compose" class="hidden">
+    <div id="c-head">
+      <span id="c-title">New message</span>
+      <span class="sp"></span>
+      <select id="c-mode"><option value="html">Rich text</option><option value="text">Plain text</option></select>
+    </div>
+    <div class="c-row"><label>From</label><select id="c-from"></select></div>
+    <div class="c-row"><label>To</label><input id="c-to" autocomplete="off" spellcheck="false" placeholder="name <address>, address"><button id="c-cc-toggle" title="Show Cc and Bcc">Cc/Bcc</button></div>
+    <div class="c-row hidden" id="c-cc-row"><label>Cc</label><input id="c-cc" autocomplete="off" spellcheck="false"></div>
+    <div class="c-row hidden" id="c-bcc-row"><label>Bcc</label><input id="c-bcc" autocomplete="off" spellcheck="false"></div>
+    <div class="c-row"><label>Subject</label><input id="c-subject" autocomplete="off"></div>
+    <div id="c-toolbar">
+      <button data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button><button data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button><button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+      <button data-cmd="insertUnorderedList" title="Bulleted list">• list</button><button data-cmd="insertOrderedList" title="Numbered list">1. list</button>
+      <button data-cmd="link" title="Insert link">link</button><button data-cmd="code" title="Preformatted">code</button><button data-cmd="removeFormat" title="Clear formatting">clear</button>
+    </div>
+    <div id="c-editor" contenteditable="true" spellcheck="true"></div>
+    <textarea id="c-text" class="hidden" spellcheck="true"></textarea>
+    <div id="c-quote-wrap" class="hidden"><button id="c-quote-toggle">Show quoted text</button><div id="c-quote" class="hidden"></div></div>
+    <div id="c-filelist"></div>
+    <div id="c-foot">
+      <button id="c-send" title="Send (Ctrl+Enter)">Send</button>
+      <button id="c-attach" title="Attach files (or drop them here)">Attach</button>
+      <input id="c-files" type="file" multiple class="hidden">
+      <button id="c-save" title="Save draft (Ctrl+S)">Save draft</button>
+      <span class="sp"></span>
+      <button id="c-discard" title="Discard">Discard</button>
+    </div>
   </section>
   <footer id="status"><span id="st-msg"></span><span id="st-undo"></span><span id="st-lat"></span></footer>
 </div>
@@ -66,6 +97,7 @@
     <label><input type="number" id="poll" min="5" max="600" step="5" style="width:60px"> seconds between new-mail checks</label>
     <label><input type="number" id="density" min="18" max="32" step="1" style="width:60px"> row height, px</label>
     <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>
+    <label><input type="number" id="undosend" min="0" max="60" step="1" style="width:60px"> seconds to hold a message before sending, so it can be undone (0: send at once)</label>
     <p><button id="settings-close">Close</button> <button id="settings-reset">Reset pane sizes</button></p>
   </div>
 </div>
@@ -81,7 +113,10 @@
     <b>Keyboard shortcuts</b>
     <table>
       <tr><td>j / k, ↓ / ↑</td><td>next / previous message</td></tr>
-      <tr><td>Enter, o</td><td>open selected message</td></tr>
+      <tr><td>Enter, o</td><td>open selected message (in Drafts: edit the draft)</td></tr>
+      <tr><td>c</td><td>new message</td></tr>
+      <tr><td>r / a / f</td><td>reply / reply all / forward the open message</td></tr>
+      <tr><td>Ctrl+Enter</td><td>send (held for the undo-send delay; z cancels)</td></tr>
       <tr><td>/</td><td>search (Esc clears)</td></tr>
       <tr><td>g i / g s / g t / g d / g b / g a</td><td>Inbox / Sent / Trash / Drafts / Spam / Archive</td></tr>
       <tr><td>g f</td><td>focus folder list (type to filter, Enter to open)</td></tr>
@@ -93,7 +128,7 @@
       <tr><td>u</td><td>mark read / unread</td></tr>
       <tr><td>s</td><td>star / unstar</td></tr>
       <tr><td>z / Shift+Z</td><td>undo / redo (multi-level; the status bar shows what will be undone)</td></tr>
-      <tr><td>r</td><td>refresh current list</td></tr>
+      <tr><td>R</td><td>refresh current list</td></tr>
       <tr><td>n</td><td>load next 100 messages</td></tr>
       <tr><td>i</td><td>load remote images in open message</td></tr>
       <tr><td>t</td><td>toggle light / dark</td></tr>
