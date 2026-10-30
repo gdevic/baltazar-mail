@@ -281,16 +281,14 @@ function togglePalette(btn) {
   const sel = getSelection(); savedRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
   pal.dataset.kind = kind;
   pal.innerHTML = `<button class="pal-default" data-c="${fore ? "#000000" : ""}">${fore ? "Default (black)" : "No highlight"}</button>` +
-    (fore ? FORE : BACK).map(c => `<span class="sw" data-c="${c}" style="background:${c}" title="${c}"></span>`).join("") +
-    `<button class="pal-more">More colours…</button><input type="color" class="hidden" value="${fore ? "#000000" : "#ffff00"}">`;
+    (fore ? FORE : BACK).map(c => `<span class="sw" data-c="${c}" style="background:${c}" title="${c}"></span>`).join("");
   const r = btn.getBoundingClientRect();
   pal.style.left = Math.min(r.left, innerWidth - 240) + "px"; pal.style.top = (r.bottom + 2) + "px";
   pal.classList.remove("hidden");
   const apply = c => { hidePalette(); $("c-editor").focus(); if (savedRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(savedRange); }
     if (fore) exec("foreColor", c || "#000000"); else if (c) exec("hiliteColor", c); else exec("hiliteColor", "transparent"); };
   pal.onclick = e => {
-    const sw = e.target.closest("[data-c]"); if (sw) { apply(sw.dataset.c); return; }
-    if (e.target.closest(".pal-more")) { const inp = pal.querySelector("input[type=color]"); inp.oninput = () => apply(inp.value); inp.click(); }
+    const sw = e.target.closest("[data-c]"); if (sw) apply(sw.dataset.c);
   };
 }
 function hidePalette() { $("c-palette").classList.add("hidden"); }
