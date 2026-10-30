@@ -9,7 +9,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-ymail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, images: "safe", rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -47,6 +47,7 @@ function syncSettingsForm() {
   $("density").value = settings.rowH;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
   $("undosend").value = settings.undoSendSec;
+  $("composeFont").value = settings.composeFont; $("composeSize").value = String(settings.composeSize);
 }
 
 function applySettings() { applyLayout(); syncSettingsForm(); startPolling(); }
@@ -918,6 +919,8 @@ function wireSettings() {
   for (const el of document.querySelectorAll("#settings input[type=radio]"))
     el.onchange = () => { settings[el.name] = el.value; applySettings(); saveSettings(); };
   $("poll").onchange = () => { settings.pollSec = Math.max(5, Number($("poll").value) || 20); applySettings(); saveSettings(); };
+  $("composeFont").onchange = () => { settings.composeFont = $("composeFont").value; saveSettings(); };
+  $("composeSize").onchange = () => { settings.composeSize = Number($("composeSize").value) || 13; saveSettings(); };
   $("undosend").onchange = () => { settings.undoSendSec = Math.min(60, Math.max(0, Number($("undosend").value) || 0)); saveSettings(); };
   $("markread").onchange = () => { const v = $("markread").value.trim(); settings.markReadSec = v === "" ? null : Math.max(0, Number(v) || 0); saveSettings(); };
   $("density").onchange = () => { settings.rowH = Math.min(32, Math.max(18, Number($("density").value) || 22)); applySettings(); saveSettings(); };

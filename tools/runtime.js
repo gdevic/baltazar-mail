@@ -117,6 +117,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.setInputFiles("#c-imgfile", { name: "shot.png", mimeType: "image/png", buffer: png });
   await page.waitForSelector("#c-editor img");
   await page.selectOption("#c-font", "Georgia");
+  await page.locator('[data-pal="fore"]').click(); await page.waitForSelector("#c-palette:not(.hidden)");
+  results.palette = await page.locator("#c-palette .sw").count();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "palette.png"), clip: { x: 700, y: 150, width: 580, height: 260 } }).catch(() => {});
+  await page.locator("#c-palette .sw").nth(3).click();
   results.editorImgs = await page.locator("#c-editor img").count();
   results.fileChip = await page.locator("#c-filelist").textContent();
   await page.locator("#c-editor").click({ position: { x: 60, y: 12 } }); await page.keyboard.press("Shift+Home");
@@ -151,10 +155,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.to.length === 3 && results.sent.to.some(a => a.name === "Alice") && results.sent.to[0].email.startsWith("s"), "recipients: autocomplete chip plus two typed: " + JSON.stringify(results.sent.to));
   expect(results.suggestions.length >= 2 && results.suggestions[0].includes("Sender"), "autocomplete suggestions: " + results.suggestions.join(","));
   expect(!results.afterHide.some(s => s.includes("s2@x.com")) && results.afterHide.length >= results.suggestions.length - 1, "hidden address gone: " + results.afterHide.join(","));
-  expect(/^<div><div>Hello from the runtime test\./.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
+  expect(/^<div style="font-family:[^"]+;font-size:13px"><div>Hello from the runtime test\./.test(results.sent.html) && results.sent.html.includes("ymsig"), "default font wrapper, typed text above signature: " + results.sent.html);
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
+  expect(results.palette === 16, "16 text colours");
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));

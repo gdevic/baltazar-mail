@@ -115,8 +115,8 @@ export function init(h) {
   for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); }; }
   $("c-font").onchange = () => { if ($("c-font").value) exec("fontName", $("c-font").value); $("c-font").value = ""; };
   $("c-size").onchange = () => { if ($("c-size").value) exec("fontSize", $("c-size").value); $("c-size").value = ""; };
-  $("c-color").oninput = () => exec("foreColor", $("c-color").value);
-  $("c-hilite").oninput = () => exec("hiliteColor", $("c-hilite").value);
+  for (const b of $("c-toolbar").querySelectorAll("button[data-pal]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); togglePalette(b); }; }
+  document.addEventListener("mousedown", e => { if (!e.target.closest("#c-palette") && !e.target.closest("[data-pal]")) hidePalette(); });
   $("c-imgfile").onchange = () => { insertImages([...$("c-imgfile").files]); $("c-imgfile").value = ""; };
   const ed = $("c-editor");
   ed.addEventListener("paste", e => {
@@ -208,6 +208,7 @@ export async function open(opts) {
   $("c-subject").value = subject;
   const sig = fromAcct.signatureActive && fromAcct.signature ? `<div><br></div><div><br></div><div class="ymsig">${fromAcct.signature}</div>` : "<div><br></div>";
   setMode(hooks.settings().composeHtml !== false);
+  applyDefaultFont();
   $("c-editor").innerHTML = bodyHtml || sig;
   $("c-text").value = bodyHtml ? toText(bodyHtml) : (fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "");
   renderQuote(false);
@@ -242,6 +243,16 @@ export async function close(save = true) {
 }
 
 // ---------- editor ----------
+function defaultFont() {
+  const st = hooks.settings();
+  return { family: st.composeFont || "Helvetica Neue, Helvetica, Arial, sans-serif", size: Number(st.composeSize) || 13 };
+}
+function applyDefaultFont() {
+  const f = defaultFont();
+  $("c-editor").style.font = `${f.size}px/1.45 ${f.family}`;
+  $("c-text").style.font = `${f.size}px/1.45 ${/courier|consolas|mono/i.test(f.family) ? f.family : "Consolas, 'Courier New', monospace"}`;
+}
+
 function setMode(html) {
   draft.html = html;
   $("c-mode").value = html ? "html" : "text";
@@ -258,6 +269,31 @@ function switchMode(v) {
   setMode(html); dirty = true;
   hooks.saveSetting("composeHtml", html);
 }
+
+// ---------- colour palettes ----------
+const FORE = ["#000000", "#444444", "#888888", "#c0392b", "#d35400", "#8e5a1b", "#7f8c00", "#1e8449", "#148f77", "#1f5fbf", "#1b2a6b", "#6c3483", "#b03a8c", "#e0459a", "#2e86c1", "#b7950b"];
+const BACK = ["#ffff00", "#fff2a8", "#b6f2b6", "#b3ecf5", "#cfe2ff", "#e4d4f7", "#ffd1e8", "#ffd8a8"];
+let savedRange = null;
+function togglePalette(btn) {
+  const pal = $("c-palette");
+  if (!pal.classList.contains("hidden") && pal.dataset.kind === btn.dataset.pal) { hidePalette(); return; }
+  const kind = btn.dataset.pal, fore = kind === "fore";
+  const sel = getSelection(); savedRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  pal.dataset.kind = kind;
+  pal.innerHTML = `<button class="pal-default" data-c="${fore ? "#000000" : ""}">${fore ? "Default (black)" : "No highlight"}</button>` +
+    (fore ? FORE : BACK).map(c => `<span class="sw" data-c="${c}" style="background:${c}" title="${c}"></span>`).join("") +
+    `<button class="pal-more">More colours…</button><input type="color" class="hidden" value="${fore ? "#000000" : "#ffff00"}">`;
+  const r = btn.getBoundingClientRect();
+  pal.style.left = Math.min(r.left, innerWidth - 240) + "px"; pal.style.top = (r.bottom + 2) + "px";
+  pal.classList.remove("hidden");
+  const apply = c => { hidePalette(); $("c-editor").focus(); if (savedRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(savedRange); }
+    if (fore) exec("foreColor", c || "#000000"); else if (c) exec("hiliteColor", c); else exec("hiliteColor", "transparent"); };
+  pal.onclick = e => {
+    const sw = e.target.closest("[data-c]"); if (sw) { apply(sw.dataset.c); return; }
+    if (e.target.closest(".pal-more")) { const inp = pal.querySelector("input[type=color]"); inp.oninput = () => apply(inp.value); inp.click(); }
+  };
+}
+function hidePalette() { $("c-palette").classList.add("hidden"); }
 
 function exec(cmd, arg = null) {
   const ed = $("c-editor"); ed.focus();
@@ -374,7 +410,8 @@ function collect() {
   };
   if (draft.html) {
     const { html, inline } = extractInline($("c-editor").innerHTML);
-    d.html = `<div>${html}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : "");
+    const f = defaultFont();
+    d.html = `<div style="font-family:${f.family};font-size:${f.size}px">${html}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : "");
     d.inline = inline;
   } else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");
   return d;
@@ -422,6 +459,7 @@ async function reopenFrom(snap) {
   $("c-cc-row").classList.toggle("hidden", !snap.d.cc.length); $("c-bcc-row").classList.toggle("hidden", !snap.d.bcc.length);
   $("c-subject").value = snap.d.subject;
   setMode(snap.html);
+  applyDefaultFont();
   if (snap.html) $("c-editor").innerHTML = snap.editorHtml || "";
   else $("c-text").value = snap.d.text.replace(/\n\n[\s\S]*$/, m => snap.quoteText && m.trim() === snap.quoteText.trim() ? "" : m);
   renderQuote(false); renderFiles();
