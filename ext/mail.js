@@ -369,8 +369,21 @@ async function open(i) {
   clearTimeout(markReadTimer);
   status("fetching body…");
   let r;
-  try { r = await api.body(m.id); } catch (e) { handleError(e, "body"); return; }
+  try { r = await api.body(m.id); } catch (e) { showReaderError(e, "fetching the message"); return; }
   if (state.openId !== m.id) return;
+  try { renderMessage(m, r); } catch (e) { showReaderError(e, "rendering the message"); }
+}
+
+function showReaderError(e, what) {
+  handleError(e, what);
+  if (e instanceof api.NotSignedIn) return;
+  $("reader-empty").textContent = `Error ${what}: ${e.message}`;
+  $("reader-empty").classList.remove("hidden");
+  $("reader-head").classList.add("hidden");
+  $("r-body").classList.add("hidden");
+}
+
+function renderMessage(m, r) {
   r.html = cleanHtml(r.html);
   currentBody = r;
   const h = r.message.headers || {};
