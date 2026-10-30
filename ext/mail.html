@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>YMail Lite</title>
+<link rel="stylesheet" href="mail.css">
+</head>
+<body>
+<div id="app" class="hidden">
+  <header id="top">
+    <span id="brand">YMail Lite</span>
+    <input id="search" type="search" placeholder="Search  ( / )" autocomplete="off" spellcheck="false">
+    <span id="account"></span>
+    <button id="gear" title="Settings">⚙</button>
+  </header>
+  <nav id="folders" tabindex="-1"></nav>
+  <div id="split1" class="split"></div>
+  <section id="list" tabindex="0">
+    <div id="list-head"><span id="list-title"></span><span id="list-count"></span></div>
+    <div id="rows"></div>
+    <div id="more" class="hidden"><button id="more-btn">Load more</button></div>
+  </section>
+  <div id="split2" class="split"></div>
+  <section id="reader">
+    <div id="reader-empty">Select a message. Keys: j k open · Enter open · / search · g i inbox · r refresh · ? help</div>
+    <div id="reader-head" class="hidden">
+      <div id="r-subject"></div>
+      <div class="r-meta"><span class="k">From</span><span id="r-from"></span></div>
+      <div class="r-meta"><span class="k">To</span><span id="r-to"></span></div>
+      <div class="r-meta hidden" id="r-cc-row"><span class="k">Cc</span><span id="r-cc"></span></div>
+      <div class="r-meta"><span class="k">Date</span><span id="r-date"></span><span id="r-folder"></span>
+        <button id="r-images" class="hidden">Load images</button></div>
+      <div id="r-attach" class="hidden"></div>
+    </div>
+    <iframe id="r-body" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" class="hidden"></iframe>
+  </section>
+  <footer id="status"><span id="st-msg"></span><span id="st-lat"></span></footer>
+</div>
+<div id="signin" class="hidden">
+  <h1>YMail Lite</h1>
+  <p>No Yahoo Mail session found in this browser.</p>
+  <p><a href="https://mail.yahoo.com/" target="_blank" rel="noopener">Sign in at mail.yahoo.com</a>, then <button id="retry">retry</button>.</p>
+</div>
+<div id="settings" class="hidden">
+  <div id="settings-box">
+    <b>Layout</b>
+    <label><input type="radio" name="layout" value="vertical"> Three columns: folders | messages | preview</label>
+    <label><input type="radio" name="layout" value="horizontal"> Folders left, messages above preview</label>
+    <b>Theme</b>
+    <label><input type="radio" name="theme" value="dark"> Dark</label>
+    <label><input type="radio" name="theme" value="light"> Light</label>
+    <label><input type="radio" name="theme" value="system"> Follow system</label>
+    <label>Dark palette <select id="darkTheme"></select></label>
+    <label>Light palette <select id="lightTheme"></select></label>
+    <b>Behaviour</b>
+    <label><input type="number" id="poll" min="5" max="600" step="5" style="width:60px"> seconds between new-mail checks</label>
+    <label><input type="number" id="density" min="18" max="32" step="1" style="width:60px"> row height, px</label>
+    <p><button id="settings-close">Close</button> <button id="settings-reset">Reset pane sizes</button></p>
+  </div>
+</div>
+<div id="help" class="hidden">
+  <div id="help-box">
+    <b>Keys</b>
+    <table>
+      <tr><td>j / k, ↓ / ↑</td><td>next / previous message</td></tr>
+      <tr><td>Enter, o</td><td>open selected message</td></tr>
+      <tr><td>/</td><td>search (Esc clears)</td></tr>
+      <tr><td>g i / g s / g t / g d</td><td>Inbox / Sent / Trash / Drafts</td></tr>
+      <tr><td>g f</td><td>focus folder list (type to filter, Enter to open)</td></tr>
+      <tr><td>r</td><td>refresh current list</td></tr>
+      <tr><td>n</td><td>load next 100 messages</td></tr>
+      <tr><td>i</td><td>load remote images in open message</td></tr>
+      <tr><td>t</td><td>toggle light / dark</td></tr>
+      <tr><td>,</td><td>settings (layout, theme)</td></tr>
+      <tr><td>?</td><td>this help</td></tr>
+    </table>
+    <p>Read-only build: nothing you do here changes your mailbox. Messages stay unread on Yahoo.</p>
+  </div>
+</div>
+<script type="module" src="mail.js"></script>
+</body>
+</html>
