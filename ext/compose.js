@@ -113,8 +113,10 @@ export function init(h) {
   $("c-quote-toggle").onclick = () => toggleQuote();
   $("c-cc-toggle").onclick = () => { $("c-cc-row").classList.toggle("hidden"); $("c-bcc-row").classList.toggle("hidden"); };
   for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); }; }
-  $("c-font").onchange = () => { if ($("c-font").value) exec("fontName", $("c-font").value); $("c-font").value = ""; };
-  $("c-size").onchange = () => { if ($("c-size").value) exec("fontSize", $("c-size").value); $("c-size").value = ""; };
+  $("c-font").onmousedown = $("c-size").onmousedown = () => saveRange();
+  $("c-font").onchange = () => { restoreRange(); exec("fontName", $("c-font").value); syncFontControls(); };
+  $("c-size").onchange = () => { restoreRange(); setFontSize(Number($("c-size").value)); syncFontControls(); };
+  document.addEventListener("selectionchange", () => { if (isOpen() && draft?.html && $("c-editor").contains(getSelection().anchorNode)) syncFontControls(); });
   for (const b of $("c-toolbar").querySelectorAll("button[data-pal]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); togglePalette(b); }; }
   document.addEventListener("mousedown", e => { if (!e.target.closest("#c-palette") && !e.target.closest("[data-pal]")) hidePalette(); });
   $("c-imgfile").onchange = () => { insertImages([...$("c-imgfile").files]); $("c-imgfile").value = ""; };
@@ -210,6 +212,7 @@ export async function open(opts) {
   setMode(hooks.settings().composeHtml !== false);
   applyDefaultFont();
   $("c-editor").innerHTML = bodyHtml || sig;
+  syncFontControls();
   $("c-text").value = bodyHtml ? toText(bodyHtml) : (fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "");
   renderQuote(false);
   renderFiles();
@@ -268,6 +271,44 @@ function switchMode(v) {
   if (html) $("c-editor").innerHTML = textToHtml($("c-text").value); else $("c-text").value = toText($("c-editor").innerHTML);
   setMode(html); dirty = true;
   hooks.saveSetting("composeHtml", html);
+}
+
+// ---------- font controls ----------
+// The Font and Size boxes always show what applies at the caret (or selection start).
+let fontRange = null;
+function saveRange() { const s = getSelection(); fontRange = s.rangeCount && $("c-editor").contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null; }
+function restoreRange() { const ed = $("c-editor"); ed.focus(); if (fontRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(fontRange); } }
+
+function showValue(sel, value) {
+  let opt = [...sel.options].find(o => o.value.toLowerCase() === String(value).toLowerCase());
+  if (!opt) { sel.querySelectorAll("option[data-dyn]").forEach(o => o.remove()); opt = new Option(value, value); opt.dataset.dyn = "1"; sel.add(opt, 0); }
+  sel.value = opt.value;
+}
+
+export function syncFontControls() {
+  const ed = $("c-editor");
+  const s = getSelection();
+  let node = s.rangeCount && ed.contains(s.anchorNode) ? s.anchorNode : ed;
+  if (node.nodeType !== 1) node = node.parentElement;
+  const cs = getComputedStyle(node);
+  const families = cs.fontFamily.split(",").map(f => f.trim().replace(/^["']|["']$/g, ""));
+  const fontSel = $("c-font");
+  const known = families.find(f => [...fontSel.options].some(o => !o.dataset.dyn && o.value.toLowerCase() === f.toLowerCase()));
+  showValue(fontSel, known || families[0] || "");
+  showValue($("c-size"), String(Math.round(parseFloat(cs.fontSize))));
+}
+
+// execCommand only knows sizes 1-7; apply size 7 and rewrite those elements to the real pixel size.
+function setFontSize(px) {
+  document.execCommand("styleWithCSS", false, false);
+  document.execCommand("fontSize", false, "7");
+  for (const f of $("c-editor").querySelectorAll('font[size="7"]')) {
+    const span = document.createElement("span");
+    span.style.fontSize = px + "px";
+    while (f.firstChild) span.appendChild(f.firstChild);
+    f.replaceWith(span);
+  }
+  dirty = true;
 }
 
 // ---------- colour palettes ----------

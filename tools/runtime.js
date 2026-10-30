@@ -116,7 +116,13 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.locator("#c-editor").click({ position: { x: 200, y: 12 } });
   await page.setInputFiles("#c-imgfile", { name: "shot.png", mimeType: "image/png", buffer: png });
   await page.waitForSelector("#c-editor img");
+  results.fontInitial = [await page.inputValue("#c-font"), await page.inputValue("#c-size")];
+  await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.press("Shift+End");
   await page.selectOption("#c-font", "Georgia");
+  await page.selectOption("#c-size", "18");
+  await page.locator("#c-editor").click({ position: { x: 30, y: 14 } });
+  await page.waitForTimeout(100);
+  results.fontAfter = [await page.inputValue("#c-font"), await page.inputValue("#c-size")];
   await page.locator('[data-pal="fore"]').click(); await page.waitForSelector("#c-palette:not(.hidden)");
   results.palette = await page.locator("#c-palette .sw").count();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "palette.png"), clip: { x: 700, y: 150, width: 580, height: 260 } }).catch(() => {});
@@ -155,11 +161,12 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.to.length === 3 && results.sent.to.some(a => a.name === "Alice") && results.sent.to[0].email.startsWith("s"), "recipients: autocomplete chip plus two typed: " + JSON.stringify(results.sent.to));
   expect(results.suggestions.length >= 2 && results.suggestions[0].includes("Sender"), "autocomplete suggestions: " + results.suggestions.join(","));
   expect(!results.afterHide.some(s => s.includes("s2@x.com")) && results.afterHide.length >= results.suggestions.length - 1, "hidden address gone: " + results.afterHide.join(","));
-  expect(/^<div style="font-family:[^"]+;font-size:13px"><div>Hello from the runtime test\./.test(results.sent.html) && results.sent.html.includes("ymsig"), "default font wrapper, typed text above signature: " + results.sent.html);
+  expect(/^<div style="font-family:[^"]+;font-size:13px">/.test(results.sent.html) && results.sent.html.replace(/<[^>]+>/g, "").startsWith("Hello from the runtime test.") && results.sent.html.includes("ymsig"), "default font wrapper, typed text above signature: " + results.sent.html);
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.palette === 16, "16 text colours");
+  expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));
