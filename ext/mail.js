@@ -68,6 +68,8 @@ const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || nul
 const folderByType = t => state.folders.find(f => f.types.includes(t));
 const inboxId = () => folderByType("INBOX")?.id ?? "1";
 const isHidden = f => f.types.some(t => t === "SYNC" || t === "INVISIBLE");
+// Yahoo names the spam folder "Bulk" internally; the web UI shows it as Spam.
+const folderName = f => f ? (folderType(f) === "BULK" ? "Spam" : f.name) : "";
 
 function toDate(epoch) {
   const d = new Date(Number(epoch) * 1000);
@@ -119,7 +121,7 @@ function renderFolders() {
       (state.view.kind === "folder" && state.view.folderId === f.id ? " active" : "");
     el.dataset.id = f.id;
     el.style.paddingLeft = `${8 + depth * 12}px`;
-    el.innerHTML = `<span class="tw">${twisty}</span><span class="nm" title="${esc(f.name)}">${esc(f.name.split("/").pop())}</span><span class="ct"></span>`;
+    el.innerHTML = `<span class="tw">${twisty}</span><span class="nm" title="${esc(folderName(f))}">${esc(folderName(f).split("/").pop())}</span><span class="ct"></span>`;
     el.onclick = e => {
       if (e.target.classList.contains("tw") && twisty) { toggleExpand(f.name); return; }
       openFolder(f.id);
@@ -136,10 +138,10 @@ function renderFolders() {
     };
     frag.appendChild(el);
   };
-  for (const f of sys) add(f, 0, "");
+  for (const f of sys) { if (filter && !folderName(f).toLowerCase().includes(filter)) continue; add(f, 0, ""); }
   for (const f of user) {
     const parts = f.name.split("/");
-    if (filter) { if (f.name.toLowerCase().includes(filter)) add(f, 0, ""); continue; }
+    if (filter) { if (folderName(f).toLowerCase().includes(filter)) add(f, 0, ""); continue; }
     let hidden = false;
     for (let i = 1; i < parts.length; i++) if (!state.expanded.has(parts.slice(0, i).join("/"))) { hidden = true; break; }
     if (hidden) continue;
@@ -225,7 +227,7 @@ async function loadList(mode = "fresh") {
     if (state.openId && !ids.has(state.openId) && v.kind === "folder") clearReader();
   }
   renderList();
-  const name = v.kind === "search" ? `search: ${v.term}` : (state.byId.get(v.folderId)?.name || v.folderId);
+  const name = v.kind === "search" ? `search: ${v.term}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
   $("list-title").textContent = name;
   status(`${name}: ${state.messages.length} messages`, r.ms);
 }
@@ -536,7 +538,7 @@ async function doMove(ids, folderId, verb = "move") {
   const fallback = state.view.kind === "folder" ? state.view.folderId : null;
   const origins = msgs.map(m => ({ id: m.id, from: m.folder?.id ?? fallback, unread: !m.flags?.read }));
   const moving = origins.filter(o => o.from !== dest.id);
-  if (!moving.length) { status(`already in ${dest.name}`); return; }
+  if (!moving.length) { status(`already in ${folderName(dest)}`); return; }
   try {
     const r = await api.move(moving.map(o => o.id), dest.id);
     const okSet = new Set(r.ok);
@@ -546,9 +548,9 @@ async function doMove(ids, folderId, verb = "move") {
     else { for (const m of byIds(r.ok)) m.folder = { ...(m.folder || {}), id: dest.id, name: dest.name }; renderList(); }
     updateFolderCounts();
     const past = { move: "moved", archive: "archived", delete: "deleted" }[verb];
-    status(`${past} ${plural(done.length, "message")} to ${dest.name.split("/").pop()}`, r.ms); partial(r, verb);
+    status(`${past} ${plural(done.length, "message")} to ${folderName(dest).split("/").pop()}`, r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
-    pushUndo({ label: `${verb} ${plural(done.length, "message")} to ${dest.name.split("/").pop()}`,
+    pushUndo({ label: `${verb} ${plural(done.length, "message")} to ${folderName(dest).split("/").pop()}`,
       undo: async () => {
         for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) await api.move(g, from);
         if (known.length < done.length) status(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`);
@@ -630,10 +632,10 @@ function renderMoveList() {
   const filter = $("move-filter").value.toLowerCase();
   const cur = state.view.kind === "folder" ? state.view.folderId : null;
   moveTargets = state.folders.filter(f => !isHidden(f) && f.id !== cur && !f.types.includes("DRAFT"))
-    .filter(f => !filter || f.name.toLowerCase().includes(filter))
+    .filter(f => !filter || folderName(f).toLowerCase().includes(filter))
     .sort((a, b) => (folderType(b) ? 1 : 0) - (folderType(a) ? 1 : 0) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   moveKb = 0;
-  $("move-list").innerHTML = moveTargets.map((f, i) => `<div data-i="${i}" class="${i === moveKb ? "kb" : ""}">${esc(f.name)}</div>`).join("");
+  $("move-list").innerHTML = moveTargets.map((f, i) => `<div data-i="${i}" class="${i === moveKb ? "kb" : ""}">${esc(folderName(f))}</div>`).join("");
 }
 function closeMovePicker() { $("movebox").classList.add("hidden"); $("list").focus(); }
 function pickMove(f) { const ids = moveIds; closeMovePicker(); run(() => doMove(ids, f.id)); }
