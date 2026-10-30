@@ -206,11 +206,15 @@ function focusEditor() {
   sel.removeAllRanges(); sel.addRange(range);
 }
 
-export function close(save = true) {
+// Closes the composer. With save, a message the user has changed goes to Drafts first;
+// an untouched reply or empty new message is simply dropped.
+export async function close(save = true) {
   if (!isOpen()) return;
   clearInterval(autosaveTimer);
-  const finish = () => { $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; hooks.onClose(); };
-  if (save && dirty && hasContent()) saveNow(true).finally(finish); else finish();
+  hideSuggest();
+  if (save && dirty && hasContent()) { await saveNow(true); hooks.status("message saved to Drafts"); }
+  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null;
+  hooks.onClose();
 }
 
 // ---------- editor ----------

@@ -75,8 +75,12 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.keyboard.press("a"); await page.waitForSelector("#compose:not(.hidden)");
   const chips = async id => (await page.locator(`#${id} .chip`).allTextContents()).join(" | ");
   results.replyAll = { title: await page.locator("#c-title").textContent(), to: await chips("c-to"), cc: await chips("c-cc"), subject: await page.inputValue("#c-subject"), quoteHidden: await page.locator("#c-quote").isHidden() };
-  await page.locator("#c-discard").click(); await page.waitForTimeout(200);
-  if (await page.locator("#compose").isVisible()) { page.once("dialog", d => d.accept()); await page.locator("#c-discard").click(); }
+  // clicking another message while composing: composer closes (saved only if changed), message shows
+  await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.type("partial reply");
+  await page.locator("#rows .row").nth(3).click();
+  await page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"));
+  await page.waitForTimeout(600);
+  results.clickAway = { composerHidden: await page.locator("#compose").isHidden(), readerText: (await frameText()).slice(0, 20), draftSaved: calls.some(c => c.name === "messages.saveV3") };
 
   // new message with attachment, send with 2 s hold, cancel, then send again
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("address book:"), null, { timeout: 15000 }).catch(() => {});
@@ -131,6 +135,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(/^<div><div>Hello from the runtime test\.<\/div>/.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.length === 1, "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
+  expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }
   console.log("PASS");
 })().catch(e => { console.error(e); process.exit(1); });

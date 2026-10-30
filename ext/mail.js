@@ -390,6 +390,7 @@ function bodyDoc(html, images) {
 async function open(i) {
   const m = state.messages[i];
   if (!m) return;
+  if (compose.isOpen()) await compose.close(true);
   state.openId = m.id;
   clearTimeout(markReadTimer);
   status("fetching body…");
@@ -477,7 +478,7 @@ function hideReaderForCompose(hide) {
 }
 
 async function startCompose(mode) {
-  if (compose.isOpen()) { status("a message is already open"); return; }
+  if (compose.isOpen()) await compose.close(true);
   const me = $("account").textContent;
   if (mode === "new") { hideReaderForCompose(true); await compose.open({ mode, myEmail: me }); return; }
   const m = state.messages[state.selected];
@@ -488,7 +489,7 @@ async function startCompose(mode) {
 
 async function editDraft(i) {
   const m = state.messages[i]; if (!m) return;
-  if (compose.isOpen()) { status("a message is already open"); return; }
+  if (compose.isOpen()) await compose.close(true);
   status("loading draft…");
   let r;
   try { r = await api.body(m.id); } catch (e) { handleError(e, "draft"); return; }
