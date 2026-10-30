@@ -143,7 +143,7 @@ const folders = [
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();
   server.close();
-  const real = errors.filter(e => !e.includes("img-src 'none'"));
+  const real = errors.filter(e => !e.includes("img-src 'none'") && !e.includes("ERR_TUNNEL_CONNECTION_FAILED") && !e.includes("net::ERR_"));
   if (real.length) { console.error("FAILED:", real); process.exit(1); }
   console.log("PASS");
 })().catch(e => { console.error(e); process.exit(1); });

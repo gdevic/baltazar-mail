@@ -8,7 +8,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-ymail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, images: "safe", rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -412,12 +412,15 @@ function renderMessage(m, r) {
   $("r-cc").textContent = addrs(h.cc);
   $("r-date").textContent = toDate(h.date)?.toLocaleString() || "";
   $("r-folder").textContent = r.message.folder?.name || "";
-  $("r-images").classList.toggle("hidden", !/<img\b/i.test(r.html));
+  const ft = folderType(state.byId.get(r.message.folder?.id)) || folderType(state.byId.get(state.view.folderId));
+  const auto = settings.images === "always" || (settings.images !== "never" && ft !== "BULK" && ft !== "TRASH");
+  const hasImg = /<img\b/i.test(r.html);
+  $("r-images").classList.toggle("hidden", !hasImg || auto);
   const att = $("r-attach");
   att.innerHTML = r.attachments.filter(a => a.disposition !== "inline" && /^https:\/\//i.test(a.downloadUrl || "")).map(a =>
     `<a href="${esc(a.downloadUrl)}" target="_blank" rel="noopener">${esc(a.filename)}</a><span style="color:var(--fg3)">${Math.round((a.size || 0) / 1024)} KB</span> `).join("");
   att.classList.toggle("hidden", !att.innerHTML);
-  setFrame(bodyDoc(r.html, false));
+  setFrame(bodyDoc(r.html, auto));
   status(plainSubject(h.subject).slice(0, 60), r.ms);
   if (settings.markReadSec != null && !m.flags?.read) {
     markReadTimer = setTimeout(() => {
