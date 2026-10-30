@@ -95,8 +95,14 @@ export async function list(folderId, count = 100, offset = 0) {
   return { messages: res.messages || [], query: res.query, ms: r.ms };
 }
 
-export async function search(term, folderId = null, count = 100, offset = 0) {
+// raw: term is already in Yahoo's query language (from:(..) OR to:(..)); otherwise a keyword search.
+export async function search(term, folderId = null, count = 100, offset = 0, raw = false) {
   const scope = folderId ? `folderId:${folderId} ` : "";
+  if (raw) {
+    const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`${scope}count:${count} offset:${offset} -sort:date ${term}`) }]);
+    const res = first(r);
+    return { messages: res.messages || [], query: res.query, ms: r.ms };
+  }
   const r = await batch("messageGroups.getList", [{
     id: "GetMessageGroupList", method: "GET",
     uri: q(`${scope}count:${count} offset:${offset} -sort:date keyword:${term}`),
@@ -112,7 +118,9 @@ export async function body(msgId) {
   }]);
   const res = first(r);
   if (!res?.message) throw new ApiError("body: message not returned", r[0]);
-  return { message: res.message, html: res.simpleBody?.html || "", attachments: res.simpleBody?.attachments || [], ms: r.ms };
+  // Attachment metadata lives on the message; simpleBody carries it only for some messages.
+  const attachments = res.message.attachments?.length ? res.message.attachments : (res.simpleBody?.attachments || []);
+  return { message: res.message, html: res.simpleBody?.html || "", attachments, ms: r.ms };
 }
 
 // ---------- mutations ----------
@@ -134,6 +142,12 @@ const update = (name, ids, payload) => perMessage(name, ids, (id, i) => ({
 
 export function setRead(ids, read) { return update("messages.readFlagUpdate", ids, { message: { flags: { read } } }); }
 export function setStarred(ids, flagged) { return update("messages.starFlagUpdate", ids, { message: { flags: { flagged } } }); }
+export async function searchQuery(q, count = 20) {
+  const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q2(`count:${count} offset:0 -sort:date ${q}`) }]);
+  return { messages: first(r).messages || [], ms: r.ms };
+}
+const q2 = s => `/ws/v3/mailboxes/@.id==<mb>/messages/@.select==q?q=${encodeURIComponent(s)}`;
+
 export function move(ids, folderId) { return update("messages.move", ids, { message: { folder: { id: String(folderId) } } }); }
 
 // Permanent removal; the client only calls this for messages already in Trash.
@@ -153,8 +167,10 @@ export async function accounts() {
 function saveRequest(d) {
   const inline = d.inline || [];
   const files = (d.files || []).concat(inline.map(i => i.file));
+  // d.refs: attachments of another message, copied server-side: [{ messageId, partId, contentId }]
   const attachments = (d.files || []).map(f => ({ disposition: "attachment", multipartName: `multipart://${encodeURIComponent(f.name)}` }))
-    .concat(inline.map(i => ({ disposition: "inline", contentId: i.contentId, multipartName: `multipart://${encodeURIComponent(i.file.name)}` })));
+    .concat(inline.map(i => ({ disposition: "inline", contentId: i.contentId, multipartName: `multipart://${encodeURIComponent(i.file.name)}` })))
+    .concat((d.refs || []).map(r => ({ disposition: "attachment", ...(r.contentId ? { contentId: r.contentId } : {}), messageReference: { id: r.messageId, pid: r.partId } })));
   const message = {
     csid: d.csid, newMessage: !d.inReplyTo,
     headers: { subject: d.subject || "", from: [d.from], replyTo: [d.replyTo || d.from], to: d.to || [], cc: d.cc || [], bcc: d.bcc || [] },

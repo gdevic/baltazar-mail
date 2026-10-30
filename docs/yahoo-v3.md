@@ -132,3 +132,13 @@ Send chains two more requests under the save, using the batch's filter/placehold
 ```
 
 The `UpdateMessages` child is only added for replies and forwards. Measured: 829 ms without attachment, 812 ms with a 22-byte one. Search syntax for header fields: `subject:"ymail-lite test"`.
+
+## Spam, forwarded attachments, person search (verified 2026-10-30)
+
+Spam and not spam in Yahoo's client are plain moves: to the folder of type BULK, and back to INBOX. No flag update accompanies them; the server learns from the move.
+
+An attachment of another message is forwarded by reference, copied server-side without a download: `{ "disposition": "attachment", "contentId": "<cid>", "messageReference": { "id": "<orig message id>", "pid": "<partId>" } }`, counted in `totalAttachments` but not `uploadCount`. The save answers HTTP 206 when some referenced parts were dropped: inline parts referenced this way become plain attachments and the body's `cid:` links do not resolve, so inline images of a quoted original are re-uploaded as new inline parts instead.
+
+`GET .../content/simplebody/full` returns attachment metadata on `message.attachments`; `simpleBody.attachments` is present only for some messages. Each entry has `partId`, `filename`, `size`, `type`, `subtype`, `disposition`, `contentId`, `downloadUrl`, `thumbnailUrl` (server-rendered previews for images and PDFs, cookie-authenticated).
+
+Person search: `(from:("addr") OR to:("addr"))`; `fromEmail:(...)` also exists.

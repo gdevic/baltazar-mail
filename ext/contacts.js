@@ -155,3 +155,9 @@ export async function suggest(query, limit = 8, exclude = new Set()) {
 }
 
 export async function count() { await loadAll(); return cache.size; }
+
+export async function lookup(email) {
+  await loadAll();
+  const e = cache.get(String(email || "").toLowerCase());
+  return e ? { name: e.name, email: e.email, sent: e.sent, received: e.received, last: e.last, lastSent: e.lastSent, hidden: !!e.hidden } : null;
+}

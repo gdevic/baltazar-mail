@@ -17,6 +17,7 @@ const folders = [
   { id: "2", name: "Sent", types: ["SENT"], unread: 0, total: 8, highestModSeq: 11 },
   { id: "4", name: "Trash", types: ["TRASH"], unread: 0, total: 1, highestModSeq: 12 },
   { id: "62", name: "Archive", types: ["ARCHIVE"], unread: 0, total: 0, highestModSeq: 16 },
+  { id: "6", name: "Bulk", types: ["BULK"], unread: 0, total: 2, highestModSeq: 17 },
   { id: "31", name: "Projects", types: ["USER"], unread: 0, total: 5, highestModSeq: 13 },
 ];
 const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", isPrimary: true, isSending: true, type: "FREE", signature: "<i>sig</i>", signatureActive: true }];
@@ -42,7 +43,15 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     let responses;
     if (uri.endsWith("/folders")) responses = [{ id: top.id, httpCode: 200, response: { result: { folders, accounts: [] } } }];
     else if (uri.endsWith("/accounts")) responses = [{ id: top.id, httpCode: 200, response: { result: { accounts } } }];
-    else if (uri.includes("/content/simplebody/full")) { const id = uri.match(/@\.id==(MSG[^/]+)/)[1]; responses = [{ id: top.id, httpCode: 200, response: { result: { message: msg(Number(id.split("_")[1]), id.split("_")[0].slice(3)), simpleBody: { html: `<p>Body of <b>${id}</b></p>`, attachments: [] } } } }]; }
+    else if (uri.includes("/content/simplebody/full")) {
+      const id = uri.match(/@\.id==(MSG[^/]+)/)[1];
+      const message = msg(Number(id.split("_")[1]), id.split("_")[0].slice(3));
+      message.attachments = [
+        { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/2", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/2?appid=x" },
+        { partId: "3", filename: "data.csv", size: 900, disposition: "attachment", type: "text", subtype: "csv", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/3", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/3?appid=x" },
+      ];
+      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>` } } } }];
+    }
     else if (top.id === "SaveMessage") {
       const saved = { ...msg(99, "3"), id: "MSGDRAFT_99", immutableid: "IMM99", csid: top.payloadParts[0].payload.message.csid };
       responses = [{ id: "SaveMessage", httpCode: 200, response: { result: { message: saved, simpleBody: {} } } }];
@@ -53,6 +62,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 
+  const thumbPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+  await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => route.fulfill({ contentType: "image/png", body: thumbPng }));
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
@@ -71,6 +82,29 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.readAfterSwitch = (await frameText()).slice(0, 30);
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
 
+  // attachment previews: two cards, PDF gets a thumbnail, CSV a type tile
+  await page.waitForTimeout(500);
+  results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), csvTile: await page.locator("#r-attach .att-card").nth(1).locator(".att-ext").textContent().catch(() => "") };
+
+  // contact card on hover over From
+  await page.locator("#r-from .who").first().hover();
+  await page.waitForSelector("#card:not(.hidden)", { timeout: 4000 });
+  await page.waitForSelector("#card .card-recent div", { timeout: 4000 }).catch(() => {});
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "card.png") }).catch(() => {});
+  results.card = { head: await page.locator("#card .card-head").textContent(), stats: await page.locator("#card .card-stats").textContent(), recent: await page.locator("#card .card-recent div").count() };
+  await page.mouse.move(5, 600); await page.waitForTimeout(400);
+  results.cardClosed = await page.locator("#card").isHidden();
+
+  // spam: mark the open message as spam, check move to Bulk and undo label
+  const before = calls.length;
+  await page.keyboard.press("!");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("as spam"), null, { timeout: 4000 });
+  const spamCall = calls.slice(before).find(c => c.name === "messages.move");
+  results.spam = { dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator("#st-undo").textContent() };
+  await page.keyboard.press("z");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo"), null, { timeout: 4000 });
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+
   // print: opens print.html in a new tab with the open message
   const [printPage] = await Promise.all([ctx.waitForEvent("page"), page.keyboard.press("p")]);
   printPage.on("pageerror", e => errors.push("print pageerror: " + e.message));
@@ -78,6 +112,16 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.print = { url: printPage.url().split("/").pop().split("?")[0], subject: await printPage.locator(".hdr h1").textContent(), body: (await printPage.locator(".msg .body").innerText()).slice(0, 20), title: await printPage.title() };
   await printPage.close();
   await page.bringToFront();
+
+  // forward: original's attachments carried by reference
+  await page.keyboard.press("f"); await page.waitForSelector("#compose:not(.hidden)");
+  results.fwdChips = await page.locator("#c-filelist .c-file").allTextContents();
+  await page.locator("#c-to input").type("fwd@example.com"); await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 });
+  const fwdCall = calls.filter(c => c.name === "messages.saveAndSend").pop();
+  const fwdSave = fwdCall.envelope.requests[0];
+  results.fwd = { uri: fwdSave.uri, atts: fwdSave.payloadParts[0].payload.message.attachments, inReplyTo: fwdSave.payloadParts[0].payload.message.inReplyTo };
 
   // reply: quote present, recipients right
   await page.keyboard.press("a"); await page.waitForSelector("#compose:not(.hidden)");
@@ -139,7 +183,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.afterCancel = { title: await page.locator("#c-title").textContent(), to: await chips("c-to"), body: (await page.locator("#c-editor").innerText()).trim(), files: await page.locator("#c-filelist").textContent() };
   await page.keyboard.press("Control+Enter");
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 });
-  const sendCall = calls.find(c => c.name === "messages.saveAndSend");
+  const sendCall = calls.find(c => c.name === "messages.saveAndSend" && c.envelope.requests[0].payloadParts[0].payload.message.headers.subject === "Runtime test");
   const save = sendCall.envelope.requests[0];
   const payload = save.payloadParts[0].payload;
   results.sent = {
@@ -165,6 +209,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
+  expect(results.attach.cards === 2 && results.attach.thumbs === 1 && results.attach.csvTile === "CSV", "attachment previews: " + JSON.stringify(results.attach));
+  expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
+  expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));
+  expect(results.fwdChips.length === 2 && results.fwd.atts.length === 2 && results.fwd.atts[0].messageReference?.pid === "2" && results.fwd.uri.includes("uploadCount=0&totalAttachments=2") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
   expect(results.palette === 16, "16 text colours");
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));

@@ -209,7 +209,7 @@ async function loadList(mode = "fresh") {
   status(mode === "more" ? "loading more…" : "loading…");
   let r;
   try {
-    r = v.kind === "search" ? await api.search(v.term, null, count, offset) : await api.list(v.folderId, count, offset);
+    r = v.kind === "search" ? await api.search(v.raw || v.term, null, count, offset, !!v.raw) : await api.list(v.folderId, count, offset);
   } catch (e) {
     if (token !== state.listToken) return;
     if (mode === "fresh" && prevView) { state.view = prevView; renderFolders(); }
@@ -254,7 +254,7 @@ function renderList() {
     el.dataset.i = i;
     el.draggable = true;
     const who = outgoing ? h.to?.[0] : h.from?.[0];
-    el.innerHTML = `<span class="fl"></span><span class="fr" title="${esc(addr(who))}">${esc(who?.name || who?.email || "")}</span>` +
+    el.innerHTML = `<span class="fl"></span><span class="fr" data-email="${esc(who?.email || "")}" data-name="${esc(who?.name || "")}">${esc(who?.name || who?.email || "")}</span>` +
       `<span class="sb">${subjectHtml(h.subject)}${showFolder ? `<em>${esc(m.folder?.name || "")}</em>` : ""}</span>` +
       `<span class="dt">${fmtDate(h.date)}</span>`;
     el.querySelector(".fl").textContent = flagGlyphs(m);
@@ -329,6 +329,11 @@ function targetIds() {
   return m ? [m.id] : [];
 }
 
+function spamLabel(ids) {
+  const msgs = byIds(ids || targetIds());
+  return inSpamView() || (msgs.length && msgs.every(m => folderType(state.byId.get(m.folder?.id)) === "BULK")) ? "Not spam" : "Spam";
+}
+
 function updateToolbar() {
   const n = state.marked.size || (state.selected >= 0 ? 1 : 0);
   for (const b of $("toolbar").querySelectorAll("button[data-act]")) {
@@ -339,6 +344,7 @@ function updateToolbar() {
   const first = state.messages.filter(m => state.marked.has(m.id))[0] || state.messages[state.selected];
   $("toolbar").querySelector('[data-act="read"]').textContent = first && !first.flags?.read ? "Mark read" : "Mark unread";
   $("toolbar").querySelector('[data-act="star"]').textContent = first && first.flags?.flagged ? "Unstar" : "Star";
+  $("toolbar").querySelector('[data-act="spam"]').textContent = spamLabel();
   $("list-count").textContent = `${state.messages.length}${state.more ? "+" : ""}` + (state.marked.size ? ` · ${state.marked.size} selected` : "");
 }
 
@@ -378,6 +384,113 @@ async function inlineYahooParts(html) {
     } catch { partCache.set(u, null); }
   }));
   return html.replace(re, (m, pre, qu, u) => partCache.get(u) ? `${pre}${qu}${partCache.get(u)}${qu}` : m);
+}
+
+// ---------- contact cards ----------
+// Hover an address in the reader header or a sender in the list to see what the address book
+// knows about the person and the last messages exchanged with them.
+const addrHtml = l => (l || []).map(a => `<span class="who" data-email="${esc(a.email || "")}" data-name="${esc(a.name || "")}">${esc(a.name ? `${a.name} <${a.email}>` : a.email || "")}</span>`).join(", ");
+
+let cardTimer = null, cardHideTimer = null, cardFor = null;
+function wireContactCards() {
+  const show = el => {
+    clearTimeout(cardHideTimer); clearTimeout(cardTimer);
+    const email = el.dataset.email; if (!email) return;
+    cardTimer = setTimeout(() => openCard(el, email, el.dataset.name), 450);
+  };
+  const leave = () => { clearTimeout(cardTimer); cardHideTimer = setTimeout(closeCard, 250); };
+  document.addEventListener("mouseover", e => { const el = e.target.closest(".who, .row .fr"); if (el) show(el); else if (e.target.closest("#card")) clearTimeout(cardHideTimer); });
+  document.addEventListener("mouseout", e => { if (e.target.closest(".who, .row .fr, #card")) leave(); });
+}
+
+function closeCard() { $("card").classList.add("hidden"); cardFor = null; }
+
+async function openCard(anchor, email, name) {
+  const card = $("card");
+  cardFor = email;
+  const c = await contacts.lookup(email);
+  const me = email.toLowerCase() === $("account").textContent.toLowerCase();
+  const when = s => s ? new Date(s * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "never";
+  card.innerHTML = `<div class="card-head"><b>${esc(c?.name || name || email)}</b><span>${esc(email)}</span></div>
+    <div class="card-stats">${me ? "This is you." : c ? `You wrote ${plural(c.sent, "time")} · they wrote ${plural(c.received, "time")}<br>Last exchange ${when(c.last)}` : "Not in your address book yet."}</div>
+    <div class="card-actions"><button data-c="write">Write</button><button data-c="search">All mail</button><button data-c="copy">Copy address</button></div>
+    <div class="card-recent"><i>loading recent messages…</i></div>`;
+  const r = anchor.getBoundingClientRect();
+  card.classList.remove("hidden");
+  card.style.left = Math.max(4, Math.min(r.left, innerWidth - card.offsetWidth - 8)) + "px";
+  card.style.top = (r.bottom + card.offsetHeight + 6 > innerHeight ? Math.max(4, r.top - card.offsetHeight - 4) : r.bottom + 4) + "px";
+  card.onclick = async e => {
+    const b = e.target.closest("[data-c]"); if (!b) return;
+    if (b.dataset.c === "write") { closeCard(); await startCompose("new"); compose.addRecipient({ name: c?.name || name || "", email }); }
+    else if (b.dataset.c === "search") { closeCard(); searchPerson(email); }
+    else if (b.dataset.c === "copy") { await navigator.clipboard.writeText(email).catch(() => {}); b.textContent = "Copied"; }
+  };
+  const q = personQuery(email);
+  let res;
+  try { res = await api.search(q, null, 5, 0, true); } catch { res = { messages: [] }; }
+  if (cardFor !== email) return;
+  const recent = card.querySelector(".card-recent");
+  recent.innerHTML = res.messages.length ? res.messages.map(m => {
+    const out = (m.headers.from?.[0]?.email || "").toLowerCase() !== email.toLowerCase();
+    return `<div title="${esc(plainSubject(m.headers.subject))}"><span class="dir">${out ? "→" : "←"}</span><span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
+  }).join("") : "<i>No messages found.</i>";
+  recent.onclick = () => { closeCard(); searchPerson(email); };
+}
+
+const personQuery = email => `(from:("${email.replace(/"/g, "")}") OR to:("${email.replace(/"/g, "")}"))`;
+async function searchPerson(email) {
+  state.prevView = state.view;
+  state.view = { kind: "search", folderId: null, term: email, raw: personQuery(email) };
+  $("search").value = email;
+  renderFolders();
+  await loadList("fresh");
+  $("list").focus();
+}
+
+// ---------- attachment previews ----------
+// Cards under the header: a thumbnail for images and PDFs (Yahoo renders those server-side,
+// behind the session cookies, so the page fetches them), a type tile for everything else.
+const thumbCache = new Map();
+const extOf = n => (String(n || "").match(/\.([a-z0-9]{1,5})$/i)?.[1] || "").toUpperCase();
+const kbStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
+
+async function thumbFor(a) {
+  const key = a.thumbnailUrl;
+  if (thumbCache.has(key)) return thumbCache.get(key);
+  let url = key.replace(/&amp;/g, "&");
+  if (!/[?&]size=/.test(url)) url += (url.includes("?") ? "&" : "?") + "size=240w";
+  const p = (async () => {
+    try {
+      const resp = await fetch(url, { credentials: "include" });
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      if (!/^image\//.test(blob.type)) return null;
+      return await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(blob); });
+    } catch { return null; }
+  })();
+  thumbCache.set(key, p);
+  return p;
+}
+
+function renderAttachments(r, images) {
+  const box = $("r-attach");
+  const list = r.attachments.filter(a => a.disposition !== "inline" && /^https:\/\//i.test(a.downloadUrl || ""));
+  box.classList.toggle("hidden", !list.length);
+  box.innerHTML = list.map((a, i) => {
+    const ext = extOf(a.filename) || (a.subtype || "").toUpperCase().slice(0, 4) || "FILE";
+    return `<a class="att-card" href="${esc(a.downloadUrl)}" target="_blank" rel="noopener" title="${esc(a.filename || "attachment")} (${kbStr(a.size)})">
+      <span class="att-thumb" data-i="${i}"><span class="att-ext">${esc(ext)}</span></span>
+      <span class="att-name">${esc(a.filename || "Untitled")}</span><span class="att-size">${kbStr(a.size)}</span></a>`;
+  }).join("");
+  const id = r.message.id;
+  list.forEach(async (a, i) => {
+    const previewable = a.type === "image" || /pdf/i.test(a.subtype || "") || /\.pdf$/i.test(a.filename || "");
+    if (!previewable || !a.thumbnailUrl) return;
+    const src = await thumbFor(a);
+    if (!src || state.openId !== id) return;
+    const slot = box.querySelector(`.att-thumb[data-i="${i}"]`);
+    if (slot) slot.innerHTML = `<img src="${src}" alt="">`;
+  });
 }
 
 function bodyDoc(html, images) {
@@ -430,20 +543,17 @@ async function renderMessage(m, r) {
   $("reader-head").classList.remove("hidden");
   $("r-body").classList.remove("hidden");
   $("r-subject").textContent = plainSubject(h.subject);
-  $("r-from").textContent = addrs(h.from);
-  $("r-to").textContent = addrs(h.to);
+  $("r-from").innerHTML = addrHtml(h.from);
+  $("r-to").innerHTML = addrHtml(h.to);
   $("r-cc-row").classList.toggle("hidden", !(h.cc && h.cc.length));
-  $("r-cc").textContent = addrs(h.cc);
+  $("r-cc").innerHTML = addrHtml(h.cc);
   $("r-date").textContent = toDate(h.date)?.toLocaleString() || "";
   $("r-folder").textContent = r.message.folder?.name || "";
   const ft = folderType(state.byId.get(r.message.folder?.id)) || folderType(state.byId.get(state.view.folderId));
   const auto = settings.images === "always" || (settings.images !== "never" && ft !== "BULK" && ft !== "TRASH");
   const hasImg = /<img\b/i.test(r.html);
   $("r-images").classList.toggle("hidden", !hasImg || auto);
-  const att = $("r-attach");
-  att.innerHTML = r.attachments.filter(a => a.disposition !== "inline" && /^https:\/\//i.test(a.downloadUrl || "")).map(a =>
-    `<a href="${esc(a.downloadUrl)}" target="_blank" rel="noopener">${esc(a.filename)}</a><span style="color:var(--fg3)">${Math.round((a.size || 0) / 1024)} KB</span> `).join("");
-  att.classList.toggle("hidden", !att.innerHTML);
+  renderAttachments(r, auto);
   if (auto) { const inlined = await inlineYahooParts(r.html); if (state.openId !== m.id) return; r.html = inlined; }
   setFrame(bodyDoc(r.html, auto));
   status(plainSubject(h.subject).slice(0, 60), r.ms);
@@ -485,7 +595,10 @@ async function startCompose(mode) {
   const m = state.messages[state.selected];
   if (!m || !currentBody || currentBody.message.id !== m.id) { status("open a message first"); return; }
   hideReaderForCompose(true);
+  status("preparing…");
+  currentBody.html = await inlineYahooParts(currentBody.html);
   await compose.open({ mode, message: currentBody.message, body: currentBody, myEmail: me });
+  status("");
 }
 
 async function editDraft(i) {
@@ -687,16 +800,28 @@ async function doMove(ids, folderId, verb = "move") {
     if (state.view.kind === "folder" && state.view.folderId !== dest.id) removeLocal(r.ok);
     else { for (const m of byIds(r.ok)) m.folder = { ...(m.folder || {}), id: dest.id, name: dest.name }; renderList(); }
     updateFolderCounts();
-    const past = { move: "moved", archive: "archived", delete: "deleted" }[verb];
-    status(`${past} ${plural(done.length, "message")} to ${folderName(dest).split("/").pop()}`, r.ms); partial(r, verb);
+    const n = plural(done.length, "message"), where = folderName(dest).split("/").pop();
+    const words = { move: [`move ${n} to ${where}`, `moved ${n} to ${where}`], archive: [`archive ${n}`, `archived ${n}`], delete: [`delete ${n}`, `deleted ${n}`],
+      spam: [`mark ${n} as spam`, `marked ${n} as spam`], notspam: [`mark ${n} not spam`, `marked ${n} not spam, moved to Inbox`] }[verb];
+    status(words[1], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
-    pushUndo({ label: `${verb} ${plural(done.length, "message")} to ${folderName(dest).split("/").pop()}`,
+    pushUndo({ label: words[0],
       undo: async () => {
         for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) await api.move(g, from);
         if (known.length < done.length) status(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`);
       },
       redo: () => api.move(done.map(o => o.id), dest.id) });
   } catch (e) { handleError(e, verb); }
+}
+
+// Yahoo's Spam button is a move to the Bulk folder (its filter learns from the move); Not spam moves to Inbox.
+const inSpamView = () => state.view.kind === "folder" && folderType(state.byId.get(state.view.folderId)) === "BULK";
+async function doSpam(ids) {
+  const msgs = byIds(ids);
+  const allSpam = msgs.length && msgs.every(m => folderType(state.byId.get(m.folder?.id)) === "BULK");
+  if (inSpamView() || allSpam) { await doMove(ids, inboxId(), "notspam"); return; }
+  const bulk = folderByType("BULK"); if (!bulk) { status("no Spam folder"); return; }
+  await doMove(ids, bulk.id, "spam");
 }
 
 async function doArchive(ids) {
@@ -730,6 +855,7 @@ function runAction(act) {
     case "move": return openMovePicker(ids);
     case "read": return run(() => doSetRead(ids, first ? !first.flags?.read : true));
     case "star": return run(() => doSetStarred(ids, first ? !first.flags?.flagged : true));
+    case "spam": return run(() => doSpam(ids));
     case "undo": if (pendingSend) return cancelSend(); return run(undo);
     case "redo": return run(redo);
     case "open": if (state.selected >= 0) open(state.selected); return;
@@ -745,7 +871,8 @@ function showContextMenu(x, y) {
     ["open", "Open"], null,
     ["read", (first.flags?.read ? "Mark unread" : "Mark read") + n],
     ["star", (first.flags?.flagged ? "Unstar" : "Star") + n], null,
-    ["archive", "Archive" + n], ["move", "Move to…" + n], ["delete", "Delete" + n],
+    ["archive", "Archive" + n], ["move", "Move to…" + n], ["delete", "Delete" + n], null,
+    ["spam", (spamLabel(ids)) + n],
   ];
   const ctx = $("ctx");
   ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}">${esc(it[1])}</div>` : "<hr>").join("");
@@ -887,6 +1014,7 @@ function onKey(e) {
     case "v": e.preventDefault(); runAction("move"); break;
     case "u": runAction("read"); break;
     case "s": runAction("star"); break;
+    case "!": runAction("spam"); break;
     case "z": e.preventDefault(); runAction("undo"); break;
     case "Z": e.preventDefault(); runAction("redo"); break;
   }
@@ -1017,6 +1145,7 @@ $("folder-filter").oninput = () => { state.kbFolder = -1; renderFolders(); };
 wireSettings();
 wireSplitters();
 wireMovePicker();
+wireContactCards();
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;

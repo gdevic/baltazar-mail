@@ -2,7 +2,7 @@
 
 A fast, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) extension. Everything works with the mouse; the keyboard shortcuts are there for those who want them. It reuses the Yahoo sign-in already present in the browser and talks to the same `ws/v3` batch API that Yahoo's own web client uses, so it is as quick as the official UI without any of its chrome.
 
-Status: browsing, search, reading, mailbox actions (read/unread, star, archive, move, delete) with multi-level undo, and compose, reply, reply all, forward with drafts, attachments, rich-text or plain-text editing, undo-send, and an address book with autocomplete built from your own Inbox and Sent headers. Conversation threading is next.
+Status: browsing, search, reading, mailbox actions (read/unread, star, archive, move, delete) with multi-level undo, and compose, reply, reply all, forward with drafts, attachments, rich-text or plain-text editing, undo-send, and an address book with autocomplete built from your own Inbox and Sent headers. Also: spam / not spam, forwarding with the original's attachments, attachment previews, and contact cards on hover. Conversation threading is next.
 
 ## Install
 
@@ -21,6 +21,7 @@ Status: browsing, search, reading, mailbox actions (read/unread, star, archive, 
 | `g f` | focus folder filter; type, arrows, `Enter` |
 | `x` | select / deselect (Ctrl-click toggles, Shift-click ranges, Ctrl+A all) |
 | `e` `#` `v` `u` `s` | archive, delete, move, read/unread, star; apply to the selection |
+| `!` | spam; in Spam, not spam (back to Inbox) |
 | `z` / `Shift+Z` | undo / redo; the status bar names the next undo |
 | `c`, `r`, `a`, `f` | new message, reply, reply all, forward |
 | `Ctrl+Enter` | send (held for the undo-send delay; `z` cancels) |

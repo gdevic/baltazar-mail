@@ -98,8 +98,14 @@ body.dragging iframe { pointer-events: none; }
 .r-meta .k { width: 36px; color: var(--fg3); flex: none; }
 #r-folder { margin-left: 12px; color: var(--fg3); }
 #r-images { margin-left: auto; font-size: 11px; }
-#r-attach { margin-top: 6px; font-size: 12px; }
-#r-attach a { margin-right: 14px; }
+#r-attach { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; max-height: 150px; overflow-y: auto; }
+.att-card { display: flex; flex-direction: column; width: 112px; text-decoration: none; color: var(--fg2); border: 1px solid var(--line); border-radius: 4px; background: var(--bg); overflow: hidden; }
+.att-card:hover { border-color: var(--sel-line); }
+.att-thumb { height: 72px; display: flex; align-items: center; justify-content: center; background: var(--bg3); overflow: hidden; }
+.att-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.att-ext { font: 600 13px var(--mono); color: var(--accent); }
+.att-name { font-size: 11px; padding: 3px 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.att-size { font-size: 10px; padding: 0 6px 4px; color: var(--fg3); }
 #r-body { flex: 1; border: 0; background: #fff; }
 :root[data-theme="dark"] #r-body { background: #fff; }
 
@@ -175,3 +181,19 @@ body.dragging iframe { pointer-events: none; }
 #hidden-list span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
 #c-suggest div.kb, #c-suggest div:hover { background: var(--sel); }
 #c-suggest i { font-style: normal; color: var(--fg3); margin-left: 6px; }
+
+.who { cursor: default; border-bottom: 1px dotted transparent; }
+.who:hover { border-bottom-color: var(--fg3); color: var(--fg); }
+#card { position: fixed; z-index: 50; width: 340px; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.4); padding: 10px 12px; font-size: 12px; }
+.card-head b { display: block; font-size: 14px; color: var(--fg); }
+.card-head span { color: var(--fg2); }
+.card-stats { margin: 6px 0; color: var(--fg2); line-height: 1.5; }
+.card-actions { display: flex; gap: 6px; margin-bottom: 8px; }
+.card-actions button { font-size: 11px; }
+.card-recent { border-top: 1px solid var(--line); padding-top: 6px; cursor: pointer; }
+.card-recent div { display: flex; gap: 6px; padding: 1px 0; }
+.card-recent div:hover .subj { color: var(--fg); }
+.card-recent .dir { color: var(--accent); width: 12px; flex: none; }
+.card-recent .subj { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
+.card-recent .dt { color: var(--fg3); font-family: var(--mono); font-size: 10px; }
+.card-recent i { color: var(--fg3); }

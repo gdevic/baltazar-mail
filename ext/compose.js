@@ -148,6 +148,8 @@ export function init(h) {
   });
 }
 
+export function addRecipient(a) { fields.to?.add(a); }
+
 export function isOpen() { return !$("compose").classList.contains("hidden"); }
 
 async function loadAccounts() {
@@ -166,7 +168,7 @@ export async function open(opts) {
   const me = opts.myEmail;
   const primary = accounts.find(a => a.isPrimary) || accounts[0] || { email: me, sendingName: "" };
   const m = opts.message, h = m?.headers || {};
-  draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], savedId: null, quoteHtml: "", quoteText: "", html: true };
+  draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true };
   let to = [], cc = [], subject = "", bodyHtml = "";
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
   const notMe = l => (l || []).filter(a => !mine.has((a.email || "").toLowerCase()));
@@ -189,7 +191,8 @@ export async function open(opts) {
       const hdr = `---------- Forwarded message ----------<br>From: ${esc(fmtList(h.from))}<br>Date: ${new Date(Number(h.date) * 1000).toLocaleString()}<br>Subject: ${esc(h.subject || "")}<br>To: ${esc(fmtList(h.to))}${h.cc?.length ? `<br>Cc: ${esc(fmtList(h.cc))}` : ""}<br><br>`;
       draft.quoteHtml = `<div class="ymq">${hdr}${opts.body.html}</div>`;
       draft.quoteText = hdr.replace(/<br>/g, "\n").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") + toText(opts.body.html);
-      if (opts.body.attachments?.length) hooks.status("note: attachments of the original are not forwarded yet");
+      draft.refs = (opts.body.attachments || []).filter(a => a.disposition !== "inline" && a.partId)
+        .map(a => ({ messageId: m.id, partId: a.partId, contentId: a.contentId, filename: a.filename || "Untitled", size: a.size || 0 }));
       break;
     }
     case "draft": {
@@ -381,7 +384,7 @@ function extractInline(html) {
     const bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
     const ext = (mime.split("/")[1] || "png").replace("jpeg", "jpg");
     const name = `inline-${++n}.${ext}`;
-    const contentId = `${Date.now()}-${n}@ymail-lite`;
+    const contentId = `${Date.now()}-${n}@ymail`;
     inline.push({ file: new File([bytes], name, { type: mime }), contentId });
     img.setAttribute("src", `cid:${contentId}`);
     img.removeAttribute("class"); img.removeAttribute("data-name");
@@ -415,8 +418,15 @@ function addFiles(files) {
 }
 function renderFiles() {
   const el = $("c-filelist");
-  el.innerHTML = draft.files.map((f, i) => `<span class="c-file">${esc(f.name)} <i>${Math.round(f.size / 1024)} KB</i> <a href="#" data-i="${i}" title="Remove">×</a></span>`).join("");
-  el.onclick = e => { const a = e.target.closest("a[data-i]"); if (a) { e.preventDefault(); draft.files.splice(Number(a.dataset.i), 1); dirty = true; renderFiles(); } };
+  const kb = n => `${Math.max(1, Math.round(n / 1024))} KB`;
+  el.innerHTML = (draft.refs || []).map((r, i) => `<span class="c-file" title="Forwarded from the original message">↪ ${esc(r.filename)} <i>${kb(r.size)}</i> <a href="#" data-ref="${i}" title="Remove">×</a></span>`).join("") +
+    draft.files.map((f, i) => `<span class="c-file">${esc(f.name)} <i>${kb(f.size)}</i> <a href="#" data-i="${i}" title="Remove">×</a></span>`).join("");
+  el.onclick = e => {
+    const a = e.target.closest("a[data-i], a[data-ref]"); if (!a) return;
+    e.preventDefault();
+    if (a.dataset.ref != null) draft.refs.splice(Number(a.dataset.ref), 1); else draft.files.splice(Number(a.dataset.i), 1);
+    dirty = true; renderFiles();
+  };
 }
 
 // ---------- addresses ----------
@@ -433,7 +443,7 @@ export function parseAddrs(s) {
 }
 
 function hasContent() {
-  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? $("c-editor").innerText.trim() : $("c-text").value.trim()) || draft.files.length);
+  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? $("c-editor").innerText.trim() : $("c-text").value.trim()) || draft.files.length || draft.refs?.length);
 }
 
 function strictGet(f) { if (!f.commit(true)) throw new Error(`Not an address: ${f.input.value.trim()}`); return f.get(); }
@@ -444,13 +454,14 @@ function collect() {
   const d = {
     csid: draft.csid, from, replyTo: acct?.replyToAddress ? { email: acct.replyToAddress } : from,
     to: strictGet(fields.to), cc: strictGet(fields.cc), bcc: strictGet(fields.bcc),
-    subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files,
+    subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files, refs: draft.refs || [],
     draftFolderId: hooks.folderByType("DRAFT")?.id,
   };
   if (draft.html) {
-    const { html, inline } = extractInline($("c-editor").innerHTML);
+    // Images in the quoted original travel as new inline parts too, so recipients see them.
     const f = defaultFont();
-    d.html = `<div style="font-family:${f.family};font-size:${f.size}px">${html}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : "");
+    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : ""));
+    d.html = html;
     d.inline = inline;
   } else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");
   return d;
@@ -491,7 +502,7 @@ async function send() {
 
 async function reopenFrom(snap) {
   await loadAccounts();
-  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html };
+  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html };
   $("c-title").textContent = "Message not sent";
   $("c-from").value = snap.d.from.email;
   fields.to.set(snap.d.to); fields.cc.set(snap.d.cc); fields.bcc.set(snap.d.bcc);

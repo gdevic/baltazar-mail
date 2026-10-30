@@ -25,6 +25,7 @@
       <button data-act="move" title="Move to folder (v)">Move…</button>
       <button data-act="read" title="Mark read / unread (u)">Read</button>
       <button data-act="star" title="Star / unstar (s)">Star</button>
+      <button data-act="spam" title="Spam / not spam (!)">Spam</button>
       <span class="sp"></span>
       <button data-act="undo" title="Undo (z)" disabled>Undo</button>
       <button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button>
@@ -138,6 +139,7 @@
   </div>
 </div>
 <div id="ctx" class="hidden"></div>
+<div id="card" class="hidden"></div>
 <div id="movebox" class="hidden">
   <div id="movebox-box">
     <input id="move-filter" placeholder="Move to folder…" autocomplete="off">
@@ -163,6 +165,7 @@
       <tr><td>v</td><td>move to folder (or drag rows onto a folder)</td></tr>
       <tr><td>u</td><td>mark read / unread</td></tr>
       <tr><td>s</td><td>star / unstar</td></tr>
+      <tr><td>!</td><td>mark as spam (in Spam: not spam, back to Inbox)</td></tr>
       <tr><td>z / Shift+Z</td><td>undo / redo (multi-level; the status bar shows what will be undone)</td></tr>
       <tr><td>R</td><td>refresh current list</td></tr>
       <tr><td>n</td><td>load next 100 messages</td></tr>
