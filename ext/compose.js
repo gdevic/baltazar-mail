@@ -120,9 +120,14 @@ export function init(h) {
     const imgs = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
     if (imgs.length) { e.preventDefault(); insertImages(imgs); }
   });
+  // Dropped on the editor: images go inline at the drop point, anything else is attached.
   ed.addEventListener("drop", e => {
-    const imgs = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith("image/"));
-    if (imgs.length) { e.preventDefault(); e.stopPropagation(); placeCaretAt(e.clientX, e.clientY); insertImages(imgs); }
+    const all = [...(e.dataTransfer?.files || [])];
+    if (!all.length) return;
+    e.preventDefault(); e.stopPropagation(); c.classList.remove("drop");
+    const imgs = all.filter(f => f.type.startsWith("image/")), rest = all.filter(f => !f.type.startsWith("image/"));
+    if (imgs.length) { placeCaretAt(e.clientX, e.clientY); insertImages(imgs); }
+    if (rest.length) { addFiles(rest); hooks.status(`attached ${rest.length} file${rest.length === 1 ? "" : "s"}`); }
   });
   ed.addEventListener("click", e => { ed.querySelectorAll("img.sel").forEach(i => i.classList.remove("sel")); if (e.target.tagName === "IMG") e.target.classList.add("sel"); });
   ed.addEventListener("keydown", e => { const sel = ed.querySelector("img.sel"); if (sel && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); sel.remove(); dirty = true; } });
