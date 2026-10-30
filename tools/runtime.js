@@ -73,13 +73,22 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
 
   // reply: quote present, recipients right
   await page.keyboard.press("a"); await page.waitForSelector("#compose:not(.hidden)");
-  results.replyAll = { title: await page.locator("#c-title").textContent(), to: await page.inputValue("#c-to"), cc: await page.inputValue("#c-cc"), subject: await page.inputValue("#c-subject"), quoteHidden: await page.locator("#c-quote").isHidden() };
+  const chips = async id => (await page.locator(`#${id} .chip`).allTextContents()).join(" | ");
+  results.replyAll = { title: await page.locator("#c-title").textContent(), to: await chips("c-to"), cc: await chips("c-cc"), subject: await page.inputValue("#c-subject"), quoteHidden: await page.locator("#c-quote").isHidden() };
   await page.locator("#c-discard").click(); await page.waitForTimeout(200);
   if (await page.locator("#compose").isVisible()) { page.once("dialog", d => d.accept()); await page.locator("#c-discard").click(); }
 
   // new message with attachment, send with 2 s hold, cancel, then send again
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("address book:"), null, { timeout: 15000 }).catch(() => {});
+  results.addressBook = await page.locator("#st-msg").textContent();
   await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
-  await page.fill("#c-to", "Alice <alice@example.com>, bob@example.com");
+  await page.locator("#c-to input").type("Sen");
+  await page.waitForSelector("#c-suggest:not(.hidden)", { timeout: 5000 });
+  results.suggestions = await page.locator("#c-suggest div").allTextContents();
+  await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  await page.locator("#c-to input").type("Alice <alice@example.com>, bob@example.com");
+  await page.keyboard.press("Tab");
+  results.toChips = await chips("c-to");
   await page.fill("#c-subject", "Runtime test");
   await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.type("Hello from the runtime test.");
   await page.setInputFiles("#c-files", { name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("attached text") });
@@ -90,7 +99,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.pending = await page.locator("#st-undo").textContent();
   await page.keyboard.press("z");
   await page.waitForSelector("#compose:not(.hidden)");
-  results.afterCancel = { title: await page.locator("#c-title").textContent(), to: await page.inputValue("#c-to"), body: (await page.locator("#c-editor").innerText()).trim(), files: await page.locator("#c-filelist").textContent() };
+  results.afterCancel = { title: await page.locator("#c-title").textContent(), to: await chips("c-to"), body: (await page.locator("#c-editor").innerText()).trim(), files: await page.locator("#c-filelist").textContent() };
   await page.keyboard.press("Control+Enter");
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 });
   const sendCall = calls.find(c => c.name === "messages.saveAndSend");
@@ -112,7 +121,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.readAfterSwitch.startsWith("Body of"), "reader after folder switch");
   expect(results.replyAll.to.includes("s2@x.com") && results.replyAll.cc.includes("o@x.com") && results.replyAll.subject.startsWith("Re:"), "reply-all recipients");
   expect(results.afterCancel.to.includes("alice@example.com") && results.afterCancel.body.includes("Hello"), "undo-send restores draft");
-  expect(results.sent.to.length === 2 && results.sent.to[0].name === "Alice", "recipients parsed");
+  expect(results.sent.to.length === 3 && results.sent.to.some(a => a.name === "Alice") && results.sent.to[0].email.startsWith("s"), "recipients: autocomplete chip plus two typed: " + JSON.stringify(results.sent.to));
+  expect(results.suggestions.length >= 2 && results.suggestions[0].includes("Sender"), "autocomplete suggestions: " + results.suggestions.join(","));
   expect(/^<div><div>Hello from the runtime test\.<\/div>/.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.length === 1, "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");

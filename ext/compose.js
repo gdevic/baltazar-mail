@@ -1,4 +1,5 @@
 import * as api from "./api.js";
+import * as contacts from "./contacts.js";
 
 // Compose panel: new message, reply, reply all, forward, or editing a draft.
 // Owns its DOM under #compose; talks to the rest of the app through the hooks given to init().
@@ -9,6 +10,80 @@ const fmt = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
 const fmtList = l => (l || []).map(fmt).join(", ");
 
 let hooks = null;          // { status, folderByType, settings, onClose, onSent, scheduleSend }
+
+// ---------- address field: chips plus autocomplete ----------
+class AddrField {
+  constructor(el, placeholder) {
+    this.el = el; this.list = [];
+    el.innerHTML = `<input autocomplete="off" spellcheck="false" placeholder="${esc(placeholder || "")}">`;
+    this.input = el.querySelector("input");
+    el.onclick = e => { if (e.target === el) this.input.focus(); };
+    this.input.oninput = () => { dirty = true; this.suggest(); };
+    this.input.onkeydown = e => this.onKey(e);
+    this.input.onblur = () => setTimeout(() => { if (document.activeElement !== this.input) { this.commit(false); hideSuggest(); } }, 150);
+    this.input.onfocus = () => this.suggest();
+    this.input.onpaste = e => { const t = e.clipboardData.getData("text"); if (/[,;<]/.test(t)) { e.preventDefault(); this.addText(t); } };
+  }
+  set(list) { this.list = (list || []).map(a => ({ name: a.name || "", email: a.email })); this.render(); }
+  get() { this.commit(false); return this.list.slice(); }
+  text() { return this.list.map(fmt).join(", ") + (this.input.value.trim() ? (this.list.length ? ", " : "") + this.input.value.trim() : ""); }
+  isEmpty() { return !this.list.length && !this.input.value.trim(); }
+  focus() { this.input.focus(); }
+  add(a) { if (!this.list.some(x => x.email.toLowerCase() === a.email.toLowerCase())) this.list.push(a); dirty = true; this.render(); }
+  addText(t) { let parts; try { parts = parseAddrs(t); } catch (e) { hooks.status(e.message); this.input.value = t; return; } for (const a of parts) this.add(a); this.input.value = ""; }
+  commit(strict) {
+    const v = this.input.value.trim(); if (!v) return true;
+    try { for (const a of parseAddrs(v)) this.add(a); this.input.value = ""; return true; }
+    catch (e) { if (strict) hooks.status(e.message); return false; }
+  }
+  render() {
+    for (const ch of [...this.el.querySelectorAll(".chip")]) ch.remove();
+    for (const [i, a] of this.list.entries()) {
+      const ch = document.createElement("span"); ch.className = "chip"; ch.title = fmt(a);
+      ch.innerHTML = `<span>${a.name ? `<b>${esc(a.name)}</b> <i>${esc(a.email)}</i>` : esc(a.email)}</span><a title="Remove">×</a>`;
+      ch.querySelector("a").onclick = () => { this.list.splice(i, 1); dirty = true; this.render(); this.input.focus(); };
+      this.el.insertBefore(ch, this.input);
+    }
+  }
+  async suggest() {
+    const exclude = new Set(this.list.map(a => a.email.toLowerCase()));
+    const items = await contacts.suggest(this.input.value, 8, exclude);
+    if (document.activeElement !== this.input) return;
+    showSuggest(this, items);
+  }
+  onKey(e) {
+    const sg = $("c-suggest"), open = !sg.classList.contains("hidden");
+    if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); moveSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
+    if (open && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
+    if (e.key === "Enter" || e.key === "Tab" || e.key === "," || e.key === ";") {
+      if (open && suggestSel >= 0) { e.preventDefault(); this.add(suggestItems[suggestSel]); this.input.value = ""; hideSuggest(); this.suggest(); return; }
+      if (this.input.value.trim()) { if (e.key !== "Tab") e.preventDefault(); this.commit(true); hideSuggest(); return; }
+      if (e.key === "Enter") e.preventDefault();
+      return;
+    }
+    if (e.key === "Backspace" && !this.input.value && this.list.length) { this.list.pop(); dirty = true; this.render(); }
+  }
+}
+
+let suggestField = null, suggestItems = [], suggestSel = -1;
+function showSuggest(field, items) {
+  const sg = $("c-suggest");
+  suggestField = field; suggestItems = items; suggestSel = items.length ? 0 : -1;
+  if (!items.length) { hideSuggest(); return; }
+  sg.innerHTML = items.map((a, i) => `<div data-i="${i}" class="${i === suggestSel ? "kb" : ""}">${a.name ? `${esc(a.name)}<i>${esc(a.email)}</i>` : esc(a.email)}</div>`).join("");
+  const r = field.input.getBoundingClientRect();
+  sg.style.left = Math.min(r.left, innerWidth - 300) + "px"; sg.style.top = (r.bottom + 2) + "px";
+  sg.classList.remove("hidden");
+  sg.onmousedown = e => { const d = e.target.closest("[data-i]"); if (!d) return; e.preventDefault(); field.add(items[Number(d.dataset.i)]); field.input.value = ""; hideSuggest(); field.input.focus(); field.suggest(); };
+}
+function moveSuggest(d) {
+  if (!suggestItems.length) return;
+  suggestSel = (suggestSel + d + suggestItems.length) % suggestItems.length;
+  $("c-suggest").querySelectorAll("div").forEach((el, i) => el.classList.toggle("kb", i === suggestSel));
+}
+function hideSuggest() { $("c-suggest").classList.add("hidden"); suggestSel = -1; }
+
+const fields = {};
 let accounts = [];
 let draft = null;          // current compose state
 let autosaveTimer = null;
@@ -17,6 +92,9 @@ let dirty = false;
 export function init(h) {
   hooks = h;
   const c = $("compose");
+  fields.to = new AddrField($("c-to"), "name <address>, address");
+  fields.cc = new AddrField($("c-cc"));
+  fields.bcc = new AddrField($("c-bcc"));
   $("c-send").onclick = () => send();
   $("c-save").onclick = () => saveNow();
   $("c-discard").onclick = () => discard();
@@ -95,7 +173,7 @@ export async function open(opts) {
   $("c-title").textContent = { new: "New message", reply: "Reply", replyAll: "Reply all", forward: "Forward", draft: "Draft" }[opts.mode];
   const fromAcct = accounts.find(a => (h.from?.[0]?.email || "").toLowerCase() === a.email.toLowerCase() && opts.mode === "draft") || primary;
   $("c-from").value = fromAcct.email;
-  $("c-to").value = fmtList(to); $("c-cc").value = fmtList(cc); $("c-bcc").value = "";
+  fields.to.set(to); fields.cc.set(cc); fields.bcc.set([]);
   $("c-cc-row").classList.toggle("hidden", !cc.length); $("c-bcc-row").classList.add("hidden");
   $("c-subject").value = subject;
   const sig = fromAcct.signatureActive && fromAcct.signature ? `<div><br></div><div><br></div><div class="ymsig">${fromAcct.signature}</div>` : "<div><br></div>";
@@ -108,7 +186,7 @@ export async function open(opts) {
   dirty = false;
   clearInterval(autosaveTimer);
   autosaveTimer = setInterval(() => { if (dirty && hasContent()) saveNow(true); }, 30000);
-  if (opts.mode === "new") $("c-to").focus(); else focusEditor();
+  if (opts.mode === "new") fields.to.focus(); else focusEditor();
 }
 
 // Caret at the top of the editor (top-posting), never inside the signature.
@@ -198,15 +276,17 @@ export function parseAddrs(s) {
 }
 
 function hasContent() {
-  return !!($("c-to").value.trim() || $("c-subject").value.trim() || (draft.html ? $("c-editor").innerText.trim() : $("c-text").value.trim()) || draft.files.length);
+  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? $("c-editor").innerText.trim() : $("c-text").value.trim()) || draft.files.length);
 }
+
+function strictGet(f) { if (!f.commit(true)) throw new Error(`Not an address: ${f.input.value.trim()}`); return f.get(); }
 
 function collect() {
   const acct = accounts.find(a => a.email === $("c-from").value) || accounts[0];
   const from = { name: acct?.sendingName || "", email: acct?.email || $("c-from").value };
   const d = {
     csid: draft.csid, from, replyTo: acct?.replyToAddress ? { email: acct.replyToAddress } : from,
-    to: parseAddrs($("c-to").value), cc: parseAddrs($("c-cc").value), bcc: parseAddrs($("c-bcc").value),
+    to: strictGet(fields.to), cc: strictGet(fields.cc), bcc: strictGet(fields.bcc),
     subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files,
     draftFolderId: hooks.folderByType("DRAFT")?.id,
   };
@@ -233,7 +313,7 @@ async function send() {
   if (!draft) return;
   let d;
   try { d = collect(); } catch (e) { hooks.status(e.message); return; }
-  if (!d.to.length && !d.cc.length && !d.bcc.length) { hooks.status("no recipients"); $("c-to").focus(); return; }
+  if (!d.to.length && !d.cc.length && !d.bcc.length) { hooks.status("no recipients"); fields.to.focus(); return; }
   if (!d.subject && !confirm("Send without a subject?")) return;
   const sentId = hooks.folderByType("SENT")?.id;
   if (!sentId || !d.draftFolderId) { hooks.status("Sent or Drafts folder not found"); return; }
@@ -243,7 +323,7 @@ async function send() {
   hooks.onClose();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
-    run: () => api.send(d, sentId),
+    run: async () => { const r = await api.send(d, sentId); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
     restore: () => reopenFrom(snapshot),
   });
 }
@@ -253,7 +333,7 @@ async function reopenFrom(snap) {
   draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html };
   $("c-title").textContent = "Message not sent";
   $("c-from").value = snap.d.from.email;
-  $("c-to").value = fmtList(snap.d.to); $("c-cc").value = fmtList(snap.d.cc); $("c-bcc").value = fmtList(snap.d.bcc);
+  fields.to.set(snap.d.to); fields.cc.set(snap.d.cc); fields.bcc.set(snap.d.bcc);
   $("c-cc-row").classList.toggle("hidden", !snap.d.cc.length); $("c-bcc-row").classList.toggle("hidden", !snap.d.bcc.length);
   $("c-subject").value = snap.d.subject;
   setMode(snap.html);

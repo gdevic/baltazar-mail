@@ -1,6 +1,7 @@
 import * as api from "./api.js";
 import { THEMES, applyTheme } from "./themes.js";
 import * as compose from "./compose.js";
+import * as contacts from "./contacts.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -930,6 +931,7 @@ async function poll() {
     const changed = await loadFolders(true);
     const v = state.view;
     if (v.kind === "folder" && changed.includes(v.folderId) && !busy) await loadList("refresh");
+    if (changed.includes(inboxId()) || changed.includes(folderByType("SENT")?.id)) syncContacts();
   } catch (e) { handleError(e, "poll"); }
 }
 
@@ -953,7 +955,25 @@ async function start() {
     state.signedIn = true;
     startPolling();
     await openFolder(inboxId());
+    syncContacts();
   } catch (e) { handleError(e, "start"); }
+}
+
+// Address book: full build on first run, then incremental on each poll that sees Inbox or Sent change.
+let contactsBusy = false;
+async function syncContacts(full = false) {
+  if (contactsBusy) return;
+  contactsBusy = true;
+  try {
+    const own = [$("account").textContent];
+    try { own.push(...(await api.accounts()).accounts.map(a => a.email)); } catch {}
+    contacts.setOwnAddresses(own);
+    const first = !(await contacts.isBuilt());
+    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, full,
+      progress: first ? (fid, seen) => status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}…`) : null });
+    if (first || n) status(`address book: ${await contacts.count()} addresses${n ? ` (+${n} messages scanned)` : ""}`);
+  } catch (e) { status(`address book: ${e.message}`); }
+  finally { contactsBusy = false; }
 }
 
 document.addEventListener("keydown", onKey);

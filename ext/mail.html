@@ -50,12 +50,12 @@
     <div id="c-head">
       <span id="c-title">New message</span>
       <span class="sp"></span>
-      <select id="c-mode"><option value="html">Rich text</option><option value="text">Plain text</option></select>
+      <select id="c-mode"><option value="html">HTML</option><option value="text">Plain text</option></select>
     </div>
     <div class="c-row"><label>From</label><select id="c-from"></select></div>
-    <div class="c-row"><label>To</label><input id="c-to" autocomplete="off" spellcheck="false" placeholder="name <address>, address"><button id="c-cc-toggle" title="Show Cc and Bcc">Cc/Bcc</button></div>
-    <div class="c-row hidden" id="c-cc-row"><label>Cc</label><input id="c-cc" autocomplete="off" spellcheck="false"></div>
-    <div class="c-row hidden" id="c-bcc-row"><label>Bcc</label><input id="c-bcc" autocomplete="off" spellcheck="false"></div>
+    <div class="c-row"><label>To</label><div class="addr" id="c-to"></div><button id="c-cc-toggle" title="Show Cc and Bcc">Cc/Bcc</button></div>
+    <div class="c-row hidden" id="c-cc-row"><label>Cc</label><div class="addr" id="c-cc"></div></div>
+    <div class="c-row hidden" id="c-bcc-row"><label>Bcc</label><div class="addr" id="c-bcc"></div></div>
     <div class="c-row"><label>Subject</label><input id="c-subject" autocomplete="off"></div>
     <div id="c-toolbar">
       <button data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button><button data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button><button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
@@ -66,6 +66,7 @@
     <textarea id="c-text" class="hidden" spellcheck="true"></textarea>
     <div id="c-quote-wrap" class="hidden"><button id="c-quote-toggle">Show quoted text</button><div id="c-quote" class="hidden"></div></div>
     <div id="c-filelist"></div>
+    <div id="c-suggest" class="hidden"></div>
     <div id="c-foot">
       <button id="c-send" title="Send (Ctrl+Enter)">Send</button>
       <button id="c-attach" title="Attach files (or drop them here)">Attach</button>

@@ -141,3 +141,17 @@ body.dragging iframe { pointer-events: none; }
 #c-foot { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--bg2); }
 #c-send { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; padding: 2px 14px; }
 #st-undo.pending { color: var(--accent); }
+
+.addr { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 22px; cursor: text; }
+.addr input { flex: 1; min-width: 160px; background: transparent; color: var(--fg); border: 0; padding: 2px 0; font: inherit; }
+.addr input:focus { outline: none; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--bg3); border: 1px solid var(--line); border-radius: 10px; padding: 0 4px 0 8px; font-size: 12px; max-width: 320px; }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip b { font-weight: 500; }
+.chip i { font-style: normal; color: var(--fg3); }
+.chip a { color: var(--fg2); text-decoration: none; padding: 0 3px; cursor: pointer; }
+.chip.bad { border-color: #c0392b; }
+#c-suggest { position: fixed; z-index: 40; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.35); min-width: 280px; max-width: 480px; padding: 3px 0; }
+#c-suggest div { padding: 3px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#c-suggest div.kb, #c-suggest div:hover { background: var(--sel); }
+#c-suggest i { font-style: normal; color: var(--fg3); margin-left: 6px; }
