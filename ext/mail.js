@@ -286,7 +286,7 @@ function renderList() {
 let dragging = null;
 document.addEventListener("dragend", () => { dragging?.classList.remove("dragging"); dragging = null; });
 
-const flagGlyphs = m => (m.flags?.flagged ? "★" : "") + (m.attachmentCount ? "⌘" : "");
+const flagGlyphs = m => (m.flags?.flagged ? "★" : "") + (m.attachmentCount ? "📎" : "");
 const rowEl = i => $("rows").querySelector(`.row[data-i="${i}"]`);
 
 function select(i, resetAnchor = true) {
