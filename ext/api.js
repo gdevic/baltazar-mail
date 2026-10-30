@@ -34,8 +34,6 @@ export async function bootstrap(force = false) {
   return session;
 }
 
-export function sessionInfo() { return session; }
-
 const uuid = () => crypto.randomUUID();
 
 // One batch envelope, one HTTP round trip. Returns the inner responses array.
@@ -53,6 +51,8 @@ export async function batch(name, requests, retry = true) {
   const resp = await fetch(`${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include" });
   const ms = Math.round(performance.now() - t0);
   if ((resp.status === 401 || resp.status === 403) && retry) {
+    session = null;
+    await chrome.storage.session.remove("ymSession");
     await bootstrap(true);
     return batch(name, requests, false);
   }
@@ -61,8 +61,13 @@ export async function batch(name, requests, retry = true) {
   try { doc = JSON.parse(text); } catch { throw new ApiError(`${name}: HTTP ${resp.status}, non-JSON response`, text.slice(0, 300)); }
   if (doc.error) {
     const code = doc.error.code || "";
-    const hint = code === "EP-4010" ? " (proxy rejected the request origin; reload the extension so its header rules install)" : "";
-    throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}${hint}`, doc.error);
+    if (code === "EP-4010" && retry) {
+      // Origin rewrite rule not installed yet (worker still starting); ask it and retry once.
+      await chrome.runtime.sendMessage({ type: "ensureRules" }).catch(() => {});
+      return batch(name, requests, false);
+    }
+    if (code === "EC-4008") { session = null; throw new NotSignedIn(); }
+    throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}`, doc.error);
   }
   const responses = doc.result?.responses || [];
   responses.ms = ms;
@@ -70,7 +75,12 @@ export async function batch(name, requests, retry = true) {
 }
 
 const q = s => `/ws/v3/mailboxes/@.id==<mb>/messages/@.select==q?q=${encodeURIComponent(s)}`;
-const first = r => r[0]?.response?.result ?? r[0];
+function first(r) {
+  const x = r[0];
+  const code = x?.httpCode ?? 0;
+  if (!x || code < 200 || code >= 300 || !x.response?.result) throw new ApiError(`inner request failed (HTTP ${code || "?"})`, x);
+  return x.response.result;
+}
 
 export async function folders() {
   const r = await batch("mailbox.sync", [{ id: "GetFolders", uri: "/ws/v3/mailboxes/@.id==<mb>/folders", method: "GET" }]);
@@ -109,11 +119,15 @@ export async function body(msgId) {
 
 // ---------- mutations ----------
 // Each id gets its own inner request, as the web client does; one HTTP round trip for all of them.
+// Returns the ids that succeeded and those that failed; throws only if nothing succeeded.
 async function perMessage(name, ids, make) {
-  const r = await batch(name, ids.map((id, i) => make(id, i)));
-  const failed = r.filter(x => x.httpCode && x.httpCode >= 300);
-  if (failed.length) throw new ApiError(`${name}: ${failed.length} of ${ids.length} failed (HTTP ${failed[0].httpCode})`, failed);
-  return { ms: r.ms, count: ids.length };
+  const reqs = ids.map((id, i) => make(id, i));
+  const r = await batch(name, reqs);
+  const byReqId = new Map(r.map(x => [x.id, x]));
+  const ok = [], failed = [];
+  reqs.forEach((req, i) => { const code = byReqId.get(req.id)?.httpCode ?? 0; (code >= 200 && code < 300 ? ok : failed).push(ids[i]); });
+  if (!ok.length) throw new ApiError(`${name}: all ${ids.length} failed (HTTP ${r[0]?.httpCode ?? "?"})`, r);
+  return { ms: r.ms, ok, failed };
 }
 
 const update = (name, ids, payload) => perMessage(name, ids, (id, i) => ({

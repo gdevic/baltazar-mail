@@ -29,10 +29,15 @@ const RULES = [{
   },
 }];
 
-async function installRules() {
-  const existing = await chrome.declarativeNetRequest.getSessionRules();
-  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: existing.map(r => r.id), addRules: RULES });
+let installing = null;
+function installRules() {
+  if (!installing) installing = chrome.declarativeNetRequest
+    .updateSessionRules({ removeRuleIds: RULES.map(r => r.id), addRules: RULES })
+    .finally(() => { installing = null; });
+  return installing;
 }
-chrome.runtime.onInstalled.addListener(installRules);
-chrome.runtime.onStartup.addListener(installRules);
+chrome.runtime.onStartup.addListener(() => installRules());
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg?.type === "ensureRules") { installRules().then(() => reply(true), () => reply(false)); return true; }
+});
 installRules();

@@ -7,8 +7,8 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..", "ext");
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json" };
 const server = http.createServer((req, res) => {
-  const p = path.join(ROOT, req.url.split("?")[0]);
-  if (!fs.existsSync(p)) { res.writeHead(404); return res.end(); }
+  const p = path.normalize(path.join(ROOT, req.url.split("?")[0]));
+  if (!p.startsWith(ROOT + path.sep) || !fs.existsSync(p)) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { "content-type": types[path.extname(p)] || "application/octet-stream" });
   fs.createReadStream(p).pipe(res);
 });
@@ -31,7 +31,7 @@ const folders = [
 ];
 
 (async () => {
-  await new Promise(r => server.listen(0, r));
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -66,11 +66,12 @@ const folders = [
     }
     if (!uri) errors.push("batch without uri: " + name);
     const reqs = (body.match(/"method":"(POST|DELETE)"/g) || []).length;
-    const responses = reqs ? Array.from({ length: reqs }, (_, i) => ({ id: "u" + i, httpCode: 204, responseString: "" })) : [{ id: "x", httpCode: 200, response: { result } }];
+    const innerIds = [...body.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => m[1]);
+  const responses = reqs ? innerIds.map(id => ({ id, httpCode: 204, responseString: "" })).reverse() : [{ id: "x", httpCode: 200, response: { result } }];
     mutations.push(name + ":" + reqs);
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: { failedRequests: [], successRequests: [] } }, error: null }) });
   });
-  await page.goto(`http://localhost:${port}/mail.html`);
+  await page.goto(`http://127.0.0.1:${port}/mail.html`);
   await page.waitForSelector("#rows .row");
   const rows = await page.locator("#rows .row").count();
   const foldersShown = await page.locator("#folders .folder").allTextContents();
@@ -96,7 +97,7 @@ const folders = [
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Undo"));
   const afterArchive = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
   await page.keyboard.press("z");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo"));
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo") && document.querySelectorAll("#rows .row").length === 95);
   const afterUndo = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
   await page.locator("#rows .row").nth(3).click({ button: "right" });
   const ctxItems = await page.locator("#ctx div").allTextContents();
@@ -116,6 +117,13 @@ const folders = [
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Undo: mark"));
   const afterRead = await page.locator("#st-undo").textContent();
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
+  const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
+  expect(selectedText.endsWith("2 selected"), "two selected");
+  expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
+  expect(afterUndo.rows === 95, "undo restored rows");
+  expect(ctxItems.length === 6, "context menu items");
+  expect(moveChoices[0] === "Projects", "move picker filter");
+  expect(mutations.includes("messages.move:2") && mutations.includes("messages.readFlagUpdate:1"), "mutation calls");
   await page.keyboard.press(",");
   await page.click('input[name=layout][value=horizontal]');
   await page.click('input[name=theme][value=light]');
@@ -135,4 +143,7 @@ const folders = [
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();
   server.close();
+  const real = errors.filter(e => !e.includes("img-src 'none'"));
+  if (real.length) { console.error("FAILED:", real); process.exit(1); }
+  console.log("PASS");
 })().catch(e => { console.error(e); process.exit(1); });
