@@ -254,11 +254,12 @@ function renderList() {
     el.dataset.i = i;
     el.draggable = true;
     const who = outgoing ? h.to?.[0] : h.from?.[0];
-    el.innerHTML = `<span class="fl"></span><span class="fr" data-email="${esc(who?.email || "")}" data-name="${esc(who?.name || "")}">${esc(who?.name || who?.email || "")}</span>` +
+    el.innerHTML = `<span class="st" title="Star / unstar (s)"></span><span class="fl"></span><span class="fr" data-email="${esc(who?.email || "")}" data-name="${esc(who?.name || "")}">${esc(who?.name || who?.email || "")}</span>` +
       `<span class="sb">${subjectHtml(h.subject)}${showFolder ? `<em>${esc(m.folder?.name || "")}</em>` : ""}</span>` +
       `<span class="dt">${fmtDate(h.date)}</span>`;
-    el.querySelector(".fl").textContent = flagGlyphs(m);
+    paintFlags(el, m);
     el.onclick = e => {
+      if (e.target.classList.contains("st")) { e.stopPropagation(); run(() => doSetStarred([m.id], !m.flags?.flagged)); return; }
       if (e.shiftKey) { markRange(state.anchor < 0 ? i : state.anchor, i); select(i, false); return; }
       if (e.ctrlKey || e.metaKey) { toggleMark(i); select(i, false); return; }
       clearMarks(); select(i);
@@ -286,7 +287,12 @@ function renderList() {
 let dragging = null;
 document.addEventListener("dragend", () => { dragging?.classList.remove("dragging"); dragging = null; });
 
-const flagGlyphs = m => (m.flags?.flagged ? "★" : "") + (m.attachmentCount ? "📎" : "");
+function paintFlags(el, m) {
+  const st = el.querySelector(".st");
+  st.textContent = m.flags?.flagged ? "★" : "☆";
+  st.classList.toggle("on", !!m.flags?.flagged);
+  el.querySelector(".fl").textContent = m.attachmentCount ? "📎" : "";
+}
 const rowEl = i => $("rows").querySelector(`.row[data-i="${i}"]`);
 
 function select(i, resetAnchor = true) {
@@ -667,7 +673,7 @@ function applyFlags(ids, flags) {
     const wasUnread = !m.flags?.read;
     m.flags = { ...(m.flags || {}), ...flags };
     const el = rowEl(i);
-    if (el) { el.classList.toggle("unread", !m.flags.read); el.querySelector(".fl").textContent = flagGlyphs(m); }
+    if (el) { el.classList.toggle("unread", !m.flags.read); paintFlags(el, m); }
     if ("read" in flags && wasUnread !== !m.flags.read) {
       const f = state.byId.get(m.folder?.id);
       if (f) f.unread = Math.max(0, (f.unread || 0) + (m.flags.read ? -1 : 1));

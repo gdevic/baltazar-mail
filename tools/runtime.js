@@ -82,6 +82,15 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.readAfterSwitch = (await frameText()).slice(0, 30);
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
 
+  // star column: click toggles star without opening the message
+  const starBefore = calls.length;
+  await page.locator("#rows .row").nth(4).locator(".st").click();
+  await page.waitForTimeout(400);
+  await page.locator("#rows .row").nth(2).hover();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "starcol.png"), clip: { x: 235, y: 80, width: 465, height: 180 } }).catch(() => {});
+  results.starCol = { call: calls.slice(starBefore).map(c => c.name).join(","), on: await page.locator("#rows .row").nth(4).locator(".st.on").count() };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+
   // attachment previews: two cards, PDF gets a thumbnail, CSV a type tile
   await page.waitForTimeout(500);
   results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), csvTile: await page.locator("#r-attach .att-card").nth(1).locator(".att-ext").textContent().catch(() => "") };
@@ -102,7 +111,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const spamCall = calls.slice(before).find(c => c.name === "messages.move");
   results.spam = { dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator("#st-undo").textContent() };
   await page.keyboard.press("z");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo"), null, { timeout: 4000 });
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Redo: mark"), null, { timeout: 4000 });
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
 
   // print: opens print.html in a new tab with the open message
@@ -209,6 +218,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
+  expect(results.starCol.call === "messages.starFlagUpdate" && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.attach.cards === 2 && results.attach.thumbs === 1 && results.attach.csvTile === "CSV", "attachment previews: " + JSON.stringify(results.attach));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));
