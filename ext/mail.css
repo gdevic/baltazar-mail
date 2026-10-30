@@ -76,7 +76,7 @@ body.dragging iframe { pointer-events: none; }
 #move-list div { padding: 2px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #move-list div.kb, #move-list div:hover { background: var(--sel); }
 #st-undo { color: var(--fg2); }
-.row { display: grid; grid-template-columns: 14px 150px 1fr 52px; gap: 6px; align-items: center; height: var(--row-h); padding: 0 8px; cursor: pointer; border-bottom: 1px solid transparent; white-space: nowrap; }
+.row { display: grid; grid-template-columns: 14px 150px 1fr 74px; gap: 6px; align-items: center; height: var(--row-h); padding: 0 8px; cursor: pointer; border-bottom: 1px solid transparent; white-space: nowrap; }
 .row:hover { background: var(--bg3); }
 .row.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
 .row > span { overflow: hidden; text-overflow: ellipsis; }
