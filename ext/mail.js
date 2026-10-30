@@ -525,6 +525,26 @@ async function cancelSend() {
   return true;
 }
 
+// ---------- print ----------
+// Opens print.html in a new tab with the messages' sanitised HTML; several selected messages print as one document.
+async function printMessages() {
+  const ids = state.marked.size ? targetIds() : (currentBody ? [currentBody.message.id] : []);
+  if (!ids.length) { status("open or select a message to print"); return; }
+  status(`preparing ${plural(ids.length, "message")} for printing…`);
+  const messages = [];
+  for (const id of ids) {
+    let r;
+    if (currentBody && currentBody.message.id === id) r = currentBody;
+    else { try { r = await api.body(id); r.html = cleanHtml(r.html); } catch (e) { handleError(e, "print"); return; } }
+    const html = await inlineYahooParts(r.html);
+    messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html });
+  }
+  const key = `print:${Date.now()}`;
+  await chrome.storage.session.set({ [key]: { messages, auto: true } });
+  await chrome.tabs.create({ url: chrome.runtime.getURL(`print.html?job=${encodeURIComponent(key)}`) });
+  status(`print: ${plural(messages.length, "message")}`);
+}
+
 // ---------- local model updates ----------
 function applyFlags(ids, flags) {
   const set = new Set(ids);
@@ -854,6 +874,7 @@ function onKey(e) {
     case "R": loadList("refresh"); break;
     case "n": if (state.more) loadList("more"); break;
     case "i": loadImages(); break;
+    case "p": printMessages(); break;
     case "t": toggleTheme(); break;
     case ",": openSettings(true); break;
     case "?": $("help").classList.toggle("hidden"); break;
@@ -995,6 +1016,7 @@ wireSplitters();
 wireMovePicker();
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
+$("r-print").onclick = printMessages;
 $("compose-btn").onclick = () => startCompose("new");
 for (const b of document.querySelectorAll("[data-reply]")) b.onclick = () => startCompose(b.dataset.reply);
 compose.init({

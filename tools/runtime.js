@@ -71,6 +71,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.readAfterSwitch = (await frameText()).slice(0, 30);
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
 
+  // print: opens print.html in a new tab with the open message
+  const [printPage] = await Promise.all([ctx.waitForEvent("page"), page.keyboard.press("p")]);
+  printPage.on("pageerror", e => errors.push("print pageerror: " + e.message));
+  await printPage.waitForSelector(".msg .body", { timeout: 8000 });
+  results.print = { url: printPage.url().split("/").pop().split("?")[0], subject: await printPage.locator(".hdr h1").textContent(), body: (await printPage.locator(".msg .body").innerText()).slice(0, 20), title: await printPage.title() };
+  await printPage.close();
+  await page.bringToFront();
+
   // reply: quote present, recipients right
   await page.keyboard.press("a"); await page.waitForSelector("#compose:not(.hidden)");
   const chips = async id => (await page.locator(`#${id} .chip`).allTextContents()).join(" | ");
@@ -135,6 +143,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(/^<div><div>Hello from the runtime test\.<\/div>/.test(results.sent.html) && results.sent.html.includes("ymsig"), "typed text above signature, no stray keys: " + results.sent.html);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.length === 1, "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
+  expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }
   console.log("PASS");
