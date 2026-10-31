@@ -1,0 +1,8 @@
+# Keeps the actions used by the workflows current. The bundled libraries in ext/vendor are not
+# npm dependencies; tools/vendor-check.mjs and the "Bundled libraries" workflow watch those.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
