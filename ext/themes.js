@@ -34,6 +34,11 @@ export const THEMES = {
   nordLight: { name: "Nord Light", dark: false,
     bg: "#eceff4", bg2: "#e5e9f0", bg3: "#d8dee9", fg: "#2e3440", fg2: "#4c566a", fg3: "#7b88a1",
     line: "#d8dee9", sel: "#d8dee9", selLine: "#5e81ac", accent: "#d08770", unread: "#242933", link: "#5e81ac" },
+  // White everywhere and black text, including secondary text, stars and links; only the selected
+  // row and the hover highlight are grey, so the cursor stays visible.
+  mono: { name: "Monochrome", dark: false,
+    bg: "#ffffff", bg2: "#ffffff", bg3: "#f2f2f2", fg: "#000000", fg2: "#000000", fg3: "#000000",
+    line: "#cfcfcf", sel: "#e4e4e4", selLine: "#000000", accent: "#000000", unread: "#000000", link: "#000000" },
 };
 
 const VARS = { bg: "--bg", bg2: "--bg2", bg3: "--bg3", fg: "--fg", fg2: "--fg2", fg3: "--fg3", line: "--line",

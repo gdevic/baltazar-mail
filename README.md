@@ -8,7 +8,7 @@ Baltazar Mail is an independent project by [Baltazar Studios](https://baltazarst
 
 ## Features
 
-- **Reading:** three-column or stacked layout with resizable panes, ten light and dark palettes, a Starred view across all folders, and remote images loaded automatically except in Spam and Trash. In a dark theme messages are darkened to match, keeping their colours' hues and leaving images alone; the ☀ button in the message header shows them in their original colours instead.
+- **Reading:** three-column or stacked layout with resizable panes, eleven light and dark palettes (one of them plain black on white), a Starred view across all folders, and remote images loaded automatically except in Spam and Trash. In a dark theme messages are darkened to match, keeping their colours' hues and leaving images alone; the ☀ button in the message header shows them in their original colours instead.
 - **Mailbox actions:** read/unread, star, archive, move, delete, spam and not spam, on one message or a selection, with multi-level undo and redo.
 - **Search:** scoped to the open folder and its subfolders, with matches in other folders listed below a divider. Words must all match; `AND`, `OR`, `NOT`, parentheses, quoted phrases and the fields `from:` `to:` `subject:` `has:attachment` `is:starred` `is:unread` `after:` `before:` refine it. The `?` in the search box explains the syntax.
 - **Writing:** new message, reply, reply all and forward (with the original's attachments), drafts saved automatically, rich-text or plain-text editing with fonts, sizes and colours, pasted or dropped inline images, attachments, and undo-send.
