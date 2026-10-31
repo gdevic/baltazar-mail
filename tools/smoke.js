@@ -42,7 +42,7 @@ const folders = [
     const area = (ns) => ({
       get: async k => { const ks = Array.isArray(k) ? k : [k]; const o = {}; for (const x of ks) { const v = localStorage.getItem(ns + x); if (v !== null) o[x] = JSON.parse(v); } return o; },
       set: async o => { for (const [k, v] of Object.entries(o)) localStorage.setItem(ns + k, JSON.stringify(v)); } });
-    window.chrome = { storage: { session: area("s:"), local: area("l:") }, runtime: { getURL: p => p } };
+    window.chrome = { storage: { session: area("s:"), local: area("l:") }, runtime: { getURL: p => p, getManifest: () => ({ version: "0.14.0" }) } };
   });
   await page.route("https://mail.yahoo.com/**", async route => {
     const url = route.request().url();

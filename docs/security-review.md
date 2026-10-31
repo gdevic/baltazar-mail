@@ -28,3 +28,4 @@ Anyone who can send the user an email (body HTML, subject, names, attachments, f
 - The header-rewriting rule applies only to this extension's own requests to Yahoo's mail hosts.
 - ZIP listings are bounds-checked and spreadsheet previews are capped.
 - The CodeQL and library-check workflows have read-only permissions and no untrusted triggers.
+- `connect-src` includes `api.github.com` for the daily release check (`ext/update.js`) and nothing else outside Yahoo. The request sends no cookies or referrer, the answer is accepted only as a `vX.Y.Z` tag and used only for the version comparison, and the download link in Settings is fixed rather than taken from the response. No host permission is needed, because the API allows cross-origin reads.

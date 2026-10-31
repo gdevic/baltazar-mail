@@ -4,7 +4,7 @@ Baltazar Mail is a browser extension that shows your Yahoo Mail. It has no serve
 
 ## Where your data goes
 
-The extension talks only to Yahoo, using the Yahoo sign-in already in your browser:
+The extension talks to Yahoo, using the Yahoo sign-in already in your browser, and to GitHub for one thing:
 
 | Host | Used for |
 |---|---|
@@ -12,6 +12,7 @@ The extension talks only to Yahoo, using the Yahoo sign-in already in your brows
 | `apis.mail.yahoo.com` | the raw source of a message, from which attachments are taken for preview and download |
 | `cloud-apis.mail.yahoo.com` | attachment thumbnails, images embedded in messages, and Yahoo's text extraction for documents |
 | `*.yusercontent.com` | images in messages, which Yahoo routes through this proxy |
+| `api.github.com` | once a day, a request for the latest release number of this project, so Settings can say when an update is available. It carries no cookies, no account or mail data and no identifier; GitHub sees only what any web request shows (IP address and browser). The answer is used only for the version comparison; nothing is downloaded or installed |
 
 When a document format has no viewer in the extension (for example PowerPoint), the preview asks Yahoo's own document converter to render it. The file is already stored at Yahoo; nothing is sent elsewhere.
 
@@ -22,6 +23,7 @@ The extension's Content Security Policy (in `ext/manifest.json`) makes the brows
 | Data | Where | Why |
 |---|---|---|
 | Settings (layout, theme, fonts, intervals, pane sizes) | the extension's local storage | so your choices persist |
+| The latest release number and when it was checked | the extension's local storage | to ask GitHub at most once a day |
 | Address book: names, addresses, how many messages you sent to or received from each, last date | the extension's IndexedDB | address suggestions while writing; built from the headers of your own Inbox and Sent |
 | Yahoo session values and the mailbox id | the extension's session storage, cleared when the browser closes | to call Yahoo without reloading its page |
 | A message being printed | session storage, removed as soon as the print page reads it | to hand it to the print page |

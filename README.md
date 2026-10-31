@@ -40,7 +40,7 @@ To publish a release, set `version` in `ext/manifest.json`, commit, and push a m
 Baltazar Mail relies on an undocumented Yahoo API that can change at any time; what is known about it is in `docs/yahoo-v3.md`. 
 ## Security and privacy
 
-The extension talks only to Yahoo, has no server, analytics or telemetry, and parses attachments in a sandbox with no access to your session. Details are in [SECURITY.md](SECURITY.md), including how to report a vulnerability, and in [PRIVACY.md](PRIVACY.md), including every host contacted, everything stored and every permission.
+The extension talks only to Yahoo, with one exception: once a day it asks GitHub whether a newer release exists, sending no cookies and nothing about you or your mail. It has no server, analytics or telemetry, and parses attachments in a sandbox with no access to your session. Details are in [SECURITY.md](SECURITY.md), including how to report a vulnerability, and in [PRIVACY.md](PRIVACY.md), including every host contacted, everything stored and every permission.
 
 ## License
 

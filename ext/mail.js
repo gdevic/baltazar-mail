@@ -4,6 +4,7 @@ import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
 import { parse, nativeQuery, evaluate, describe, CAP } from "./query.js";
+import * as update from "./update.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -1366,6 +1367,19 @@ async function poll() {
     if (v.kind === "folder" && changed.includes(v.folderId) && !busy) await loadList("refresh");
     if (changed.includes(inboxId()) || changed.includes(folderByType("SENT")?.id)) syncContacts();
   } catch (e) { handleError(e, "poll"); }
+  checkUpdate().catch(() => {});  // network at most once a day; otherwise a storage read
+}
+
+// A newer release on GitHub: a line in Settings and a dot on the gear.
+async function checkUpdate() {
+  const have = chrome.runtime.getManifest().version, v = await update.latest().catch(() => null);
+  const avail = !!v && update.newer(v, have), note = $("update-note");
+  $("gear").classList.toggle("has-update", avail);
+  $("gear").title = avail ? `Settings (version ${v} available)` : "Settings";
+  note.classList.toggle("hidden", !avail);
+  if (!avail) return;
+  const a = Object.assign(document.createElement("a"), { href: update.RELEASES, target: "_blank", rel: "noopener", textContent: "Download it from GitHub" });
+  note.replaceChildren(`Version ${v} is available (you have ${have}). `, a, ". Checked daily with GitHub; no data about you is sent.");
 }
 
 // ---------- startup ----------
@@ -1390,6 +1404,7 @@ async function start() {
     await openFolder(inboxId());
     syncContacts();
   } catch (e) { handleError(e, "start"); }
+  checkUpdate().catch(() => {});
 }
 
 // Address book: full build on first run, then incremental on each poll that sees Inbox or Sent change.
