@@ -7,7 +7,8 @@ const os = require("os");
 
 const EXT = path.join(__dirname, "..", "ext");
 const now = Math.floor(Date.now() / 1000);
-const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
+const goneElsewhere = new Set();
+let convFail = false, deckBinary = false;   // Yahoo's converter gives up (813); the deck's bytes are binary   // messages another device removed; list queries leave them out
 // Every third message has a file; message 4 has only images built into its body, which are not files.
 const msg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, csid: `csid${i}`,
   attachmentCount: i % 3 === 0 ? 1 : i === 4 ? 2 : 0,
@@ -86,9 +87,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       docCalls.push({ docId: headers["docs-document-id"], ...top.payload });
       const enc = s => s.replace(/[<>"&=#;:/ ]/g, c => `&#${c.charCodeAt(0)};`);
       const pages = {};
-      if (top.payload.retryCount > 0) for (let n = top.payload.start_page; n <= Math.min(5, top.payload.end_page); n++)
+      if (top.payload.retryCount > 0 && !convFail) for (let n = top.payload.start_page; n <= Math.min(5, top.payload.end_page); n++)
         pages["page" + n] = { html: enc(`<div class="aps-page"><p class="t">Slide ${n === 1 ? "one" : n}</p><script>bad()</script><a href="javascript:bad()">x</a></div>`), css: ".aps-page .t { font-size: 20pt; }", statuscode: 700, pdfEmbed: false };
-      responses = [{ id: top.id, httpCode: 200, response: Object.keys(pages).length ? { code: 800, statuscode: 600, info: { num_pages: 5, dimension: { w: 900, h: 1400 } }, pages } : { code: 814, statuscode: 600, pages: {} } }];
+      responses = [{ id: top.id, httpCode: 200, response: Object.keys(pages).length ? { code: 800, statuscode: 600, info: { num_pages: 5, dimension: { w: 900, h: 1400 } }, pages } : { code: convFail ? 813 : 814, statuscode: 600, pages: {} } }];
     }
     else if (top.id === "SaveMessage") {
       const saved = { ...msg(99, "3"), id: "MSGDRAFT_99", immutableid: "IMM99", csid: top.payloadParts[0].payload.message.csid };
@@ -112,7 +113,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     part("image/png", "photo.png", thumbPng) +
     part("application/octet-stream", "cv.docx", fs.readFileSync(path.join(FX, "cv.docx"))) +
     part("application/octet-stream", "budget.xlsx", fs.readFileSync(path.join(FX, "budget.xlsx"))) +
-    part("application/octet-stream", "deck.pptx", Buffer.from("not really a deck")) + "--BOUND--\r\n";
+    part("application/octet-stream", "deck.pptx", deckBinary ? Buffer.from([0x50, 0x4b, 3, 4, 0x14, 0, 0, 0, 0x41, 0x42]) : Buffer.from("not really a deck")) + "--BOUND--\r\n";
   const rawCalls = [];
   await ctx.route("https://apis.mail.yahoo.com/**", route => {
     const u = route.request().url();
@@ -313,9 +314,35 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const rawIds = rawCalls.filter(c => c.url.includes("rawplaintext")).map(c => c.url.match(/messages\/@\.id==([^/]+)/)[1]);
   results.rawFetches = Math.max(...Object.values(rawIds.reduce((n, id) => (n[id] = (n[id] || 0) + 1, n), {})));
   results.rawOrigin = rawCalls[0]?.origin;
+
+  // a file nothing can preview: offered as text when its bytes look like text, else as a hex dump
+  convFail = true;
+  await page.locator("#v-prev").click();
+  await page.waitForFunction(() => document.getElementById("v-name").textContent === "budget.xlsx" && !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 15000 });
+  await next("deck.pptx");
+  await page.waitForSelector("#v-raw", { timeout: 15000 });
+  results.vRaw = { textLabel: await page.locator("#v-raw").textContent() };
+  await page.locator("#v-raw").click();
+  f = await box(); await f.waitForFunction(() => document.querySelector("pre"), null, { timeout: 5000 }).catch(() => {});
+  results.vRaw.text = await f.evaluate(() => document.querySelector("pre")?.textContent || "");
+  results.vRaw.textMeta = await page.locator("#v-meta").textContent();
   await f.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
   results.vClosed = await page.locator("#viewer").isHidden();
+  // another message whose deck is binary: the hex viewer
+  deckBinary = true;
+  await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(600);
+  await view(6);
+  await page.waitForSelector("#v-raw", { timeout: 15000 });
+  results.vRaw.binLabel = await page.locator("#v-raw").textContent();
+  await page.locator("#v-raw").click();
+  f = await box(); await f.waitForFunction(() => document.querySelector("pre.hex"), null, { timeout: 5000 }).catch(() => {});
+  results.vRaw.hex = await f.evaluate(() => ({ dump: document.querySelector("pre.hex")?.textContent || "", note: document.querySelector(".note")?.textContent || "" }));
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-hex.png") }).catch(() => {});
+  await f.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
+  convFail = deckBinary = false;
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
 
   // contact card on hover over From
   await page.locator("#r-from .who").first().hover();
@@ -516,6 +543,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     expect(unexpected.length === 0, "content security policy blocked something the app needs: " + JSON.stringify(unexpected.slice(0, 5)));
   }
   expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
+  expect(results.vRaw.textLabel === "View as text" && results.vRaw.text === "not really a deck" && results.vRaw.textMeta.includes("as text") &&
+    results.vRaw.binLabel === "View as binary" && results.vRaw.hex.dump === "00000000  50 4b 03 04 14 00 00 00  41 42                    PK......AB" &&
+    results.vRaw.hex.note === "10 bytes, shown as offset, hex and ASCII.", "view as text or binary: " + JSON.stringify(results.vRaw));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&

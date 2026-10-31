@@ -4,6 +4,7 @@
 // renderer there use Yahoo's document converter, and failing that, Yahoo's extracted text.
 
 import { listParts, extract } from "./mime.js";
+import { asText, hexDump } from "./bytes.js";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -203,7 +204,33 @@ async function show(i) {
     // The renderer or the bytes failed: Yahoo's converter, then its plain text, then give up.
     try { if (k !== "image" && k !== "audio" && k !== "video" && k !== "zip") return await showConverted(ctx); } catch {}
     if (stale()) return;
-    body.innerHTML = center(`No preview available for this file (${esc(e.message)}). <button id="v-dl2">Download</button>`);
+    // A small file nothing could preview can still be read: as text when it looks like text,
+    // otherwise as a hex dump.
+    let raw = null;
+    if ((a.size || 0) <= RAW_VIEW_MAX) {
+      try { raw = new Uint8Array(await (await fetchBlob(a)).arrayBuffer()); } catch {}
+      if (raw && raw.length > RAW_VIEW_MAX) raw = null;
+    }
+    if (stale()) return;
+    const text = raw && asText(raw);
+    body.innerHTML = center(`No preview available for this file (${esc(e.message)}). ` +
+      (raw ? `<button id="v-raw">${text != null ? "View as text" : "View as binary"}</button> ` : "") + `<button id="v-dl2">Download</button>`);
+    $("v-dl2").onclick = () => download(a);
+    if (raw) $("v-raw").onclick = () => showRaw(ctx, raw, text);
+  }
+}
+
+const RAW_VIEW_MAX = 100 * 1024;
+async function showRaw(ctx, raw, text) {
+  const { a, body, stale, meta } = ctx;
+  body.innerHTML = center("Loading…");
+  meta(text != null ? "as text" : "as binary");
+  try {
+    if (text != null) await sandboxed(ctx, { kind: "text", text: text.replace(/[\x00-\x08\x0b\x0e-\x1a\x1c-\x1f\x7f]/g, "\u00b7"), ext: "txt" });
+    else await sandboxed(ctx, { kind: "text", text: hexDump(raw), ext: "txt", source: "hex", size: raw.length });
+  } catch (e) {
+    if (stale()) return;
+    body.innerHTML = center(`Could not show the file (${esc(e.message)}). <button id="v-dl2">Download</button>`);
     $("v-dl2").onclick = () => download(a);
   }
 }

@@ -191,7 +191,7 @@
     return rows;
   }
 
-  function renderText({ text, ext, source }) {
+  function renderText({ text, ext, source, size }) {
     root.className = "";
     if (ext === "csv" || ext === "tsv") {
       const first = text.split(/\r?\n/, 1)[0];
@@ -203,9 +203,11 @@
     }
     if (ext === "json") { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {} }
     const label = source === "extracted" ? "Text extracted by Yahoo; layout, images and formatting are not shown. Download for the original."
-      : source === "stored" ? "Text as stored by Yahoo." : "";
+      : source === "stored" ? "Text as stored by Yahoo."
+      : source === "hex" ? `${Number(size) || 0} bytes, shown as offset, hex and ASCII.` : "";
     root.innerHTML = (label ? note(label) : "") + "<pre></pre>";
     root.querySelector("pre").textContent = text || "(no text)";
+    if (source === "hex") root.querySelector("pre").className = "hex";
   }
 
   // ---------- ZIP: entries from the central directory, no decompression ----------
