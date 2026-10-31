@@ -137,6 +137,9 @@
     <div class="theme-row"><label><input type="radio" name="theme" value="dark"> Dark</label><select id="darkTheme" title="Palette used in dark mode" aria-label="Dark palette"></select></div>
     <div class="theme-row"><label><input type="radio" name="theme" value="light"> Light</label><select id="lightTheme" title="Palette used in light mode" aria-label="Light palette"></select></div>
     <label><input type="radio" name="theme" value="system"> Follow system <span class="theme-note">(uses the palettes above)</span></label>
+    <b>Size</b>
+    <label><input type="number" id="textpct" min="85" max="150" step="5" style="width:60px"> text, % (100: normal)</label>
+    <label><input type="number" id="density" min="80" max="150" step="5" style="width:60px"> row height, % (100: normal)</label>
     <b>Writing</b>
     <label>Default font <select id="composeFont">
       <option>Helvetica Neue, Helvetica, Arial, sans-serif</option><option>Arial</option><option>Segoe UI</option><option>Verdana</option><option>Tahoma</option><option>Trebuchet MS</option>
@@ -149,8 +152,6 @@
     <label><input type="radio" name="images" value="never"> Only when asked (i key or button)</label>
     <b>Behaviour</b>
     <label><input type="number" id="poll" min="5" max="600" step="5" style="width:60px"> seconds between new-mail checks</label>
-    <label><input type="number" id="textpct" min="85" max="150" step="5" style="width:60px"> text size, % (100: normal)</label>
-    <label><input type="number" id="density" min="80" max="150" step="5" style="width:60px"> row height, % (100: normal)</label>
     <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>
     <label><input type="number" id="undosend" min="0" max="60" step="1" style="width:60px"> seconds to hold a message before sending, so it can be undone (0: send at once)</label>
     <b>Address book</b>
