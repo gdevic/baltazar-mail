@@ -70,7 +70,7 @@ Logo: `logo-300.png`
 
 Screenshots, in this order: `screenshots/light.png`, `screenshots/viewer.png`, `screenshots/dark.png`, `screenshots/settings.png`
 
-Search terms: yahoo mail, email client, webmail, ad-free, dark mode, attachments
+Search terms (7 terms, 16 words): yahoo mail; yahoo mail client; email client; webmail; ad-free email; dark mode email; pdf attachment viewer
 
 ## Notes for certification
 
