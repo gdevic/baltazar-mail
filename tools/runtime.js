@@ -80,7 +80,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
         `<img alt="x src='https://mail.yahoo.com/ws/v3/hidden-in-alt'" src="https://ecp.yusercontent.com/p.png">` +
         // a layout spacer: a square PNG stretched by CSS, kept one pixel tall by its attributes
         `<img id="spacer" style="min-width:640px;min-height:1px" width="640" height="1" src="data:image/png;base64,${thumbPng.toString("base64")}">`;
-      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}` } } } }];
+      // a white card with dark text, which the dark reader turns into a dark card with light text
+      const card = `<div id="paper" style="background-color:#ffffff;color:#333333">Card</div>`;
+      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}` } } } }];
     }
     else if (uri === "/ws/docpreview/v2/fetch") {
       // Yahoo's converter: first ask is still queued, then pages arrive entity-encoded.
@@ -167,6 +169,24 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     clips: await page.locator("#rows .row .fl").evaluateAll(els => els.map(e => e.innerHTML ? 1 : 0).join("")),
     spacerHeight: await page.frameLocator("#r-body").locator("#spacer").evaluate(e => e.getBoundingClientRect().height) };
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
+
+  // dark theme: the reader darkens declared colours; the sun/moon button shows the original, dimmed
+  const paper = () => page.frameLocator("#r-body").locator("#paper").evaluate(e => ({ bg: getComputedStyle(e).backgroundColor, fg: getComputedStyle(e).color, filter: getComputedStyle(e.ownerDocument.documentElement).filter }));
+  const theme = async v => { await page.locator("#list").focus(); await page.keyboard.press(","); await page.locator(`input[name="theme"][value="${v}"]`).check(); await page.locator("#settings-close").click(); await page.waitForTimeout(400); };
+  results.darkReader = { lightButton: await page.locator("#r-dark").isVisible() };
+  await theme("dark");
+  results.darkReader.button = await page.locator("#r-dark").isVisible() ? await page.locator("#r-dark").textContent() : "hidden";
+  results.darkReader.dark = await paper();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "reader-dark.png") }).catch(() => {});
+  await page.locator("#r-dark").click(); await page.waitForTimeout(300);
+  results.darkReader.original = { ...await paper(), button: await page.locator("#r-dark").textContent(), saved: await page.evaluate(async () => (await chrome.storage.local.get("settings")).settings.readerOriginal) };
+  await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(600);
+  results.darkReader.nextMessage = await paper();
+  await page.locator("#r-dark").click(); await page.waitForTimeout(300);
+  results.darkReader.again = await paper();
+  await theme("light");
+  results.darkReader.light = { ...await paper(), button: await page.locator("#r-dark").isVisible() };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
 
   // Starred view: a cross-folder search for flagged mail, listed after Inbox
   await page.locator("#folder-list .folder", { hasText: "Starred" }).click(); await page.waitForTimeout(400);
@@ -330,8 +350,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
   results.vClosed = await page.locator("#viewer").isHidden();
   // another message whose deck is binary: the hex viewer
-  deckBinary = true;
-  await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(600);
+  deckBinary = true;   // a row no earlier step opened, so its source is fetched fresh
+  await page.locator("#rows .row").nth(3).click(); await page.waitForTimeout(600);
   await view(6);
   await page.waitForSelector("#v-raw", { timeout: 15000 });
   results.vRaw.binLabel = await page.locator("#v-raw").textContent();
@@ -546,6 +566,13 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.vRaw.textLabel === "View as text" && results.vRaw.text === "not really a deck" && results.vRaw.textMeta.includes("as text") &&
     results.vRaw.binLabel === "View as binary" && results.vRaw.hex.dump === "00000000  50 4b 03 04 14 00 00 00  41 42                    PK......AB" &&
     results.vRaw.hex.note === "10 bytes, shown as offset, hex and ASCII.", "view as text or binary: " + JSON.stringify(results.vRaw));
+  {
+    const d = results.darkReader;
+    expect(!d.lightButton && d.button === "☀" && d.dark.bg === "rgb(31, 31, 31)" && d.dark.fg === "rgb(177, 177, 177)" && d.dark.filter === "none" &&
+      d.original.bg === "rgb(255, 255, 255)" && d.original.filter === "brightness(0.9)" && d.original.button === "☾" && d.original.saved === true &&
+      d.nextMessage.bg === "rgb(255, 255, 255)" && d.again.bg === "rgb(31, 31, 31)" &&
+      d.light.bg === "rgb(255, 255, 255)" && d.light.filter === "none" && !d.light.button, "dark reader: " + JSON.stringify(d));
+  }
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&

@@ -5,6 +5,7 @@ import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
 import { parse, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
+import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { extract } from "./mime.js";
 
 const $ = id => document.getElementById(id);
@@ -13,7 +14,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -34,7 +35,10 @@ const systemDark = matchMedia("(prefers-color-scheme: dark)");
 // Visual settings only; the poll timer is managed separately so drags don't restart it.
 function applyLayout() {
   const mode = settings.theme === "system" ? (systemDark.matches ? "dark" : "light") : settings.theme;
+  const wasDark = document.documentElement.dataset.theme === "dark";
   applyTheme(mode === "dark" ? settings.darkTheme : settings.lightTheme);
+  syncDarkButton();
+  if (wasDark !== darkApp() && currentBody && state.openId) showBody();
   $("app").classList.toggle("horizontal", settings.layout === "horizontal");
   const r = document.documentElement.style;
   r.setProperty("--folder-w", settings.folderW + "px");
@@ -651,12 +655,37 @@ async function thumbFor(a) {
   return p;
 }
 
-function bodyDoc(html, images) {
+// look: "light" (as written), "dark" (declared colours darkened, see darken.js) or "dim" (as
+// written, at 90% brightness so a white message does not glare in a dark app).
+function bodyDoc(html, images, look = "light") {
   const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? "https: data:" : "'none'"};`;
+  const dark = look === "dark";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
-    `<style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:#111;word-wrap:break-word}` +
-    `img{max-width:100%;height:auto${images ? "" : ";display:none"}}pre{white-space:pre-wrap}blockquote{border-left:3px solid #ccc;margin:6px 0;padding-left:10px;color:#444}</style></head>` +
+    `<style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:${dark ? DARK.fg : "#111"};word-wrap:break-word}` +
+    (dark ? `html{background:${DARK.bg};color-scheme:dark}a{color:${DARK.link}}` : look === "dim" ? "html{background:#fff;filter:brightness(.9)}" : "") +
+    `img{max-width:100%;height:auto${images ? "" : ";display:none"}}pre{white-space:pre-wrap}blockquote{border-left:3px solid ${dark ? DARK.rule : "#ccc"};margin:6px 0;padding-left:10px;color:${dark ? DARK.quote : "#444"}}</style></head>` +
     `<body>${html}</body></html>`;
+}
+
+// The open message in the reader. In a dark theme it is darkened unless the sun/moon button in
+// the header asked for the original colours; that one choice applies to every message.
+let bodyImages = false;
+const darkApp = () => document.documentElement.dataset.theme === "dark";
+function showBody(images = bodyImages) {
+  bodyImages = images;
+  const look = !darkApp() ? "light" : settings.readerOriginal ? "dim" : "dark";
+  setFrame(bodyDoc(look === "dark" ? darkenHtml(currentBody.html) : currentBody.html, images, look));
+}
+function syncDarkButton() {
+  const b = $("r-dark");
+  b.classList.toggle("hidden", !darkApp());
+  b.textContent = settings.readerOriginal ? "☾" : "☀";
+  b.title = settings.readerOriginal ? "Darken messages" : "Show messages in their original colours";
+}
+function toggleReaderColours() {
+  settings.readerOriginal = !settings.readerOriginal;
+  saveSettings(); syncDarkButton();
+  if (currentBody && state.openId) showBody();
 }
 
 async function open(i) {
@@ -713,7 +742,7 @@ async function renderMessage(m, r) {
   $("r-images").classList.toggle("hidden", !hasImg || auto);
   viewer.renderStrip(r.message, r.attachments, id => state.openId === id);
   if (auto) { const inlined = await inlineYahooParts(r.html); if (state.openId !== m.id) return; r.html = inlined; }
-  setFrame(bodyDoc(r.html, auto));
+  showBody(auto);
   status(plainSubject(h.subject).slice(0, 60), r.ms);
   if (settings.markReadSec != null && !m.flags?.read) {
     markReadTimer = setTimeout(() => {
@@ -730,7 +759,7 @@ async function loadImages() {
   if (!currentBody) return;
   const id = state.openId;
   currentBody.html = await inlineYahooParts(currentBody.html);
-  if (state.openId === id) setFrame(bodyDoc(currentBody.html, true));
+  if (state.openId === id) showBody(true);
 }
 
 function clearReader() {
@@ -1485,6 +1514,7 @@ viewer.init({ thumb: thumbFor, raw: api.rawMessage, docPages: api.docPages, clea
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;
+$("r-dark").onclick = toggleReaderColours;
 $("compose-btn").onclick = () => startCompose("new");
 for (const b of document.querySelectorAll("[data-reply]")) b.onclick = () => startCompose(b.dataset.reply);
 compose.init({
