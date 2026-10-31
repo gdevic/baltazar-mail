@@ -37,20 +37,23 @@ async function loadAll() {
 export function setOwnAddresses(list) { own = new Set(list.map(e => e.toLowerCase())); }
 
 // Machine senders, recognized from the address alone (no network, no headers):
-//  1. the local part says noreply anywhere, or its first word names a role (notifications,
-//     bounces, info, receipts...)
+//  1. the local part says noreply anywhere, has an unambiguous machine word anywhere
+//     (auto-reply, automated, newsletter, info...), or its first word names a role (news,
+//     receipts, support...)
 //  2. the local part is a generated token: 20+ characters with 6+ digits (bounce/VERP ids)
 //  3. the domain is a bulk-mail subdomain (email.x.com, t.x.com, appmail.x.com), a sending
 //     domain (x-mail.com, infos-x.com, xemail.com) or under the .email TLD
 // Only applied to addresses never written to, so a wrong guess costs one unsuggested stranger.
 const NO_REPLY = /no-?reply|do-?not-?reply|dont-?reply/;
-const ROLE_START = /^(mailer-?daemon|auto-?reply|auto-?responder)/;
+const MACHINE_WORD = /-(auto-?reply|auto-?responder|automated|newsletters?|mailer-?daemon|notifications?|bounces?|info)\d*(?=-)/;
 const ROLE_WORD = /^(bounces?|notifications?|notify|notices?|alerts?|automated|newsletters?|news|marketing|updates?|mailer|mail|sendmail|reply|postmaster|promo(tions?)?|offers?|deals|messages?|messenger|receipts?|transactions?|orders?|invoices?|billing|statements?|accounts?|edelivery|surveys?|websurvey|membership|rewards|tickets?|info|information|sales|support|service|services|hello|team)\d*$/;
 const BULK_LABEL = /mail|^([etom]|em|ma|m\d|msg|txn|news|newsletter|info|infos|update|updates|mkt|marketing|send|bounces?|notify|notifications?|notice|alerts?|reply|promo|offers?|campaign|comms|communications|comunicaciones|messaging|orders?|print)\d*$/;
 const BULK_WORD = /^(e?mails?|info|infos|news|notice|notify|surveys?|alerts?|promo|offers?)$/;
 export function machineAddress(email) {
+  email = email.toLowerCase();
   const at = email.lastIndexOf("@"), local = email.slice(0, at), labels = email.slice(at + 1).split(".");
-  if (NO_REPLY.test(local.replace(/[._+]/g, "-")) || ROLE_START.test(local) || ROLE_WORD.test(local.split(/[._+-]/)[0])) return true;
+  const dashed = `-${local.replace(/[._+]/g, "-")}-`;
+  if (NO_REPLY.test(dashed) || MACHINE_WORD.test(dashed) || ROLE_WORD.test(local.split(/[._+-]/)[0])) return true;
   if (local.length >= 20 && (local.match(/\d/g) || []).length >= 6) return true;
   const name = labels[labels.length - 2] || "";
   const academic = labels[labels.length - 1] === "edu" || labels.includes("ac");  // mail.uni.edu is a person
