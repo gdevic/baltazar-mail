@@ -1,0 +1,68 @@
+# Publishes a GitHub release whose asset is a ZIP of the extension: unzip it anywhere and load
+# the folder inside with "Load unpacked". Runs when a v* tag is pushed, or from the Actions tab
+# (Run workflow) with a tag name, which then tags the selected branch.
+# The tag must match the version in ext/manifest.json, e.g. v0.13.4.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.13.4 (must match ext/manifest.json)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version
+        id: ver
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version=$(jq -er .version ext/manifest.json)
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::Tag $tag does not match ext/manifest.json version $version"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        run: |
+          # The folder inside is always "ymail": the browser ties an unpacked extension (and its
+          # settings and address book) to its folder path, so updates unzip over the same folder.
+          zipname="ymail-${{ steps.ver.outputs.version }}.zip"
+          mkdir -p dist/ymail
+          cp -r ext/. dist/ymail/
+          find dist/ymail -name '.DS_Store' -delete
+          cd dist
+          zip -qr9 "$zipname" ymail
+          unzip -l "$zipname" | grep -q " ymail/manifest.json$"
+          sha256sum "$zipname" > "$zipname.sha256"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.ver.outputs.tag }}"
+          version="${{ steps.ver.outputs.version }}"
+          cat > notes.md <<NOTES
+          ### Install
+          1. Download **ymail-$version.zip** below and unzip it into a folder you will keep, such as Documents; it contains one folder, \`ymail\`.
+          2. Open \`edge://extensions\` (or \`chrome://extensions\`) and turn on **Developer mode**.
+          3. Click **Load unpacked** and select the \`ymail\` folder.
+          4. Be signed in to mail.yahoo.com in the same browser profile, then click the YMail toolbar icon.
+
+          ### Update
+          Unzip the new release over the same \`ymail\` folder, replacing the files, then click **Reload** on the YMail card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.
+
+          NOTES
+          gh release create "$tag" dist/*.zip dist/*.zip.sha256 \
+            --title "YMail $version" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"

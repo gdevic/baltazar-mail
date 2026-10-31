@@ -26,8 +26,13 @@ All names, addresses and messages in these screenshots are invented; `node tools
 
 ## Install
 
-1. Open `edge://extensions` (or `chrome://extensions`) and enable Developer mode.
-2. Click Load unpacked and select the `ext/` folder.
-3. Be signed in to mail.yahoo.com in the same browser profile, then click the YMail toolbar icon.
+1. Download `ymail-<version>.zip` from the [latest release](https://github.com/gdevic/ymail/releases/latest) and unzip it into a folder you will keep; it contains one folder, `ymail`.
+2. Open `edge://extensions` (or `chrome://extensions`) and turn on Developer mode.
+3. Click Load unpacked and select the `ymail` folder.
+4. Be signed in to mail.yahoo.com in the same browser profile, then click the YMail toolbar icon.
+
+To update, unzip the new release over the same `ymail` folder and click Reload on the extensions page. Removing the extension instead would delete its settings and address book. From a clone of this repository, load the `ext/` folder the same way.
+
+To publish a release, set `version` in `ext/manifest.json`, commit, and push a matching tag (`git tag v0.13.4 && git push origin v0.13.4`), or run the Release workflow from the Actions tab with that tag. The workflow checks the tag against the manifest, builds the ZIP and creates the release.
 
 YMail relies on an undocumented Yahoo API that can change at any time; what is known about it is in `docs/yahoo-v3.md`. Third-party libraries and their licences are listed in `ext/vendor/README.md`.
