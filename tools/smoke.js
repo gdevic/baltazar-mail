@@ -94,6 +94,9 @@ const folders = [
   await page.keyboard.press("g"); await page.keyboard.press("s");
   await page.waitForFunction(() => document.getElementById("list-title").textContent === "Sent");
   const sentRows = await page.locator("#rows .row").count();
+  await page.locator("#rows .row").first().click({ button: "right" });
+  const sentMenuFirst = await page.locator("#ctx div").first().textContent();
+  await page.keyboard.press("Escape"); await page.mouse.click(5, 5);
   await page.keyboard.press("?");
   const helpVisible = await page.locator("#help").isVisible();
   // actions: go to inbox, select two rows with x, archive, undo; context menu; move picker
@@ -110,7 +113,17 @@ const folders = [
   const afterUndo = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
   await page.locator("#rows .row").nth(3).click({ button: "right" });
   const ctxItems = await page.locator("#ctx div").allTextContents();
+  // About sender opens the contact card where the menu was; Esc closes it; hovering a list sender does not
+  const rowFrom = await page.locator("#rows .row").nth(3).locator(".fr").getAttribute("data-email");
+  const menuBox = await page.locator("#ctx").boundingBox();
+  await page.locator("#ctx div", { hasText: "About sender" }).click();
+  await page.waitForSelector("#card:not(.hidden)", { timeout: 4000 }).catch(() => {});
+  const cardBox = await page.locator("#card").boundingBox();
+  const aboutCard = { email: await page.locator("#card .card-head span").textContent().catch(() => ""), rowFrom, nearMenu: !!cardBox && Math.abs(cardBox.x - menuBox.x) < 40 && Math.abs(cardBox.y - menuBox.y) < 40 };
   await page.keyboard.press("Escape");
+  aboutCard.closed = await page.locator("#card").isHidden();
+  await page.locator("#rows .row").nth(5).locator(".fr").hover(); await page.waitForTimeout(800);
+  aboutCard.noHover = await page.locator("#card").isHidden();
   await page.keyboard.press("v");
   await page.waitForSelector("#movebox:not(.hidden)");
   await page.keyboard.type("Proj");
@@ -132,7 +145,9 @@ const folders = [
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
   expect(afterUndo.rows === 95, "undo restored rows");
-  expect(ctxItems.length === 7 && ctxItems.includes("Spam"), "context menu items");
+  expect(sentMenuFirst === "About recipient", "Sent rows offer About recipient: " + sentMenuFirst);
+  expect(ctxItems[0] === "About sender" && !ctxItems.includes("Open") && ctxItems.length === 7 && ctxItems.includes("Spam"), "context menu items: " + JSON.stringify(ctxItems));
+  expect(aboutCard.email === aboutCard.rowFrom && aboutCard.nearMenu && aboutCard.closed && aboutCard.noHover, "About sender card: " + JSON.stringify(aboutCard));
   expect(moveChoices[0] === "Projects", "move picker filter");
   expect(mutations.includes("messages.move:2") && mutations.includes("messages.readFlagUpdate:1"), "mutation calls");
   await page.keyboard.press(",");

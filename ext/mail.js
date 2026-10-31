@@ -623,8 +623,10 @@ function wireContactCards() {
     cardTimer = setTimeout(() => openCard(el, email, el.dataset.name), 450);
   };
   const leave = () => { clearTimeout(cardTimer); cardHideTimer = setTimeout(closeCard, 250); };
-  document.addEventListener("mouseover", e => { const el = e.target.closest(".who, .row .fr"); if (el) show(el); else if (e.target.closest("#card")) clearTimeout(cardHideTimer); });
-  document.addEventListener("mouseout", e => { if (e.target.closest(".who, .row .fr, #card")) leave(); });
+  // Hover works on the reader header's addresses only; in the list, right-click › About sender.
+  document.addEventListener("mouseover", e => { const el = e.target.closest(".who"); if (el) show(el); else if (e.target.closest("#card")) clearTimeout(cardHideTimer); });
+  document.addEventListener("mouseout", e => { if (e.target.closest(".who, #card")) leave(); });
+  document.addEventListener("mousedown", e => { if (!e.target.closest("#card")) closeCard(); });
 }
 
 function closeCard() { $("card").classList.add("hidden"); cardFor = null; }
@@ -1104,7 +1106,6 @@ function runAction(act) {
     case "spam": return run(() => doSpam(ids));
     case "undo": if (pendingSend) return cancelSend(); return run(undo);
     case "redo": return run(redo);
-    case "open": if (state.selected >= 0) open(state.selected); return;
   }
 }
 
@@ -1113,19 +1114,27 @@ function showContextMenu(x, y) {
   const ids = targetIds(); if (!ids.length) return;
   const first = byIds(ids)[0];
   const n = ids.length > 1 ? ` (${ids.length})` : "";
+  // The person the rows show (sender, or recipient in Sent and Drafts), if it is the same for all.
+  const outgoing = ["SENT", "DRAFT"].includes(folderType(state.byId.get(state.view.folderId)));
+  const people = byIds(ids).map(m => (outgoing ? m.headers?.to?.[0] : m.headers?.from?.[0]) || {});
+  const who = people[0]?.email && people.every(p => (p.email || "").toLowerCase() === people[0].email.toLowerCase()) ? people[0] : null;
   const items = [
-    ["open", "Open"], null,
+    ...(who ? [["about", outgoing ? "About recipient" : "About sender", who.name ? `${who.name} <${who.email}>` : who.email], null] : []),
     ["read", (first.flags?.read ? "Mark unread" : "Mark read") + n],
     ["star", (first.flags?.flagged ? "Unstar" : "Star") + n], null,
     ["archive", "Archive" + n], ["move", "Move to…" + n], ["delete", "Delete" + n], null,
     ["spam", (spamLabel(ids)) + n],
   ];
   const ctx = $("ctx");
-  ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}">${esc(it[1])}</div>` : "<hr>").join("");
+  ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}"${it[2] ? ` title="${esc(it[2])}"` : ""}>${esc(it[1])}</div>` : "<hr>").join("");
   ctx.classList.remove("hidden");
   ctx.style.left = Math.min(x, innerWidth - ctx.offsetWidth - 4) + "px";
   ctx.style.top = Math.min(y, innerHeight - ctx.offsetHeight - 4) + "px";
-  ctx.onclick = e => { const a = e.target.closest("[data-act]"); hideContextMenu(); if (a) runAction(a.dataset.act); };
+  ctx.onclick = e => {
+    const a = e.target.closest("[data-act]"); hideContextMenu(); if (!a) return;
+    if (a.dataset.act === "about") openCard({ getBoundingClientRect: () => ({ left: x, top: y, bottom: y }) }, who.email, who.name || "");
+    else runAction(a.dataset.act);
+  };
 }
 function hideContextMenu() { $("ctx").classList.add("hidden"); }
 document.addEventListener("mousedown", e => { if (!e.target.closest("#ctx")) hideContextMenu(); });
@@ -1263,6 +1272,7 @@ function onKey(e) {
   const inFolderFilter = document.activeElement === $("folder-filter");
   const onButton = document.activeElement?.tagName === "BUTTON";
   if (e.key === "Escape" && !$("search-help").classList.contains("hidden")) { e.preventDefault(); toggleSearchHelp(false); return; }
+  if (e.key === "Escape" && !$("card").classList.contains("hidden")) { e.preventDefault(); closeCard(); return; }
   if (e.key === "Escape") {
     if (inSearch) {
       $("search").value = ""; $("search").blur();
