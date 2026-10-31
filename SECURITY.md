@@ -16,7 +16,7 @@ Baltazar Mail runs with your Yahoo Mail session, so the most important problems 
 
 ## How the extension is protected
 
-- **Network.** The extension's Content Security Policy in `ext/manifest.json` lets its pages connect only to `mail.yahoo.com` and its subdomains, plus `api.github.com` for the daily release check, and load images only from those and Yahoo's image proxy. The browser enforces this, so even faulty code cannot send data to a third party. Host permissions are limited to the same mail hosts.
+- **Network.** The extension's Content Security Policy in `ext/manifest.json` lets its pages connect only to `mail.yahoo.com` and its subdomains, plus `api.github.com` for the daily release check of ZIP installs, and load images only from those and Yahoo's image proxy. The browser enforces this, so even faulty code cannot send data to a third party. Host permissions are limited to the same mail hosts.
 - **Message content.** Message HTML is cleaned with DOMPurify and shown in a sandboxed frame without scripts. Remote images are already routed through Yahoo's proxy by Yahoo, so senders do not see your address when they load.
 - **Attachments.** Attachment files are parsed (PDF.js, docx-preview, SheetJS, ZIP listings, text) in `render.html`, a sandbox page with an opaque origin, no cookies, no extension APIs and no network access beyond its own files. Links and keys it reports back are checked before the extension acts on them.
 - **Bundled libraries.** Every third-party file is recorded with its source and SHA-256 in `ext/vendor/vendor.json`. A GitHub Actions workflow compares each file with its published original and looks up known vulnerabilities in the OSV database on every change, weekly, and before each release.

@@ -4,7 +4,7 @@ Baltazar Mail is a browser extension that shows your Yahoo Mail. It has no serve
 
 ## Where your data goes
 
-The extension talks to Yahoo, using the Yahoo sign-in already in your browser, and to GitHub for one thing:
+The extension talks to Yahoo, using the Yahoo sign-in already in your browser, and, when installed from a release ZIP, to GitHub for one thing:
 
 | Host | Used for |
 |---|---|
@@ -12,7 +12,7 @@ The extension talks to Yahoo, using the Yahoo sign-in already in your browser, a
 | `apis.mail.yahoo.com` | the raw source of a message, from which attachments are taken for preview and download |
 | `cloud-apis.mail.yahoo.com` | attachment thumbnails, images embedded in messages, and Yahoo's text extraction for documents |
 | `*.yusercontent.com` | images in messages, which Yahoo routes through this proxy |
-| `api.github.com` | once a day, a request for the latest release number of this project, so Settings can say when an update is available. It carries no cookies, no account or mail data and no identifier; GitHub sees only what any web request shows (IP address and browser). The answer is used only for the version comparison; nothing is downloaded or installed |
+| `api.github.com` | only for a copy installed from a release ZIP (Load unpacked), which cannot update itself: once a day, a request for the latest release number of this project, so Settings can say when an update is available. It carries no cookies, no account or mail data and no identifier; GitHub sees only what any web request shows (IP address and browser). The answer is used only for the version comparison; nothing is downloaded or installed. An install from a browser store is updated by the browser and never contacts GitHub |
 
 When a document format has no viewer in the extension (for example PowerPoint), the preview asks Yahoo's own document converter to render it. The file is already stored at Yahoo; nothing is sent elsewhere.
 

@@ -1451,6 +1451,7 @@ async function poll() {
 async function checkUpdate() {
   const have = chrome.runtime.getManifest().version, note = $("update-note");
   $("app-version").textContent = `Baltazar Mail ${have}`;
+  if (!await loadedFromZip()) return;
   const v = await update.latest().catch(() => null);
   const avail = !!v && update.newer(v, have);
   $("gear").classList.toggle("has-update", avail);
@@ -1459,6 +1460,12 @@ async function checkUpdate() {
   if (!avail) return;
   const a = Object.assign(document.createElement("a"), { href: update.RELEASES, target: "_blank", rel: "noopener", textContent: "Download it from GitHub" });
   note.replaceChildren(`Version ${v} is available. `, a, ". Checked daily with GitHub; no data about you is sent.");
+}
+
+// A release ZIP is loaded with "Load unpacked" and never updates itself, so only then is GitHub
+// asked. A store install is updated by the browser and contacts nothing but Yahoo.
+async function loadedFromZip() {
+  try { return (await chrome.management.getSelf()).installType === "development"; } catch { return false; }
 }
 
 // ---------- startup ----------

@@ -1,14 +1,16 @@
 // README screenshots: the real extension in Chromium against a mocked Yahoo backend filled with
 // invented mail, so no real names, addresses or messages appear. node tools/screenshots.js
-// Writes docs/screenshots/{light,viewer,dark,settings}.png.
+// Writes docs/screenshots/{light,viewer,dark,settings}.png. With --store, writes the same scenes at
+// the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo, to store/.
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
 const EXT = path.join(__dirname, "..", "ext");
-const OUT = path.join(__dirname, "..", "docs", "screenshots");
-const W = 1600, H = 900;
+const STORE = process.argv.includes("--store");
+const OUT = path.join(__dirname, "..", ...(STORE ? ["store", "screenshots"] : ["docs", "screenshots"]));
+const W = STORE ? 1280 : 1600, H = STORE ? 800 : 900, LIST_W = STORE ? 505 : 560, FOLDER_W = STORE ? 190 : 230;
 const NOW = Math.floor(Date.now() / 1000);
 const DAY = 86400;
 
@@ -297,7 +299,7 @@ function listFor(q) {
   };
 
   // 1. light, three columns, message with photo attachments
-  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: 230, listW: 560, expanded: ["Projects"] });
+  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });
   await openRow("Fwd: Photos from the coast trip");
   await page.waitForFunction(() => document.querySelectorAll("#r-attach .att-thumb img").length === 3);
   await page.mouse.move(W - 5, H - 5);
@@ -333,13 +335,21 @@ function listFor(q) {
   await page.screenshot({ path: path.join(OUT, "dark.png") });
 
   // 4. Settings, in the light theme, with the default intervals and the app hidden behind it
-  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: 230, listW: 560, pollSec: 20, markReadSec: 2 });
+  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, pollSec: 20, markReadSec: 2 });
   await page.locator("#list").focus(); await page.keyboard.press(",");
-  await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
+  if (!STORE) await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
   await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent));
   await page.waitForTimeout(300);
   const box = await page.locator("#settings-box").boundingBox(), pad = 16;
-  await page.screenshot({ path: path.join(OUT, "settings.png"), clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } });
+  // The store takes whole windows only; the README shows the panel alone.
+  await page.screenshot({ path: path.join(OUT, "settings.png"), ...(STORE ? {} : { clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } }) });
+
+  if (STORE) {
+    const logo = await ctx.newPage();
+    await logo.setViewportSize({ width: 300, height: 300 });
+    await logo.setContent(`<html><body style="margin:0;background:transparent"><img src="data:image/svg+xml;base64,${fs.readFileSync(path.join(EXT, "icons", "icon.svg")).toString("base64")}" width="300" height="300"></body></html>`);
+    await logo.screenshot({ path: path.join(OUT, "..", "logo-300.png"), omitBackground: true });
+  }
 
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });
