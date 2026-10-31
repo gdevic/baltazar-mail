@@ -54,7 +54,7 @@ jobs:
           sha256sum "$zipname" > "$zipname.sha256"
 
       - name: Record build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/baltazar-mail-${{ steps.ver.outputs.version }}.zip
 
