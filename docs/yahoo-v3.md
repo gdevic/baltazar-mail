@@ -65,6 +65,8 @@ Multiple ids can go in one `q=id:(a,b,c)` selector; the UI numbers inner request
 
 ## List query language
 
+`is:flagged` selects starred messages across all folders; `-folderType:(TRASH)-folderType:(BULK)` excludes Trash and Spam (verified 2026-10-31).
+
 `q=folderId:<id> -folderType:(SYNC)-folderType:(INVISIBLE) count:100 offset:0 -sort:date`
 
 `-sort:date` is descending. Paging is by `offset`. Free-text search uses the same endpoint with `keyword:<term>` and no `folderId` (`count:20 offset:0 -sort:date keyword:Z80`, response `query.type` is `S` instead of `L`); a `folderId:` can be added to scope it. Tokens for from:, subject:, hasAttachment and date ranges still to be confirmed. The response carries `query.token` and `query.nextModSeq`, which allow incremental refresh of an already-loaded list instead of re-fetching it.
