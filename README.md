@@ -38,6 +38,10 @@ To update, unzip the new release over the same `baltazar-mail` folder and click 
 To publish a release, set `version` in `ext/manifest.json`, commit, and push a matching tag (`git tag v0.13.4 && git push origin v0.13.4`), or run the Release workflow from the Actions tab with that tag. The workflow checks the tag against the manifest, builds the ZIP and creates the release.
 
 Baltazar Mail relies on an undocumented Yahoo API that can change at any time; what is known about it is in `docs/yahoo-v3.md`. 
+## Security and privacy
+
+The extension talks only to Yahoo, has no server, analytics or telemetry, and parses attachments in a sandbox with no access to your session. Details are in [SECURITY.md](SECURITY.md), including how to report a vulnerability, and in [PRIVACY.md](PRIVACY.md), including every host contacted, everything stored and every permission.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). The bundled third-party libraries keep their own licences (Apache-2.0 and MIT), listed in [`ext/vendor/README.md`](ext/vendor/README.md).
