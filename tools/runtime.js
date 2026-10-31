@@ -7,7 +7,7 @@ const os = require("os");
 
 const EXT = path.join(__dirname, "..", "ext");
 const now = Math.floor(Date.now() / 1000);
-const msg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, attachmentCount: 0, csid: `csid${i}`,
+const msg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, attachmentCount: i % 3 === 0 ? 1 : 0, csid: `csid${i}`,
   flags: { read: i % 2 === 0, flagged: false },
   headers: { subject: `Subject ${folder}-${i}`, from: [{ name: `Sender ${i}`, email: `s${i}@x.com` }], to: [{ name: "Me", email: "me@yahoo.com" }], cc: [{ name: "Other", email: "o@x.com" }], date: String(now - i * 40000) },
   folder: { id: folder, name: folder === "1" ? "Inbox" : "Other" }, snippet: "snip" });
@@ -47,8 +47,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       const id = uri.match(/@\.id==(MSG[^/]+)/)[1];
       const message = msg(Number(id.split("_")[1]), id.split("_")[0].slice(3));
       message.attachments = [
-        { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/2", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/2?appid=x" },
-        { partId: "3", filename: "data.csv", size: 900, disposition: "attachment", type: "text", subtype: "csv", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/3", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/3?appid=x" },
+        { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf" },
+        { partId: "3", filename: "data.csv", size: 900, disposition: "attachment", type: "text", subtype: "csv", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/csv" },
+        { partId: "4", filename: "src.zip", size: 400, disposition: "attachment", type: "application", subtype: "zip", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/zip" },
+        { partId: "5", filename: "photo.png", size: 70, disposition: "attachment", type: "image", subtype: "png", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/png", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/5?appid=x" },
+        { partId: "6", filename: "cv.docx", size: 33000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.wordprocessingml.document", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/docx", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/6?appid=x" },
       ];
       responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>` } } } }];
     }
@@ -63,7 +66,15 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   });
 
   const thumbPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
-  await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => route.fulfill({ contentType: "image/png", body: thumbPng }));
+  const zipBytes = Buffer.from("UEsDBBQAAAAAAI8CX12Tpho8uAEAALgBAAAKAAAAc3JjL21haW4uY2ludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KUEsDBBQAAAAAAI8CX10gMDo2BgAAAAYAAAAJAAAAUkVBRE1FLm1kaGVsbG8KUEsBAhQDFAAAAAAAjwJfXZOmGjy4AQAAuAEAAAoAAAAAAAAAAAAAAIABAAAAAHNyYy9tYWluLmNQSwECFAMUAAAAAACPAl9dIDA6NgYAAAAGAAAACQAAAAAAAAAAAAAAgAHgAQAAUkVBRE1FLm1kUEsFBgAAAAACAAIAbwAAAA0CAAAAAA==", "base64");
+  await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => {
+    const u = route.request().url();
+    if (u.endsWith("/dl/csv")) return route.fulfill({ contentType: "text/csv", body: "name,qty\nZ80,2\n6502,1\n" });
+    if (u.endsWith("/dl/zip")) return route.fulfill({ contentType: "application/zip", body: zipBytes });
+    if (u.endsWith("/dl/pdf")) return route.fulfill({ contentType: "application/pdf", body: "%PDF-1.4\n%%EOF\n" });
+    if (u.includes("/text/")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "Jorge Ruiz\nEngineer" } }) });
+    return route.fulfill({ contentType: "image/png", body: thumbPng });
+  });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
@@ -88,12 +99,29 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForTimeout(400);
   await page.locator("#rows .row").nth(2).hover();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "starcol.png"), clip: { x: 235, y: 80, width: 465, height: 180 } }).catch(() => {});
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "listcols.png"), clip: { x: 235, y: 80, width: 300, height: 120 } }).catch(() => {});
   results.starCol = { call: calls.slice(starBefore).map(c => c.name).join(","), on: await page.locator("#rows .row").nth(4).locator(".st.on").count() };
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
 
   // attachment previews: two cards, PDF gets a thumbnail, CSV a type tile
   await page.waitForTimeout(500);
-  results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), csvTile: await page.locator("#r-attach .att-card").nth(1).locator(".att-ext").textContent().catch(() => "") };
+  results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), labels: await page.locator("#r-attach .att-thumb").allTextContents(),
+    stripBelowBody: await page.evaluate(() => document.getElementById("r-attach").getBoundingClientRect().top >= document.getElementById("r-body").getBoundingClientRect().bottom - 1) };
+  const view = async i => { await page.locator("#r-attach .att-card").nth(i).click(); await page.waitForSelector("#viewer:not(.hidden)"); await page.waitForFunction(() => !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 5000 }); };
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "strip.png"), clip: { x: 700, y: 560, width: 580, height: 160 } }).catch(() => {});
+  await view(1); results.vCsv = await page.locator("#v-body td").allTextContents();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-csv.png"), clip: { x: 40, y: 30, width: 640, height: 220 } }).catch(() => {});
+  await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.querySelector("#v-body table") && document.getElementById("v-name").textContent === "src.zip", null, { timeout: 5000 });
+  results.vZip = await page.locator("#v-body td:first-child").allTextContents();
+  await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body img.v-img", { timeout: 5000 });
+  results.vImg = await page.locator("#v-body img.v-img").count();
+  await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body pre", { timeout: 5000 });
+  results.vDoc = await page.locator("#v-body pre").textContent();
+  await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body iframe", { timeout: 5000 });
+  results.vPdf = (await page.locator("#v-body iframe").getAttribute("src")).slice(0, 5);
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer.png") }).catch(() => {});
+  await page.keyboard.press("Escape");
+  results.vClosed = await page.locator("#viewer").isHidden();
 
   // contact card on hover over From
   await page.locator("#r-from .who").first().hover();
@@ -219,10 +247,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.starCol.call === "messages.starFlagUpdate" && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
-  expect(results.attach.cards === 2 && results.attach.thumbs === 1 && results.attach.csvTile === "CSV", "attachment previews: " + JSON.stringify(results.attach));
+  expect(results.attach.cards === 5 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC", "attachment strip: " + JSON.stringify(results.attach));
+  expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge") && results.vPdf === "blob:" && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vClosed]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));
-  expect(results.fwdChips.length === 2 && results.fwd.atts.length === 2 && results.fwd.atts[0].messageReference?.pid === "2" && results.fwd.uri.includes("uploadCount=0&totalAttachments=2") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
+  expect(results.fwdChips.length === 5 && results.fwd.atts.length === 5 && results.fwd.atts[0].messageReference?.pid === "2" && results.fwd.uri.includes("uploadCount=0&totalAttachments=5") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
   expect(results.palette === 16, "16 text colours");
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));

@@ -2,6 +2,7 @@ import * as api from "./api.js";
 import { THEMES, applyTheme } from "./themes.js";
 import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
+import * as viewer from "./viewer.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -287,11 +288,13 @@ function renderList() {
 let dragging = null;
 document.addEventListener("dragend", () => { dragging?.classList.remove("dragging"); dragging = null; });
 
+const CLIP = `<svg viewBox="0 0 16 16" aria-label="has attachments"><path d="M10.5 4.5 5.4 9.6a1.6 1.6 0 0 0 2.3 2.3l5.4-5.4a3 3 0 0 0-4.3-4.3L3.4 7.6a4.4 4.4 0 0 0 6.2 6.2l4-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
 function paintFlags(el, m) {
   const st = el.querySelector(".st");
   st.textContent = m.flags?.flagged ? "★" : "☆";
   st.classList.toggle("on", !!m.flags?.flagged);
-  el.querySelector(".fl").textContent = m.attachmentCount ? "📎" : "";
+  el.querySelector(".fl").innerHTML = m.attachmentCount ? CLIP : "";
 }
 const rowEl = i => $("rows").querySelector(`.row[data-i="${i}"]`);
 
@@ -478,27 +481,6 @@ async function thumbFor(a) {
   return p;
 }
 
-function renderAttachments(r, images) {
-  const box = $("r-attach");
-  const list = r.attachments.filter(a => a.disposition !== "inline" && /^https:\/\//i.test(a.downloadUrl || ""));
-  box.classList.toggle("hidden", !list.length);
-  box.innerHTML = list.map((a, i) => {
-    const ext = extOf(a.filename) || (a.subtype || "").toUpperCase().slice(0, 4) || "FILE";
-    return `<a class="att-card" href="${esc(a.downloadUrl)}" target="_blank" rel="noopener" title="${esc(a.filename || "attachment")} (${kbStr(a.size)})">
-      <span class="att-thumb" data-i="${i}"><span class="att-ext">${esc(ext)}</span></span>
-      <span class="att-name">${esc(a.filename || "Untitled")}</span><span class="att-size">${kbStr(a.size)}</span></a>`;
-  }).join("");
-  const id = r.message.id;
-  list.forEach(async (a, i) => {
-    const previewable = a.type === "image" || /pdf/i.test(a.subtype || "") || /\.pdf$/i.test(a.filename || "");
-    if (!previewable || !a.thumbnailUrl) return;
-    const src = await thumbFor(a);
-    if (!src || state.openId !== id) return;
-    const slot = box.querySelector(`.att-thumb[data-i="${i}"]`);
-    if (slot) slot.innerHTML = `<img src="${src}" alt="">`;
-  });
-}
-
 function bodyDoc(html, images) {
   const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? "https: data:" : "'none'"};`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
@@ -559,7 +541,7 @@ async function renderMessage(m, r) {
   const auto = settings.images === "always" || (settings.images !== "never" && ft !== "BULK" && ft !== "TRASH");
   const hasImg = /<img\b/i.test(r.html);
   $("r-images").classList.toggle("hidden", !hasImg || auto);
-  renderAttachments(r, auto);
+  viewer.renderStrip(r.message, r.attachments, id => state.openId === id);
   if (auto) { const inlined = await inlineYahooParts(r.html); if (state.openId !== m.id) return; r.html = inlined; }
   setFrame(bodyDoc(r.html, auto));
   status(plainSubject(h.subject).slice(0, 60), r.ms);
@@ -583,6 +565,7 @@ async function loadImages() {
 
 function clearReader() {
   state.openId = null; currentBody = null;
+  $("r-attach").classList.add("hidden");
   clearTimeout(markReadTimer);
   $("reader-empty").classList.remove("hidden");
   $("reader-head").classList.add("hidden");
@@ -952,6 +935,7 @@ let pendingG = false;
 const modals = ["help", "settings", "movebox"];
 function onKey(e) {
   if (e.target.closest && e.target.closest("#compose")) return;
+  if (viewer.isOpen()) { viewer.onKey(e); return; }
   const openModal = modals.find(id => !$(id).classList.contains("hidden"));
   if (openModal) {
     if (e.key === "Escape") { if (openModal === "movebox") closeMovePicker(); else $(openModal).classList.add("hidden"); }
@@ -1152,6 +1136,7 @@ wireSettings();
 wireSplitters();
 wireMovePicker();
 wireContactCards();
+viewer.init({ thumb: thumbFor, cleanHtml, status });
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;

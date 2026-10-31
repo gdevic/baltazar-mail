@@ -2,7 +2,7 @@
 
 A fast, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) extension. Everything works with the mouse; the keyboard shortcuts are there for those who want them. It reuses the Yahoo sign-in already present in the browser and talks to the same `ws/v3` batch API that Yahoo's own web client uses, so it is as quick as the official UI without any of its chrome.
 
-Status: browsing, search, reading, mailbox actions (read/unread, star, archive, move, delete) with multi-level undo, and compose, reply, reply all, forward with drafts, attachments, rich-text or plain-text editing, undo-send, and an address book with autocomplete built from your own Inbox and Sent headers. Also: spam / not spam, forwarding with the original's attachments, attachment previews, and contact cards on hover. Conversation threading is next.
+Status: browsing, search, reading, mailbox actions (read/unread, star, archive, move, delete) with multi-level undo, and compose, reply, reply all, forward with drafts, attachments, rich-text or plain-text editing, undo-send, and an address book with autocomplete built from your own Inbox and Sent headers. Also: spam / not spam, forwarding with the original's attachments, attachments listed under the message with an in-app viewer (images, PDF, text and code, CSV as a table, HTML, audio and video, ZIP listings, Office documents as extracted text), and contact cards on hover. Conversation threading is next.
 
 ## Install
 
@@ -34,7 +34,7 @@ Status: browsing, search, reading, mailbox actions (read/unread, star, archive, 
 
 ## Layout
 
-- `ext/` the extension: `manifest.json`, `background.js` (toolbar button and header rules), `api.js` (protocol adapter, the only file that knows the wire format), `mail.html/css/js` (UI), `compose.js` (composer), `contacts.js` (address book in IndexedDB), `themes.js` (palettes).
+- `ext/` the extension: `manifest.json`, `background.js` (toolbar button and header rules), `api.js` (protocol adapter, the only file that knows the wire format), `mail.html/css/js` (UI), `compose.js` (composer), `contacts.js` (address book in IndexedDB), `viewer.js` (attachment strip and viewer), `themes.js` (palettes).
 - `docs/yahoo-v3.md` what is known about the API, derived from captured traffic.
 - `tools/har2spec.py` turns a DevTools HAR export into a redacted endpoint catalogue; `tools/ym.py` a stdlib-only CLI against the API; `tools/smoke.js` and `tools/themeshots.js` Playwright tests of the page against a mocked backend, `tools/runtime.js` the same with the real extension loaded into Chromium, covering reading, folder switches and compose/send (`node tools/runtime.js`).
 

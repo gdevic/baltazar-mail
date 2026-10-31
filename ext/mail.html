@@ -44,9 +44,9 @@
       <div class="r-meta"><span class="k">Date</span><span id="r-date"></span><span id="r-folder"></span>
         <span class="r-actions"><button data-reply="reply" title="Reply (r)">Reply</button><button data-reply="replyAll" title="Reply all (a)">Reply all</button><button data-reply="forward" title="Forward (f)">Forward</button><button id="r-print" title="Print (p)">Print</button></span>
         <button id="r-images" class="hidden">Load images</button></div>
-      <div id="r-attach" class="hidden"></div>
     </div>
     <iframe id="r-body" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" class="hidden"></iframe>
+    <div id="r-attach" class="hidden"></div>
   </section>
   <section id="compose" class="hidden">
     <div id="c-head">
@@ -140,6 +140,19 @@
 </div>
 <div id="ctx" class="hidden"></div>
 <div id="card" class="hidden"></div>
+<div id="viewer" class="hidden">
+  <div id="v-box">
+    <div id="v-bar">
+      <button id="v-prev" title="Previous attachment (←)">‹</button><button id="v-next" title="Next attachment (→)">›</button>
+      <span id="v-name"></span><span id="v-meta"></span>
+      <span class="sp"></span>
+      <button id="v-open" title="Open in a new tab">Open in tab</button>
+      <button id="v-dl" title="Download">Download</button>
+      <button id="v-close" title="Close (Esc)">×</button>
+    </div>
+    <div id="v-body"></div>
+  </div>
+</div>
 <div id="movebox" class="hidden">
   <div id="movebox-box">
     <input id="move-filter" placeholder="Move to folder…" autocomplete="off">

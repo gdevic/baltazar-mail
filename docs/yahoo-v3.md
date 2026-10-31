@@ -142,3 +142,5 @@ An attachment of another message is forwarded by reference, copied server-side w
 `GET .../content/simplebody/full` returns attachment metadata on `message.attachments`; `simpleBody.attachments` is present only for some messages. Each entry has `partId`, `filename`, `size`, `type`, `subtype`, `disposition`, `contentId`, `downloadUrl`, `thumbnailUrl` (server-rendered previews for images and PDFs, cookie-authenticated).
 
 Person search: `(from:("addr") OR to:("addr"))`; `fromEmail:(...)` also exists.
+
+Attachment text: `textExtractionUrl` (`.../content/parts/@.id==<pid>/text?appid=...`) returns `{"result":{"textExtractResult":"..."}}`, the plain text of PDFs, Word documents, HTML and similar. PDF attachments carry no `thumbnailUrl`. `downloadUrl` (`.../parts/@.id==<pid>/refresh`) answers 307 to the file; the target host was not observed, so the extension holds host permissions for *.yahoo.com, *.yusercontent.com and *.yimg.com.
