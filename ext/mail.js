@@ -5,6 +5,7 @@ import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
 import { parse, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
+import { extract } from "./mime.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -401,8 +402,11 @@ function paintFlags(el, m) {
   const st = el.querySelector(".st");
   st.textContent = m.flags?.flagged ? "★" : "☆";
   st.classList.toggle("on", !!m.flags?.flagged);
-  el.querySelector(".fl").innerHTML = m.attachmentCount ? CLIP : "";
+  el.querySelector(".fl").innerHTML = fileCount(m) ? CLIP : "";
 }
+// Files a message carries, as the attachment strip counts them: images built into the body
+// (disposition inline) are not files. Older list entries without the part list fall back to the count.
+const fileCount = m => Array.isArray(m.attachments) ? m.attachments.filter(a => a.disposition !== "inline").length : (m.attachmentCount || 0);
 const rowEl = i => $("rows").querySelector(`.row[data-i="${i}"]`);
 
 function select(i, resetAnchor = true) {
@@ -471,9 +475,16 @@ let markReadTimer = null;
 
 // Yahoo's HTML is server-sanitised; DOMPurify (vendor/purify.min.js) removes anything that could
 // still run, navigate or submit. Links open in a new tab, since the reader frame cannot navigate.
+// The reader shrinks wide images with height:auto, which would otherwise follow the picture's own
+// shape; an image's width and height attributes set its proportions instead, as mail clients
+// honour them (a 640x1 spacer built from a 1x1 PNG stays one pixel tall, not a 640px square).
 const purify = globalThis.DOMPurify;
 purify.addHook("afterSanitizeAttributes", node => {
   if (node.tagName === "A" && node.hasAttribute("href")) { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+  if (node.tagName === "IMG" && !node.style.aspectRatio) {
+    const w = Number(node.getAttribute("width")), h = Number(node.getAttribute("height"));
+    if (w > 0 && h > 0) node.style.aspectRatio = `${w} / ${h}`;
+  }
 });
 function cleanHtml(html) {
   return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] });
@@ -513,8 +524,44 @@ async function inlineYahooParts(html) {
       partCache.set(u, dataUrl);
     } catch { partCache.set(u, null); }
   }));
+  const failed = urls.filter(u => partCache.get(u) === null && !fromSource.has(u));
+  if (failed.length) await partsFromSource(failed);
   for (const img of imgs) { const d = partCache.get(img.getAttribute("src")); if (d) img.setAttribute("src", d); }
   return tpl.innerHTML;
+}
+
+// Yahoo cannot render some inline parts (a malformed type such as "image/jpeg;base64" gives
+// EP-5001), so those are cut out of the message's own source, as attachments are. The format
+// comes from the bytes, not from the sender's header; anything that is not an image is dropped.
+const fromSource = new Set();
+const RAW_FALLBACK_MAX = 10 << 20;
+const IMAGE_MAGIC = [["image/png", "89504e47"], ["image/jpeg", "ffd8ff"], ["image/gif", "47494638"], ["image/bmp", "424d"]];
+function sniffImage(b) {
+  const hex = [...b.slice(0, 12)].map(x => x.toString(16).padStart(2, "0")).join("");
+  if (hex.startsWith("52494646") && hex.slice(16, 24) === "57454250") return "image/webp";
+  return IMAGE_MAGIC.find(([, sig]) => hex.startsWith(sig))?.[0] || null;
+}
+async function partsFromSource(urls) {
+  const byMsg = new Map();
+  for (const u of urls) {
+    fromSource.add(u);
+    const m = new URL(u).pathname.match(/\/messages\/@\.id==([A-Za-z0-9_-]+)\/content\/parts\/@\.id==([0-9.]+)\//);
+    if (m) (byMsg.get(m[1]) || byMsg.set(m[1], []).get(m[1])).push([u, m[2]]);
+  }
+  for (const [id, list] of byMsg) {
+    const size = state.messages.find(x => x.id === id)?.size || currentBody?.message?.size || 0;
+    if (!size || size > RAW_FALLBACK_MAX) continue;
+    try {
+      const parsed = await viewer.parsedMessage(id);
+      for (const [u, pid] of list) {
+        try {
+          const { bytes } = extract(parsed, pid), type = sniffImage(bytes);
+          if (!type) continue;
+          partCache.set(u, await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(new Blob([bytes], { type })); }));
+        } catch { /* part missing or undecodable: stays broken */ }
+      }
+    } catch { /* source unavailable */ }
+  }
 }
 
 // ---------- contact cards ----------

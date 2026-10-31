@@ -96,9 +96,10 @@ export function renderStrip(message, attachments, isCurrent) {
 
 // ---------- fetching ----------
 // Yahoo's download links cannot be fetched, so attachment bytes are cut out of the message's
-// raw source (one fetch per message, shared by all its attachments).
+// raw source (one fetch per message, shared by its attachments and by inline images Yahoo
+// cannot render).
 const rawCache = new Map();      // msgId -> Promise<parsed MIME>
-function parsedMessage(id) {
+export function parsedMessage(id) {
   if (!rawCache.has(id)) {
     rawCache.set(id, hooks.raw(id).then(listParts));
     while (rawCache.size > 3) rawCache.delete(rawCache.keys().next().value);
