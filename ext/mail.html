@@ -133,11 +133,9 @@
     <label><input type="radio" name="layout" value="vertical"> Three columns: folders | messages | preview</label>
     <label><input type="radio" name="layout" value="horizontal"> Folders left, messages above preview</label>
     <b>Theme</b>
-    <label><input type="radio" name="theme" value="dark"> Dark</label>
-    <label><input type="radio" name="theme" value="light"> Light</label>
-    <label><input type="radio" name="theme" value="system"> Follow system</label>
-    <label>Dark palette <select id="darkTheme"></select></label>
-    <label>Light palette <select id="lightTheme"></select></label>
+    <div class="theme-row"><label><input type="radio" name="theme" value="dark"> Dark</label><select id="darkTheme" title="Palette used in dark mode" aria-label="Dark palette"></select></div>
+    <div class="theme-row"><label><input type="radio" name="theme" value="light"> Light</label><select id="lightTheme" title="Palette used in light mode" aria-label="Light palette"></select></div>
+    <label><input type="radio" name="theme" value="system"> Follow system <span class="theme-note">(uses the palettes above)</span></label>
     <b>Writing</b>
     <label>Default font <select id="composeFont">
       <option>Helvetica Neue, Helvetica, Arial, sans-serif</option><option>Arial</option><option>Segoe UI</option><option>Verdana</option><option>Tahoma</option><option>Trebuchet MS</option>

@@ -364,6 +364,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.locator("#list").focus(); await page.keyboard.press(",");
   await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent), null, { timeout: 5000 });
   const ab = { summary: await page.locator("#ab-summary").textContent(), mainHeight: (await page.locator("#settings-box").boundingBox()).height };
+  const sb = await page.locator("#settings-box").boundingBox();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "settings.png"), clip: { x: sb.x, y: sb.y, width: sb.width, height: Math.min(sb.height, 330) } }).catch(() => {});
+  const rowOf = async sel => { const s = await page.locator(sel).boundingBox(); return s; };
+  const dk = await rowOf("#darkTheme"), dr = await rowOf('input[name=theme][value=dark]'), fontSel = await rowOf("#composeFont");
+  ab.paletteInline = Math.abs((dk.y + dk.height / 2) - (dr.y + dr.height / 2)) < 4 && Math.abs((dk.x + dk.width) - (fontSel.x + fontSel.width)) < 2;
   await page.locator("#ab-open").click();
   await page.waitForSelector("#settings-ab:not(.hidden) .ab-item");
   ab.mainHidden = await page.locator("#settings-main").isHidden();
@@ -412,7 +417,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.empty.archive === "No messages in Archive." && results.empty.parent === "No messages in Travel.\nIts 1 subfolder holds 12 messages." && results.empty.gone === 0, "empty folder: " + JSON.stringify(results.empty));
   {
     const ab = results.ab, hidN = Number(ab.hiddenCount);
-    expect(/^\d+ addresses learned from Inbox and Sent/.test(ab.summary) && ab.mainHidden && ab.rows >= 5 && ab.focus === "ab-filter" && ab.filtered >= 2 && ab.bulkText.startsWith("Hide ") &&
+    expect(/^\d+ addresses learned from Inbox and Sent/.test(ab.summary) && ab.mainHidden && ab.rows >= 5 && ab.focus === "ab-filter" && ab.paletteInline && ab.filtered >= 2 && ab.bulkText.startsWith("Hide ") &&
       hidN >= ab.filtered - 1 && ab.offRows === ab.filtered && /^Show (all )?\d+ again$/.test(ab.hiddenTabBulk) && Number(ab.afterEye) === hidN - 1 && ab.filterCleared === "" && ab.backOnMain &&
       new RegExp(`· ${hidN - 1} hidden from suggestions`).test(ab.summaryAfter) && ab.closed, "address book: " + JSON.stringify(ab));
   }
