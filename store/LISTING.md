@@ -74,9 +74,9 @@ Search terms: yahoo mail, email client, webmail, ad-free, dark mode, attachments
 
 ## Notes for certification
 
-> To test: sign in to https://mail.yahoo.com in the same browser profile with the test account below, then click the Baltazar Mail toolbar button. The extension opens its own tab with the mailbox. The test account has a few messages, including attachments, to try reading, search, attachment previews and sending.
+> No test account is included. Baltazar Mail works with any Yahoo Mail account, and the reviewer's own or any existing test account can be used. A shared account cannot be provided reliably: Yahoo requires every new account to be verified with a personal mobile number (virtual numbers are rejected), and it challenges sign-ins from an unfamiliar computer with a code sent to that phone, so a reviewer could be locked out of a shared account. If access is still needed, please ask through Partner Center and it will be arranged promptly.
 >
-> Test account: <Yahoo address> / <password>
+> To test: in the same browser profile, sign in to https://mail.yahoo.com with any Yahoo account, then click the Baltazar Mail toolbar button. The extension opens its own tab with the mailbox. Things to try: open a folder and a message, search (the ? next to the search box explains the syntax), open an attachment from the strip under a message, write a message to yourself with New message, and open Settings with the gear button. Nothing is changed in the account unless the reviewer moves, deletes or sends mail.
 >
 > How it works: the extension calls the same web API that Yahoo's own mail page uses, with the user's existing Yahoo sign-in; it never sees or stores the password. Yahoo's servers accept those calls only when they come from mail.yahoo.com, so a single declarativeNetRequest session rule sets Origin and Referer to https://mail.yahoo.com, limited to requests initiated by this extension (initiatorDomains), XHR/fetch only, on mail.yahoo.com and its subdomains.
 >
