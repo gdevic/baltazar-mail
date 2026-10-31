@@ -11,6 +11,12 @@ chrome.action.onClicked.addListener(async () => {
   }
 });
 
+// The new-mail dot on the toolbar button belongs to an open mail tab; with none left, the
+// button returns to the plain icon.
+chrome.tabs.onRemoved.addListener(async () => {
+  if (!(await chrome.tabs.query({ url: PAGE })).length) chrome.action.setIcon({ path: { 16: "icons/16.png", 32: "icons/32.png" } }).catch(() => {});
+});
+
 // The /c/ edge proxy rejects batch calls whose Origin is not mail.yahoo.com (error EP-4010).
 // Rewrite Origin and Referer on this extension's own requests so they match the web client's.
 const RULES = [{

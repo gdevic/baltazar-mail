@@ -162,6 +162,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results0.rows = { legacy18: await rowPx(), field: await page.locator("#density").inputValue() };
   const frameText = async () => page.frameLocator("#r-body").locator("body").innerText({ timeout: 3000 }).catch(e => "FRAME-ERR");
   const results = { rows: results0.rows };
+  // unread mail already there is shown in the title only; the tab icon stays plain
+  results.tabIcon = await page.evaluate(() => ({ title: document.title, href: document.querySelector('link[rel="icon"]').href.split("/").slice(-2).join("/") }));
 
   // reading across folders
   await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(600);
@@ -536,6 +538,17 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.keyboard.press("Escape");
   ab.closed = await page.locator("#settings").isHidden();
   results.ab = ab;
+
+  // new mail while the tab is in the background: a green dot on the tab icon, gone when looked at
+  await page.evaluate(() => Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }));
+  folders[0].unread = 4; folders[0].highestModSeq++;
+  await page.waitForFunction(() => document.querySelector('link[rel="icon"]').href.startsWith("data:image/png"), null, { timeout: 15000 }).catch(() => {});
+  const iconNow = () => page.evaluate(() => document.querySelector('link[rel="icon"]').href);
+  const dotted = await iconNow();
+  fs.writeFileSync(path.join(__dirname, "..", "out", "tab-icon.png"), Buffer.from(dotted.split(",")[1] || "", "base64"));
+  await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+  await page.waitForTimeout(300);
+  results.newMail = { title: await page.title(), dotted: dotted.slice(0, 22), cleared: (await iconNow()).split("/").slice(-2).join("/") };
   results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
@@ -587,6 +600,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   }
   expect(results.rows.legacy18 === 18 && results.rows.field === "80", "row height migrated from pixels: " + JSON.stringify(results.rows));
   expect(results.textSize.folder === 16.25 && results.textSize.settings === 13 && results.textSize.folderBack === 13, "text size scales the app, not Settings: " + JSON.stringify(results.textSize));
+  expect(results.tabIcon.title === "(3) Baltazar Mail" && results.tabIcon.href === "icons/32.png", "plain tab icon for mail already there: " + JSON.stringify(results.tabIcon));
+  expect(results.newMail.title === "(4) Baltazar Mail" && results.newMail.dotted === "data:image/png;base64," && results.newMail.cleared === "icons/32.png", "new-mail dot: " + JSON.stringify(results.newMail));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&

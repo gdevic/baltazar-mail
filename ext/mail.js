@@ -234,8 +234,41 @@ async function loadFolders(silent = false) {
 }
 
 function updateTitle() {
-  const inbox = folderByType("INBOX");
-  document.title = (inbox?.unread ? `(${inbox.unread}) ` : "") + "Baltazar Mail";
+  const unread = folderByType("INBOX")?.unread || 0;
+  document.title = (unread ? `(${unread}) ` : "") + "Baltazar Mail";
+  noteInbox(unread);
+}
+
+// Mail that arrives while this tab is in the background puts a red dot on the tab icon (all a
+// pinned tab shows) and on the toolbar button; looking at the tab clears it.
+let lastUnread = null, newMail = false;
+function noteInbox(unread) {
+  if (lastUnread != null && unread > lastUnread && document.visibilityState === "hidden") setNewMail(true);
+  lastUnread = unread;
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") setNewMail(false); });
+
+const PLAIN_ICONS = { 16: "icons/16.png", 32: "icons/32.png" };
+async function dottedIcon(size) {
+  const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = PLAIN_ICONS[size]; });
+  const c = document.createElement("canvas"); c.width = c.height = size;
+  const g = c.getContext("2d"), k = size / 32;
+  g.drawImage(img, 0, 0, size, size);
+  g.fillStyle = "#e5322d"; g.strokeStyle = "#ffffff"; g.lineWidth = Math.max(1, 1.75 * k);
+  g.beginPath(); g.arc(24.5 * k, 24.5 * k, 7 * k, 0, 2 * Math.PI); g.fill(); g.stroke();
+  return { url: c.toDataURL("image/png"), data: g.getImageData(0, 0, size, size) };
+}
+async function setNewMail(on) {
+  if (on === newMail) return;
+  newMail = on;
+  const link = document.querySelector('link[rel="icon"]');
+  try {
+    if (!on) { link.href = PLAIN_ICONS[32]; await chrome.action.setIcon({ path: PLAIN_ICONS }); return; }
+    const [i16, i32] = await Promise.all([dottedIcon(16), dottedIcon(32)]);
+    if (!newMail) return;
+    link.href = i32.url;
+    await chrome.action.setIcon({ imageData: { 16: i16.data, 32: i32.data } });
+  } catch { /* the icon is a convenience; mail works without it */ }
 }
 
 // ---------- list ----------
