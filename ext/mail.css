@@ -85,7 +85,10 @@ body.dragging iframe { pointer-events: none; }
 #toolbar .sp { flex: 1; }
 #toolbar button { font-size: 12px; padding: 1px 7px; }
 #toolbar button:disabled { opacity: .4; cursor: default; }
-#rows { overflow-y: auto; flex: 1; }
+#rows { overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
+#rows > * { flex: none; }
+#rows > .list-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--fg3); }
+#rows > .list-empty .sub { font-size: 11px; }
 .row.marked { background: var(--sel); }
 
 .row.dragging { opacity: .5; }

@@ -20,6 +20,8 @@ const folders = [
   { id: "6", name: "Bulk", types: ["BULK"], unread: 0, total: 2, highestModSeq: 17 },
   { id: "31", name: "Projects", types: ["USER"], unread: 0, total: 5, highestModSeq: 13 },
   { id: "32", name: "Projects/FPGA", types: ["USER"], unread: 0, total: 3, highestModSeq: 14 },
+  { id: "40", name: "Travel", types: ["USER"], unread: 0, total: 0, highestModSeq: 18 },
+  { id: "41", name: "Travel/2025", types: ["USER"], unread: 0, total: 12, highestModSeq: 19 },
 ];
 const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", isPrimary: true, isSending: true, type: "FREE", signature: "<i>sig</i>", signatureActive: true }];
 
@@ -73,7 +75,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       for (const r of top.requests || []) responses.push({ id: r.id, httpCode: 200, response: { result: { message: saved } } });
     }
     else if (/"method":"(POST|DELETE)"/.test(post)) responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 }));
-    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; responses = [{ id: top.id, httpCode: 200, response: { result: { messages: Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)), query: {} } } }]; }
+    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)), query: {} } } }]; }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 
@@ -181,6 +183,17 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.search.and = { tip: await page.locator("#list-title").getAttribute("title"), idVerify: aq.some(q => /id:\(MSG/.test(q) && /keyword:(report|Budget)/.test(q)),
     idExclude: aq.some(q => /id:\(MSG/.test(q) && q.includes("keyword:draft")), noNegKw: !aq.some(q => /-keyword/.test(q)), more: await page.locator("#more").isHidden() };
   await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+
+  // empty folders say so in the list; a parent that only groups subfolders says where the mail is
+  await page.locator("#folder-list .folder", { hasText: "Archive" }).click();
+  await page.waitForSelector("#rows .list-empty", { timeout: 5000 });
+  results.empty = { archive: await page.locator("#rows .list-empty").innerText() };
+  await page.locator("#folder-list .folder .nm", { hasText: /^Travel$/ }).click();
+  await page.waitForFunction(() => /Travel\./.test(document.querySelector("#rows .list-empty")?.textContent || ""), null, { timeout: 5000 });
+  results.empty.parent = await page.locator("#rows .list-empty").innerText();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "empty-folder.png"), clip: { x: 0, y: 0, width: 760, height: 400 } }).catch(() => {});
+  await page.locator("#folder-list .folder", { hasText: "Projects" }).click(); await page.waitForTimeout(400);
+  results.empty.gone = await page.locator("#rows .list-empty").count();
 
   // star column: click toggles star without opening the message
   const starBefore = calls.length;
@@ -367,6 +380,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     results.search.and.tip === "Searched for: Budget AND report AND NOT draft" && results.search.and.idVerify && results.search.and.idExclude && results.search.and.noNegKw && results.search.and.more, "scoped search: " + JSON.stringify(results.search));
   expect(results.searchHelp.placeholder === "Search" && results.searchHelp.tip === null && results.searchHelp.open && results.searchHelp.below && results.searchHelp.filled === "invoice OR receipt" &&
     results.searchHelp.focused === "search" && results.searchHelp.closed && results.searchHelp.keptText === "invoice OR receipt", "search help: " + JSON.stringify(results.searchHelp));
+  expect(results.empty.archive === "No messages in Archive." && results.empty.parent === "No messages in Travel.\nIts 1 subfolder holds 12 messages." && results.empty.gone === 0, "empty folder: " + JSON.stringify(results.empty));
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));

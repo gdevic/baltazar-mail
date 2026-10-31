@@ -59,7 +59,7 @@ systemDark.addEventListener("change", () => { if (settings.theme === "system") a
 const state = {
   folders: [], byId: new Map(), expanded: new Set(),
   view: { kind: "folder", folderId: null, term: "" },
-  messages: [], more: false, selected: -1, openId: null, elsewhere: [],
+  messages: [], more: false, selected: -1, openId: null, elsewhere: [], loading: false,
   marked: new Set(), anchor: -1,
   modseq: new Map(), polling: null, kbFolder: -1, listToken: 0, signedIn: false,
 };
@@ -232,7 +232,7 @@ async function loadList(mode = "fresh") {
   const cursorId = state.messages[state.selected]?.id ?? null;
   const offset = mode === "more" ? state.messages.length : 0;
   const count = mode === "refresh" ? Math.max(PAGE, state.messages.length) : PAGE;
-  if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; renderList(); }
+  if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; state.loading = true; renderList(); }
   else if (mode === "more" && !state.messages.length) return;
   status(mode === "more" ? "loading more…" : "loading…");
   let r, other = null;
@@ -259,11 +259,13 @@ async function loadList(mode = "fresh") {
     } else r = v.kind === "search" ? await api.search(nq, null, count, offset, true) : await api.list(v.folderId, count, offset);
   } catch (e) {
     if (token !== state.listToken) return;
+    state.loading = false;
     if (mode === "fresh" && prevView) { state.view = prevView; renderFolders(); }
     handleError(e, "list");
     return;
   }
   if (token !== state.listToken) return;
+  state.loading = false;
   state.prevView = null;
   if (other) state.elsewhere = other.messages.map(x => ({ ...x, elsewhere: true }));
   else if (mode !== "more") state.elsewhere = [];
@@ -295,6 +297,27 @@ async function loadList(mode = "fresh") {
   }
   const scopedN = state.messages.filter(x => !x.elsewhere).length;
   status(`${name}: ${scopedN} messages${v.scope && elseN ? `, ${elseStr} more in other folders` : ""}${r.truncated ? ` (a term matched over ${CAP} messages; only the newest ${CAP} were combined)` : ""}`, r.ms);
+}
+
+// Shown in place of the list when a view has no messages.
+function emptyNote() {
+  const v = state.view, el = document.createElement("div");
+  el.className = "list-empty";
+  let main, sub = "";
+  if (v.starred) main = "No starred messages.";
+  else if (v.kind === "search") {
+    main = `Nothing matches “${esc(v.term)}”${v.scope ? ` in ${esc(v.scope.name)} or any other folder` : ""}.`;
+    sub = v.scope || v.raw ? "" : "Press ? in the search box for search syntax.";
+  } else {
+    const f = state.byId.get(v.folderId);
+    main = `No messages in ${esc(folderName(f) || "this folder")}.`;
+    // An empty parent folder often just groups subfolders; say where the mail is.
+    const subs = f ? state.folders.filter(x => x.name.startsWith(f.name + "/") && !isHidden(x)) : [];
+    const total = subs.reduce((s, x) => s + (x.total || 0), 0);
+    if (subs.length) sub = total ? `Its ${subs.length} subfolder${subs.length === 1 ? " holds" : "s hold"} ${total.toLocaleString()} message${total === 1 ? "" : "s"}.` : "Its subfolders are empty too.";
+  }
+  el.innerHTML = `<div>${main}</div>${sub ? `<div class="sub">${sub}</div>` : ""}`;
+  return el;
 }
 
 function renderList() {
@@ -350,6 +373,7 @@ function renderList() {
     el.ondragend = () => { el.classList.remove("dragging"); dragging = null; };
     frag.appendChild(el);
   });
+  if (!state.messages.length && !state.loading) frag.appendChild(emptyNote());
   rows.appendChild(frag);
   rows.scrollTop = scrollTop;
   $("more").classList.toggle("hidden", !state.more);
