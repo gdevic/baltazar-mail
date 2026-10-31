@@ -10,11 +10,31 @@
 <div id="app" class="hidden">
   <header id="top">
     <span id="brand">YMail</span>
-    <span id="search-box"><button id="search-scope" class="hidden" tabindex="-1"></button><input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false"></span>
+    <span id="search-box"><button id="search-scope" class="hidden" tabindex="-1"></button><input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false"><button id="search-help-btn" tabindex="-1" title="How to search">?</button></span>
     <button id="compose-btn" title="New message (c)">New message</button>
     <span id="account"></span>
     <button id="gear" title="Settings">⚙</button>
   </header>
+  <div id="search-help" class="hidden" role="dialog" aria-label="How to search">
+    <div class="sh-title">How to search <span>click an example to try it</span></div>
+    <table>
+      <tr><td><code>budget report</code></td><td>Both words (the default)</td></tr>
+      <tr><td><code>"Budget" AND "Report"</code></td><td>Same, spelled out</td></tr>
+      <tr><td><code>invoice OR receipt</code></td><td>Either word</td></tr>
+      <tr><td><code>report -draft</code></td><td>Without a word; <code>NOT draft</code> works too</td></tr>
+      <tr><td><code>meeting (monday OR friday)</code></td><td>Parentheses group</td></tr>
+      <tr><td><code>"quarterly review"</code></td><td>Exact phrase, words next to each other</td></tr>
+      <tr><td><code>from:alex</code> <code>to:sam</code></td><td>Sender; recipient in To or Cc. Name or address</td></tr>
+      <tr><td><code>subject:invoice</code></td><td>Subject contains</td></tr>
+      <tr><td><code>has:attachment</code></td><td>With attachments; <code>-has:attachment</code> without</td></tr>
+      <tr><td><code>is:starred</code> <code>is:unread</code> <code>is:read</code></td><td>By flag</td></tr>
+      <tr><td><code>after:2026-01-31</code> <code>before:2026-06-30</code></td><td>By date</td></tr>
+    </table>
+    <div class="sh-notes">
+      <p><b>Where:</b> the chip on the left shows the scope, the open folder and its subfolders (or Starred). Matches in other folders are listed below a divider. Click the chip, or press Backspace in the empty box, to switch to all mail; <b>Shift+Enter</b> searches all mail at once.</p>
+      <p>Only capital <b>AND</b>, <b>OR</b>, <b>NOT</b> are operators. Words are matched in the text, subject and addresses. Searches that combine words with AND or NOT check up to the 500 newest matches of each word; the status line says when there were more.</p>
+    </div>
+  </div>
   <nav id="folders" tabindex="-1"><input id="folder-filter" placeholder="filter folders" autocomplete="off"><div id="folder-list"></div></nav>
   <div id="split1" class="split"></div>
   <section id="list" tabindex="0">
@@ -174,6 +194,7 @@
       <tr><td>g *</td><td>Starred (all folders)</td></tr>
       <tr><td>/ then Enter</td><td>Search this folder and its subfolders; hits in other folders follow below</td></tr>
       <tr><td>/ then Shift+Enter</td><td>Search all mail</td></tr>
+      <tr><td colspan="2" class="help-sub">Search syntax: click <b>?</b> at the right end of the search box.</td></tr>
       <tr><td>g f</td><td>focus folder list (type to filter, Enter to open)</td></tr>
       <tr><td>x</td><td>select / deselect message (Ctrl-click, Shift-click for ranges)</td></tr>
       <tr><td>Ctrl+A</td><td>select all loaded</td></tr>

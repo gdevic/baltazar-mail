@@ -158,6 +158,29 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.search.allDivider = await page.locator("#rows .elsewhere").count();
   await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
   results.search.backTitle = await page.locator("#list-title").textContent();
+  // search help: plain placeholder, ? opens a popover whose examples fill the box, Esc closes
+  results.searchHelp = { placeholder: await page.locator("#search").getAttribute("placeholder"), tip: await page.locator("#search").getAttribute("title") };
+  await page.locator("#search-help-btn").click();
+  results.searchHelp.open = await page.locator("#search-help").isVisible();
+  const popBox = await page.locator("#search-help").boundingBox(), sBox = await page.locator("#search-box").boundingBox();
+  results.searchHelp.below = popBox.y >= sBox.y + sBox.height && popBox.x + popBox.width <= sBox.x + sBox.width + 1;
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "search-help.png"), clip: { x: 0, y: 0, width: 760, height: 440 } }).catch(() => {});
+  await page.locator("#search-help code", { hasText: "invoice OR receipt" }).click();
+  results.searchHelp.filled = await page.locator("#search").inputValue();
+  results.searchHelp.focused = await page.evaluate(() => document.activeElement.id);
+  await page.keyboard.press("Escape");
+  results.searchHelp.closed = await page.locator("#search-help").isHidden();
+  results.searchHelp.keptText = await page.locator("#search").inputValue();
+  await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+
+  // compound query: words are ANDed through an id-filter request, NOT through a second one
+  const andFrom = calls.length;
+  await page.locator("#search").click(); await page.keyboard.type('"Budget" AND report -draft'); await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("“\"Budget\" AND report -draft”"), null, { timeout: 5000 });
+  const aq = calls.slice(andFrom).filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope.requests[0].uri.split("q=")[1]));
+  results.search.and = { tip: await page.locator("#list-title").getAttribute("title"), idVerify: aq.some(q => /id:\(MSG/.test(q) && /keyword:(report|Budget)/.test(q)),
+    idExclude: aq.some(q => /id:\(MSG/.test(q) && q.includes("keyword:draft")), noNegKw: !aq.some(q => /-keyword/.test(q)), more: await page.locator("#more").isHidden() };
+  await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
 
   // star column: click toggles star without opening the message
   const starBefore = calls.length;
@@ -340,7 +363,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.starCol.call.split(",")[0] === "messages.starFlagUpdate" && !results.starCol.call.includes("getBody") && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.count === "8" && results.starredView.countQuery && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));
   expect(results.search.chip === "in Projects" && typeof results.search.inQ === "string" && results.search.outQ && results.search.title === "“Z80” in Projects" && /8 matches in other folders/.test(results.search.divider) && results.search.elseRows === 8 &&
-    results.search.offChip === "All mail" && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.backTitle === "Projects", "scoped search: " + JSON.stringify(results.search));
+    results.search.offChip === "All mail" && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.backTitle === "Projects" &&
+    results.search.and.tip === "Searched for: Budget AND report AND NOT draft" && results.search.and.idVerify && results.search.and.idExclude && results.search.and.noNegKw && results.search.and.more, "scoped search: " + JSON.stringify(results.search));
+  expect(results.searchHelp.placeholder === "Search" && results.searchHelp.tip === null && results.searchHelp.open && results.searchHelp.below && results.searchHelp.filled === "invoice OR receipt" &&
+    results.searchHelp.focused === "search" && results.searchHelp.closed && results.searchHelp.keptText === "invoice OR receipt", "search help: " + JSON.stringify(results.searchHelp));
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));

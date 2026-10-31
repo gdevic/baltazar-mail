@@ -3,6 +3,7 @@ import { THEMES, applyTheme } from "./themes.js";
 import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
+import { parse, nativeQuery, evaluate, describe, CAP } from "./query.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -236,15 +237,26 @@ async function loadList(mode = "fresh") {
   status(mode === "more" ? "loading more…" : "loading…");
   let r, other = null;
   try {
-    if (v.kind === "search" && v.scope) {
-      // The scope and everything outside it are searched together; hits elsewhere are listed
-      // below the scoped ones once those are complete.
+    // Searches Yahoo can answer in one query page normally; compound ones (AND between words,
+    // NOT of words or senders) are evaluated whole by query.js. A scoped search also searches
+    // everything outside the scope; those hits are listed below the scoped ones.
+    const nq = v.kind === "search" ? (v.raw || nativeQuery(parse(v.term))) : null;
+    if (v.kind === "search" && !nq) {
+      const t0 = performance.now(), ast = parse(v.term);
+      const runQ = (s, n) => api.query(s, n).then(x => x.messages);
+      const [res, oth] = await Promise.all([
+        evaluate(ast, runQ, api.scopeFilter({ include: v.scope })),
+        v.scope ? evaluate(ast, runQ, api.scopeFilter({ exclude: v.scope })).catch(() => null) : null,
+      ]);
+      r = { messages: res.messages, ms: Math.round(performance.now() - t0), complete: true, truncated: res.truncated || !!oth?.truncated };
+      if (oth) other = { messages: oth.messages.slice(0, ELSEWHERE_MAX) };
+    } else if (v.kind === "search" && v.scope) {
       const scoped = mode === "more" ? state.messages.filter(x => !x.elsewhere).length : 0;
       [r, other] = await Promise.all([
-        api.searchScoped(v.term, { raw: v.raw, include: v.scope }, count, scoped),
-        mode === "more" ? null : api.searchScoped(v.term, { raw: v.raw, exclude: v.scope }, ELSEWHERE_MAX, 0).catch(() => ({ messages: [] })),
+        api.searchScoped(v.term, { raw: nq, include: v.scope }, count, scoped),
+        mode === "more" ? null : api.searchScoped(v.term, { raw: nq, exclude: v.scope }, ELSEWHERE_MAX, 0).catch(() => ({ messages: [] })),
       ]);
-    } else r = v.kind === "search" ? await api.search(v.raw || v.term, null, count, offset, !!v.raw) : await api.list(v.folderId, count, offset);
+    } else r = v.kind === "search" ? await api.search(nq, null, count, offset, true) : await api.list(v.folderId, count, offset);
   } catch (e) {
     if (token !== state.listToken) return;
     if (mode === "fresh" && prevView) { state.view = prevView; renderFolders(); }
@@ -259,7 +271,7 @@ async function loadList(mode = "fresh") {
     const have = new Set(state.messages.map(m => m.id));
     state.messages = state.messages.filter(x => !x.elsewhere).concat(r.messages.filter(m => !have.has(m.id)));
   } else state.messages = r.messages;
-  state.more = r.messages.length >= Math.min(count, PAGE);
+  state.more = !r.complete && r.messages.length >= Math.min(count, PAGE);
   if (!state.more) state.messages = state.messages.concat(state.elsewhere);
   if (mode !== "more") {
     const ids = new Set(state.messages.map(m => m.id));
@@ -271,6 +283,7 @@ async function loadList(mode = "fresh") {
   renderList();
   const name = v.starred ? "Starred" : v.kind === "search" ? `“${v.term}” in ${v.scope ? v.scope.name : "all mail"}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
   $("list-title").textContent = name;
+  $("list-title").title = v.kind === "search" && !v.raw ? `Searched for: ${describe(parse(v.term))}` : "";
   const elseN = state.elsewhere.length, elseStr = elseN >= ELSEWHERE_MAX ? `${ELSEWHERE_MAX}+` : String(elseN);
   if (v.kind === "search" && v.scope && elseN && state.more) {
     // Elsewhere hits wait below the scoped pages; offer them up front.
@@ -281,7 +294,7 @@ async function loadList(mode = "fresh") {
     $("list-title").append(" ", link);
   }
   const scopedN = state.messages.filter(x => !x.elsewhere).length;
-  status(`${name}: ${scopedN} messages${v.scope && elseN ? `, ${elseStr} more in other folders` : ""}`, r.ms);
+  status(`${name}: ${scopedN} messages${v.scope && elseN ? `, ${elseStr} more in other folders` : ""}${r.truncated ? ` (a term matched over ${CAP} messages; only the newest ${CAP} were combined)` : ""}`, r.ms);
 }
 
 function renderList() {
@@ -1035,6 +1048,7 @@ function updateScopeChip() {
 async function doSearch(term, everywhere = false) {
   term = term.trim();
   if (!term) return;
+  if (!parse(term)) { status("nothing to search for"); return; }
   const scope = everywhere || scopeOff ? null : scopeOfView();
   const back = state.view.kind === "search" ? state.view.back : state.view;
   state.prevView = state.view;
@@ -1061,6 +1075,7 @@ function onKey(e) {
   const inSearch = document.activeElement === $("search");
   const inFolderFilter = document.activeElement === $("folder-filter");
   const onButton = document.activeElement?.tagName === "BUTTON";
+  if (e.key === "Escape" && !$("search-help").classList.contains("hidden")) { e.preventDefault(); toggleSearchHelp(false); return; }
   if (e.key === "Escape") {
     if (inSearch) {
       $("search").value = ""; $("search").blur();
@@ -1072,7 +1087,7 @@ function onKey(e) {
     if (state.marked.size) { clearMarks(); return; }
   }
   if (inSearch) {
-    if (e.key === "Enter") doSearch($("search").value, e.shiftKey);
+    if (e.key === "Enter") { toggleSearchHelp(false); doSearch($("search").value, e.shiftKey); }
     else if (e.key === "Backspace" && !$("search").value && scopeOfView() && !scopeOff) { scopeOff = true; updateScopeChip(); }
     return;
   }
@@ -1276,5 +1291,26 @@ compose.init({
 });
 $("more-btn").onclick = () => loadList("more");
 $("search-scope").onclick = () => { scopeOff = !scopeOff; updateScopeChip(); $("search").focus(); };
+
+// Search help: a popover under the search box; examples fill the box.
+function toggleSearchHelp(show = $("search-help").classList.contains("hidden")) {
+  const pop = $("search-help");
+  pop.classList.toggle("hidden", !show);
+  $("search-help-btn").classList.toggle("on", show);
+  if (!show) return;
+  const box = $("search-box").getBoundingClientRect();
+  pop.style.top = `${box.bottom + 6}px`;
+  pop.style.left = `${Math.max(12, Math.min(box.right - pop.offsetWidth, window.innerWidth - pop.offsetWidth - 12))}px`;
+}
+$("search-help-btn").onmousedown = e => e.preventDefault();   // keep focus where it is
+$("search-help-btn").onclick = () => toggleSearchHelp();
+$("search-help").onclick = e => {
+  const code = e.target.closest("td:first-child code");
+  if (!code) return;
+  $("search").value = code.textContent;
+  $("search").focus();
+};
+document.addEventListener("mousedown", e => { if (!e.target.closest("#search-help, #search-help-btn, #search-box")) toggleSearchHelp(false); });
+window.addEventListener("resize", () => { if (!$("search-help").classList.contains("hidden")) toggleSearchHelp(true); });
 $("help").onclick = e => { if (e.target.id === "help") $("help").classList.add("hidden"); };
 start();

@@ -21,6 +21,8 @@ Status: browsing, search, reading, mailbox actions (read/unread, star, archive, 
 | `g *` | Starred messages in all folders |
 | `/` then Enter | Search the current folder and its subfolders (or Starred); matches in other folders are listed below a divider |
 | `/` then Shift+Enter | Search all mail (or click the scope chip, or Backspace in the empty box) |
+
+Search syntax: words must all match (`budget report`); `OR` for either (`invoice OR receipt`); `NOT` or a leading `-` to exclude (`report -draft`); parentheses group (`meeting (monday OR friday)`); quotes for an exact phrase (`"quarterly review"`); fields `from:` `to:` `subject:` `has:attachment` `is:starred` `is:unread` `is:read` `after:2026-01-31` `before:2026-06-30`. Yahoo itself only ORs words and cannot negate them, so AND and NOT are evaluated by the client: each combination runs one native query and the remaining terms are checked with an id filter on the server. Each native query looks at up to 500 matches; the status line says when a term had more.
 | `g f` | focus folder filter; type, arrows, `Enter` |
 | `x` | select / deselect (Ctrl-click toggles, Shift-click ranges, Ctrl+A all) |
 | `e` `#` `v` `u` `s` | archive, delete, move, read/unread, star; apply to the selection |

@@ -65,6 +65,8 @@ Multiple ids can go in one `q=id:(a,b,c)` selector; the UI numbers inner request
 
 ## List query language
 
+Boolean behaviour (measured 2026-10-31 with set arithmetic on live results): several `keyword:` terms are always ORed, with or without `AND`, `OR` or parentheses (two words with 126 and 50 hits and 27 in common: `keyword:a keyword:b` returns all 149). A quoted keyword is an exact adjacent phrase (`keyword:"first last"` matched 49 messages, `keyword:"last first"` none). Field filters AND with each other and with the keyword group: `from:("x")`, `to:("x")` (to and cc), `subject:"x"`, `has:attachment`, `is:flagged`, `is:unread`, `is:read`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `folderId:`, and `id:(a OR b ...)`. Negation works only for `-has:attachment`, `-is:flagged`, `-is:read`, `-folderId:`; `-keyword:`, `NOT keyword:`, `-from:`, `-subject:` fail with ET-5006. `after:` needs dashes (slashes give EC-4001); `subject:("x")` does not filter. `id:(...)` with a keyword returns exactly the intersection, also with 500 ids (17 KB query, about 350 ms), which is how the client evaluates AND and NOT (`ext/query.js`).
+
 Folder sets: `folderId:(a OR b OR c)` selects several folders (verified with 217 ids, about 450 ms). Exclusion needs one term per folder, `-folderId:a -folderId:b`; `-folderId:(a OR b)` and `NOT (...)` do not exclude.
 
 `is:flagged` selects starred messages across all folders; `-folderType:(TRASH)-folderType:(BULK)` excludes Trash and Spam (verified 2026-10-31).

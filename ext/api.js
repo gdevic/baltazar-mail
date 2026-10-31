@@ -179,14 +179,22 @@ export function setStarred(ids, flagged) { return update("messages.starFlagUpdat
 // Search limited to a scope or to everything outside it. scope: { ids: [folderId...] } for a
 // folder and its subfolders, or { starred: true }. Yahoo accepts folderId:(a OR b) for a set;
 // for exclusion only one -folderId: term per folder works.
-export async function searchScoped(term, { raw = null, include = null, exclude = null } = {}, count = 100, offset = 0) {
+export function scopeFilter({ include = null, exclude = null } = {}) {
   const parts = [];
   if (include?.starred) parts.push("is:flagged");
   else if (include?.ids?.length) parts.push(include.ids.length === 1 ? `folderId:${include.ids[0]}` : `folderId:(${include.ids.join(" OR ")})`);
   if (exclude?.starred) parts.push("-is:flagged");
   else if (exclude?.ids?.length) parts.push(exclude.ids.map(id => `-folderId:${id}`).join(" "));
-  parts.push(raw || `keyword:${term}`);
-  const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`count:${count} offset:${offset} -sort:date ${parts.join(" ")}`) }]);
+  return parts.join(" ");
+}
+
+export async function searchScoped(term, { raw = null, include = null, exclude = null } = {}, count = 100, offset = 0) {
+  return query([scopeFilter({ include, exclude }), raw || `keyword:${term}`].filter(Boolean).join(" "), count, offset);
+}
+
+// One Yahoo query in its own search language (see query.js for what it can express).
+export async function query(qs, count = 100, offset = 0) {
+  const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`count:${count} offset:${offset} -sort:date ${qs}`) }]);
   return { messages: first(r).messages || [], ms: r.ms };
 }
 
