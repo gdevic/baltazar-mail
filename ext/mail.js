@@ -143,7 +143,31 @@ function renderFolders() {
     };
     frag.appendChild(el);
   };
-  for (const f of sys) { if (filter && !folderName(f).toLowerCase().includes(filter)) continue; add(f, 0, ""); }
+  // Starred is a saved search across folders; dropping messages on it stars them.
+  const addStarred = () => {
+    if (filter && !"starred".includes(filter)) return;
+    const el = document.createElement("div");
+    el.className = "folder sys view" + (state.view.starred ? " active" : "");
+    el.dataset.id = STARRED;
+    el.style.paddingLeft = "8px";
+    el.innerHTML = `<span class="tw"></span><span class="nm" title="Starred messages in all folders (g *)">Starred</span><span class="ct"></span>`;
+    el.onclick = () => openStarred();
+    el.ondragover = e => { if (e.dataTransfer.types.includes(DRAG_TYPE)) { e.preventDefault(); el.classList.add("drop"); } };
+    el.ondragleave = () => el.classList.remove("drop");
+    el.ondrop = e => {
+      el.classList.remove("drop");
+      if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
+      e.preventDefault();
+      const ids = e.dataTransfer.getData(DRAG_TYPE).split(",").filter(Boolean);
+      if (ids.length) run(() => doSetStarred(ids, true));
+    };
+    frag.appendChild(el);
+  };
+  for (const f of sys) {
+    if (filter && !folderName(f).toLowerCase().includes(filter)) { if (folderType(f) === "INBOX") addStarred(); continue; }
+    add(f, 0, "");
+    if (folderType(f) === "INBOX") addStarred();
+  }
   for (const f of user) {
     const parts = f.name.split("/");
     if (filter) { if (folderName(f).toLowerCase().includes(filter)) add(f, 0, ""); continue; }
@@ -232,7 +256,7 @@ async function loadList(mode = "fresh") {
     if (state.openId && !ids.has(state.openId) && v.kind === "folder") clearReader();
   }
   renderList();
-  const name = v.kind === "search" ? `search: ${v.term}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
+  const name = v.starred ? "Starred" : v.kind === "search" ? `search: ${v.term}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
   $("list-title").textContent = name;
   status(`${name}: ${state.messages.length} messages`, r.ms);
 }
@@ -920,6 +944,17 @@ async function openFolder(id) {
   $("list").focus();
 }
 
+const STARRED = "starred";
+const STARRED_Q = "is:flagged -folderType:(SYNC)-folderType:(INVISIBLE)-folderType:(TRASH)-folderType:(BULK)";
+async function openStarred() {
+  state.prevView = state.view;
+  state.view = { kind: "search", folderId: null, term: "Starred", raw: STARRED_Q, starred: true };
+  $("search").value = "";
+  renderFolders();
+  await loadList("fresh");
+  $("list").focus();
+}
+
 async function doSearch(term) {
   term = term.trim();
   if (!term) return;
@@ -960,7 +995,7 @@ function onKey(e) {
       items[state.kbFolder]?.scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter") {
       const el = items[state.kbFolder] || items[0];
-      if (el) { state.kbFolder = -1; openFolder(el.dataset.id); }
+      if (el) { state.kbFolder = -1; el.dataset.id === STARRED ? openStarred() : openFolder(el.dataset.id); }
     }
     return;
   }
@@ -977,6 +1012,7 @@ function onKey(e) {
     const map = { i: "INBOX", s: "SENT", t: "TRASH", d: "DRAFT", a: "ARCHIVE", b: "BULK" };
     if (map[e.key]) { const f = folderByType(map[e.key]); if (f) openFolder(f.id); return; }
     if (e.key === "f") { e.preventDefault(); $("folder-filter").focus(); state.kbFolder = -1; return; }
+    if (e.key === "*") { e.preventDefault(); openStarred(); return; }
     return;
   }
   switch (e.key) {
