@@ -431,7 +431,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   // address book: one summary line in Settings, the list on its own page
   await page.locator("#list").focus(); await page.keyboard.press(",");
   await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent), null, { timeout: 5000 });
-  results.update = { note: await page.locator("#update-note").innerText(), href: await page.locator("#update-note a").getAttribute("href"),
+  results.update = { top: await page.locator("#app-version").textContent(), note: await page.locator("#update-note").innerText(), href: await page.locator("#update-note a").getAttribute("href"),
     dot: await page.locator("#gear.has-update").count(), calls: ghCalls.length, url: ghCalls[0]?.url, cookie: ghCalls.some(c => c.cookie) };
   const ab = { summary: await page.locator("#ab-summary").textContent(), mainHeight: (await page.locator("#settings-box").boundingBox()).height };
   const sb = await page.locator("#settings-box").boundingBox();
@@ -504,8 +504,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
-  expect(/^Version 99\.0\.0 is available \(you have \d+\.\d+\.\d+\)\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&
-    results.update.href === "https://github.com/gdevic/baltazar-mail/releases/latest" && results.update.dot === 1 && results.update.calls === 1 && !results.update.cookie &&
+  expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&
+    results.update.href === "https://github.com/gdevic/baltazar-mail/releases/latest" && results.update.dot === 1 && /^Baltazar Mail \d+\.\d+\.\d+$/.test(results.update.top) && results.update.calls === 1 && !results.update.cookie &&
     results.update.url === "https://api.github.com/repos/gdevic/baltazar-mail/releases/latest", "update notice: " + JSON.stringify(results.update));
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam") && !results.spam.next.empty && results.spam.next.subject && results.spam.next.sel.startsWith(results.spam.next.subject) &&
     results.spam.undone.subject === results.spam.was && results.spam.undone.sel.startsWith(results.spam.was) &&

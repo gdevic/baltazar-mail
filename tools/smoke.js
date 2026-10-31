@@ -74,9 +74,9 @@ const folders = [
   await page.route("https://api.github.com/**", r => r.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: "v0.1.0" }) }));
   await page.goto(`http://127.0.0.1:${port}/mail.html`);
   await page.waitForSelector("#rows .row");
-  // the installed version is always at the foot of Settings
-  await page.waitForFunction(() => document.getElementById("update-note").textContent === "Baltazar Mail 0.14.0", null, { timeout: 4000 }).catch(() => {});
-  const versionLine = await page.locator("#update-note").textContent();
+  // the installed version heads Settings; the update note stays hidden when nothing newer exists
+  await page.waitForFunction(() => document.getElementById("app-version").textContent === "Baltazar Mail 0.14.0", null, { timeout: 4000 }).catch(() => {});
+  const versionLine = await page.locator("#app-version").textContent() + (await page.locator("#update-note").isHidden() ? "" : " +note");
   const rows = await page.locator("#rows .row").count();
   const foldersShown = await page.locator("#folders .folder").allTextContents();
   await page.keyboard.press("j"); await page.keyboard.press("j"); await page.keyboard.press("Enter");

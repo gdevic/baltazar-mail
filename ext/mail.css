@@ -29,8 +29,8 @@ body.dragging { user-select: none; cursor: inherit; }
 body.dragging iframe { pointer-events: none; }
 #gear { padding: 0 6px; position: relative; }
 #gear.has-update::after { content: ""; position: absolute; top: 2px; right: 1px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-#update-note { margin: 10px 0 0; color: var(--fg3); font-size: 11px; }
-#update-note.avail { padding: 6px 8px; border-left: 3px solid var(--accent); color: inherit; font-size: inherit; }
+#app-version { font-weight: 600; margin-bottom: 2px; }
+#update-note { margin: 10px 0 0; padding: 6px 8px; border-left: 3px solid var(--accent); }
 #settings { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; }
 #settings-box { background: var(--bg2); border: 1px solid var(--line); padding: 16px 24px; border-radius: 6px; min-width: 380px; display: flex; flex-direction: column; gap: 6px; }
 #settings-box b { margin-top: 8px; color: var(--accent); }
