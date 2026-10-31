@@ -8,7 +8,7 @@ import { parse, nativeQuery, evaluate, describe, CAP } from "./query.js";
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
 const PAGE = 100;
-const DRAG_TYPE = "application/x-ymail-ids";
+const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
 const DEFAULTS = { layout: "vertical", theme: "dark", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
@@ -220,7 +220,7 @@ async function loadFolders(silent = false) {
 
 function updateTitle() {
   const inbox = folderByType("INBOX");
-  document.title = (inbox?.unread ? `(${inbox.unread}) ` : "") + "YMail";
+  document.title = (inbox?.unread ? `(${inbox.unread}) ` : "") + "Baltazar Mail";
 }
 
 // ---------- list ----------

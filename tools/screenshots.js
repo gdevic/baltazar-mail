@@ -178,7 +178,7 @@ function listFor(q) {
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ymail-shots-"));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-shots-"));
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, viewport: { width: W, height: H },
     args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");

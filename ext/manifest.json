@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YMail",
-  "version": "0.13.4",
-  "description": "A fast, ad-free front end for Yahoo Mail that reuses your existing Yahoo sign-in. Works equally well with mouse or keyboard.",
+  "name": "Baltazar Mail",
+  "version": "0.14.0",
+  "description": "A fast, ad-free client for Yahoo Mail that reuses your existing Yahoo sign-in. Not affiliated with Yahoo.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/16.png",
@@ -11,7 +11,7 @@
     "128": "icons/128.png"
   },
   "action": {
-    "default_title": "Open YMail"
+    "default_title": "Open Baltazar Mail"
   },
   "background": {
     "service_worker": "background.js",

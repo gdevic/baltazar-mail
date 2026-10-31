@@ -26,7 +26,7 @@ const folders = [
 const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", isPrimary: true, isSending: true, type: "FREE", signature: "<i>sig</i>", signatureActive: true }];
 
 (async () => {
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "ymail-profile-"));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-profile-"));
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;

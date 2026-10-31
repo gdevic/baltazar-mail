@@ -4,7 +4,7 @@ import * as api from "./api.js";
 // One entry per lowercase address: counts of messages sent to and received from it, the display
 // names seen (the most frequent one is shown), and the last time it was used.
 
-const DB = "ymail-lite", STORE = "contacts", META = "meta";
+const DB = "baltazar-mail", STORE = "contacts", META = "meta";
 let db = null;
 let own = new Set();
 let cache = null;          // Map email -> entry, loaded once; writes go through to IndexedDB

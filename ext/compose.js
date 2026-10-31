@@ -384,7 +384,7 @@ function extractInline(html) {
     const bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
     const ext = (mime.split("/")[1] || "png").replace("jpeg", "jpg");
     const name = `inline-${++n}.${ext}`;
-    const contentId = `${Date.now()}-${n}@ymail`;
+    const contentId = `${Date.now()}-${n}@baltazar-mail`;
     inline.push({ file: new File([bytes], name, { type: mime }), contentId });
     img.setAttribute("src", `cid:${contentId}`);
     img.removeAttribute("class"); img.removeAttribute("data-name");

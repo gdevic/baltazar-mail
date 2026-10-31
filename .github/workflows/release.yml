@@ -36,15 +36,16 @@ jobs:
 
       - name: Package
         run: |
-          # The folder inside is always "ymail": the browser ties an unpacked extension (and its
-          # settings and address book) to its folder path, so updates unzip over the same folder.
-          zipname="ymail-${{ steps.ver.outputs.version }}.zip"
-          mkdir -p dist/ymail
-          cp -r ext/. dist/ymail/
-          find dist/ymail -name '.DS_Store' -delete
+          # The folder inside is always "baltazar-mail": the browser ties an unpacked extension (and
+          # its settings and address book) to its folder path, so updates unzip over the same folder.
+          zipname="baltazar-mail-${{ steps.ver.outputs.version }}.zip"
+          mkdir -p dist/baltazar-mail
+          cp -r ext/. dist/baltazar-mail/
+          find dist/baltazar-mail -name '.DS_Store' -delete
+          cp LICENSE dist/baltazar-mail/LICENSE
           cd dist
-          zip -qr9 "$zipname" ymail
-          unzip -l "$zipname" | grep -q " ymail/manifest.json$"
+          zip -qr9 "$zipname" baltazar-mail
+          unzip -l "$zipname" | grep -q " baltazar-mail/manifest.json$"
           sha256sum "$zipname" > "$zipname.sha256"
 
       - name: Publish
@@ -55,14 +56,14 @@ jobs:
           version="${{ steps.ver.outputs.version }}"
           cat > notes.md <<NOTES
           ### Install
-          1. Download **ymail-$version.zip** below and unzip it into a folder you will keep, such as Documents; it contains one folder, \`ymail\`.
+          1. Download **baltazar-mail-$version.zip** below and unzip it into a folder you will keep, such as Documents; it contains one folder, \`baltazar-mail\`.
           2. Open \`edge://extensions\` (or \`chrome://extensions\`) and turn on **Developer mode**.
-          3. Click **Load unpacked** and select the \`ymail\` folder.
-          4. Be signed in to mail.yahoo.com in the same browser profile, then click the YMail toolbar icon.
+          3. Click **Load unpacked** and select the \`baltazar-mail\` folder.
+          4. Be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon.
 
           ### Update
-          Unzip the new release over the same \`ymail\` folder, replacing the files, then click **Reload** on the YMail card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.
+          Unzip the new release over the same \`baltazar-mail\` folder, replacing the files, then click **Reload** on the Baltazar Mail card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.
 
           NOTES
           gh release create "$tag" dist/*.zip dist/*.zip.sha256 \
-            --title "YMail $version" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"
+            --title "Baltazar Mail $version" --notes-file notes.md --generate-notes --target "$GITHUB_SHA"
