@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Baltazar Mail",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "description": "A fast, ad-free client for Yahoo Mail that reuses your existing Yahoo sign-in. Not affiliated with Yahoo.",
   "minimum_chrome_version": "116",
   "icons": {
