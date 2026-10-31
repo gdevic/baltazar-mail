@@ -139,7 +139,7 @@ function renderFolders() {
       el.classList.remove("drop");
       if (!droppable || !e.dataTransfer.types.includes(DRAG_TYPE)) return;
       e.preventDefault();
-      const ids = e.dataTransfer.getData(DRAG_TYPE).split(",").filter(Boolean);
+      const ids = byIds(e.dataTransfer.getData(DRAG_TYPE).split(",")).map(m => m.id);
       if (ids.length) run(() => doMove(ids, f.id));
     };
     frag.appendChild(el);
@@ -159,7 +159,7 @@ function renderFolders() {
       el.classList.remove("drop");
       if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
       e.preventDefault();
-      const ids = e.dataTransfer.getData(DRAG_TYPE).split(",").filter(Boolean);
+      const ids = byIds(e.dataTransfer.getData(DRAG_TYPE).split(",")).map(m => m.id);
       if (ids.length) run(() => doSetStarred(ids, true));
     };
     frag.appendChild(el);
@@ -467,25 +467,42 @@ function cleanHtml(html) {
   return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] });
 }
 
-// Inline parts (cid images) are served by cloud-apis.mail.yahoo.com and need the session cookies,
-// which the sandboxed frame cannot send. Fetch them here and hand the frame data: URLs instead.
+// Inline images (cid parts) are thumbnails of message parts in this mailbox, served by
+// cloud-apis.mail.yahoo.com with the session cookies, which the sandboxed frame cannot send. They
+// are fetched here and handed to the frame as data: URLs. Only real <img> sources with exactly that
+// address shape in the user's own mailbox are fetched, and only image responses are kept, so a
+// message cannot make the extension request any other Yahoo address with the user's session.
 const partCache = new Map();
+const PART_PATH = /^\/ws\/v3\/mailboxes\/@\.id==([A-Za-z0-9_-]+)\/messages\/@\.id==[A-Za-z0-9_-]+\/content\/parts\/@\.id==[0-9.]+\/thumbnail(?:&[A-Za-z0-9_.~%=-]+)*$/;
+function isPartUrl(u, mailboxId) {
+  try {
+    const url = new URL(u);
+    const m = url.pathname.match(PART_PATH);
+    return url.protocol === "https:" && url.host === "cloud-apis.mail.yahoo.com" && !url.username && !url.password &&
+      m && m[1] === mailboxId && /^(\?[A-Za-z0-9_.~%=&-]*)?$/.test(url.search) && !url.hash;
+  } catch { return false; }
+}
+
 async function inlineYahooParts(html) {
-  const re = /(<img\b[^>]*?\ssrc=)(["'])(https:\/\/[a-z0-9.-]*mail\.yahoo\.com\/[^"']+)\2/gi;
-  const urls = [...new Set([...html.matchAll(re)].map(m => m[3]))].slice(0, 60);
-  if (!urls.length) return html;
+  const tpl = document.createElement("template");      // inert: nothing in it loads
+  tpl.innerHTML = html;
+  const mailboxId = (await api.bootstrap()).mailboxId;
+  const imgs = [...tpl.content.querySelectorAll("img[src]")].filter(img => isPartUrl(img.getAttribute("src"), mailboxId));
+  if (!imgs.length) return html;
+  const urls = [...new Set(imgs.map(img => img.getAttribute("src")))].slice(0, 60);
   await Promise.all(urls.map(async u => {
     if (partCache.has(u)) return;
     try {
-      const resp = await fetch(u.replace(/&amp;/g, "&"), { credentials: "include" });
+      const resp = await fetch(u, { credentials: "include" });
       if (!resp.ok) throw new Error(resp.status);
       const blob = await resp.blob();
-      if (!/^image\//.test(blob.type) && blob.type) throw new Error(blob.type);
+      if (!/^image\/(png|jpeg|gif|webp|bmp|avif)$/i.test(blob.type)) throw new Error(blob.type || "untyped");
       const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(blob); });
       partCache.set(u, dataUrl);
     } catch { partCache.set(u, null); }
   }));
-  return html.replace(re, (m, pre, qu, u) => partCache.get(u) ? `${pre}${qu}${partCache.get(u)}${qu}` : m);
+  for (const img of imgs) { const d = partCache.get(img.getAttribute("src")); if (d) img.setAttribute("src", d); }
+  return tpl.innerHTML;
 }
 
 // ---------- contact cards ----------

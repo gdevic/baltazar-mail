@@ -214,7 +214,7 @@ export async function open(opts) {
   const sig = fromAcct.signatureActive && fromAcct.signature ? `<div><br></div><div><br></div><div class="ymsig">${fromAcct.signature}</div>` : "<div><br></div>";
   setMode(hooks.settings().composeHtml !== false);
   applyDefaultFont();
-  $("c-editor").innerHTML = bodyHtml || sig;
+  $("c-editor").innerHTML = editorSafe(bodyHtml || sig);
   syncFontControls();
   $("c-text").value = bodyHtml ? toText(bodyHtml) : (fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "");
   renderQuote(false);
@@ -244,7 +244,7 @@ export async function close(save = true) {
   clearInterval(autosaveTimer);
   hideSuggest();
   if (save && dirty && hasContent()) { await saveNow(true); hooks.status("message saved to Drafts"); }
-  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null;
+  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null;
   hooks.onClose();
 }
 
@@ -392,11 +392,37 @@ function extractInline(html) {
   return { html: doc.body.innerHTML, inline };
 }
 
+// The editor lives in the app's own page, so HTML put into it (a reopened draft, which can hold a
+// quoted message, or a signature) is cleaned more strictly than in the reader: no style sheets,
+// and no ids, names or classes that could collide with the app's own, apart from the quote and
+// signature markers.
+const KEEP_CLASSES = new Set(["ymq", "ymsig"]);
+function editorSafe(html) {
+  const frag = globalThis.DOMPurify.sanitize(html, { RETURN_DOM_FRAGMENT: true, SANITIZE_NAMED_PROPS: true,
+    FORBID_TAGS: ["style", "link", "meta", "form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["id", "name", "ping"] });
+  for (const el of frag.querySelectorAll("[class]")) {
+    const keep = [...el.classList].filter(c => KEEP_CLASSES.has(c));
+    if (keep.length) el.className = keep.join(" "); else el.removeAttribute("class");
+  }
+  const box = document.createElement("div");
+  box.appendChild(frag);
+  return box.innerHTML;
+}
+
+// The quoted original is the sender's HTML, so it is shown in a sandboxed frame like the reader:
+// its styles and element ids cannot reach the app's own page.
 function renderQuote(expanded) {
   const has = !!draft.quoteHtml;
   $("c-quote-wrap").classList.toggle("hidden", !has);
-  if (!has) return;
-  $("c-quote").innerHTML = draft.html ? draft.quoteHtml : `<pre>${esc(draft.quoteText)}</pre>`;
+  if (!has) { $("c-quote").replaceChildren(); return; }
+  const frame = document.createElement("iframe");
+  frame.setAttribute("sandbox", "");
+  frame.referrerPolicy = "no-referrer";
+  frame.title = "Quoted text";
+  frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https:">` +
+    `<style>body{margin:0;font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif;color:#333;word-wrap:break-word}pre{white-space:pre-wrap;font:inherit}img{max-width:100%;height:auto}</style>` +
+    (draft.html ? draft.quoteHtml : `<pre>${esc(draft.quoteText)}</pre>`);
+  $("c-quote").replaceChildren(frame);
   $("c-quote").classList.toggle("hidden", !expanded);
   $("c-quote-toggle").textContent = expanded ? "Hide quoted text" : "Show quoted text";
 }
@@ -491,7 +517,7 @@ async function send() {
   if (!sentId || !d.draftFolderId) { hooks.status("Sent or Drafts folder not found"); return; }
   const snapshot = { ...draft, d, editorHtml: draft.html ? $("c-editor").innerHTML : null };
   clearInterval(autosaveTimer);
-  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; dirty = false;
+  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null; dirty = false;
   hooks.onClose();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
@@ -510,7 +536,7 @@ async function reopenFrom(snap) {
   $("c-subject").value = snap.d.subject;
   setMode(snap.html);
   applyDefaultFont();
-  if (snap.html) $("c-editor").innerHTML = snap.editorHtml || "";
+  if (snap.html) $("c-editor").innerHTML = editorSafe(snap.editorHtml || "");
   else $("c-text").value = snap.d.text.replace(/\n\n[\s\S]*$/, m => snap.quoteText && m.trim() === snap.quoteText.trim() ? "" : m);
   renderQuote(false); renderFiles();
   $("compose").classList.remove("hidden");

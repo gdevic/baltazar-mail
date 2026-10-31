@@ -315,11 +315,19 @@ async function download(a) {
   }
 }
 
+// A blob opened in a tab is shown under the extension's own address, so only types the browser
+// displays inertly are opened that way, and the type comes from the file name, never from the
+// sender's MIME header. Anything else is downloaded instead.
+const OPEN_SAFE = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
+  mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4", flac: "audio/flac", mp4: "video/mp4", webm: "video/webm", m4v: "video/mp4" };
+
 async function openInTab(a) {
   const k = kindOf(a), ext = extOf(a.filename);
+  const type = OPEN_SAFE[ext] || (k === "text" || k === "code" ? "text/plain;charset=utf-8" : null);
+  if (!type) return download(a);
   try {
     const blob = await fetchBlob(a);
-    const u = URL.createObjectURL(new Blob([blob], { type: MIME[ext] || (k === "text" || k === "code" ? "text/plain;charset=utf-8" : blob.type) }));
+    const u = URL.createObjectURL(new Blob([blob], { type }));
     window.open(u, "_blank");
     setTimeout(() => URL.revokeObjectURL(u), 60000);
   } catch { chrome.tabs.create({ url: a.downloadUrl.replace(/&amp;/g, "&") }); }

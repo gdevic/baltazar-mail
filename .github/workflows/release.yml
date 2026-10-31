@@ -24,10 +24,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Values from the tag reach the shell only through environment variables, never by
+      # expansion into the script text, and the tag must look like a version.
       - name: Check version
         id: ver
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="$TAG"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag must look like v1.2.3"
+            exit 1
+          fi
           version=$(jq -er .version ext/manifest.json)
           if [ "$tag" != "v$version" ]; then
             echo "::error::Tag $tag does not match ext/manifest.json version $version"
@@ -40,10 +48,12 @@ jobs:
         run: node tools/vendor-check.mjs --upstream --osv
 
       - name: Package
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           # The folder inside is always "baltazar-mail": the browser ties an unpacked extension (and
           # its settings and address book) to its folder path, so updates unzip over the same folder.
-          zipname="baltazar-mail-${{ steps.ver.outputs.version }}.zip"
+          zipname="baltazar-mail-$VERSION.zip"
           mkdir -p dist/baltazar-mail
           cp -r ext/. dist/baltazar-mail/
           find dist/baltazar-mail -name '.DS_Store' -delete
@@ -61,9 +71,12 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          tag="${{ steps.ver.outputs.tag }}"
-          version="${{ steps.ver.outputs.version }}"
+          tag="$TAG"
+          version="$VERSION"
           cat > notes.md <<NOTES
           ### Install
           1. Download **baltazar-mail-$version.zip** below and unzip it into a folder you will keep, such as Documents; it contains one folder, \`baltazar-mail\`.
@@ -72,7 +85,7 @@ jobs:
           4. Be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon.
 
           ### Verify (optional)
-          This ZIP was built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-$version.zip -R ${{ github.repository }}\`
+          This ZIP was built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-$version.zip -R $REPO\`
 
           ### Update
           Unzip the new release over the same \`baltazar-mail\` folder, replacing the files, then click **Reload** on the Baltazar Mail card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.

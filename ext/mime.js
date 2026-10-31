@@ -7,11 +7,16 @@ const latin1 = bytes => {
   return s;
 };
 
+// Limits that keep a hostile message from making parsing slow: every search stays inside its own
+// part, header blocks are bounded, and so are the number of parts and the nesting depth.
+const HEADER_MAX = 256 * 1024, MAX_PARTS = 1000, MAX_DEPTH = 16;
+
 function head(s, start, end) {
-  const a = s.indexOf("\r\n\r\n", start), b = s.indexOf("\n\n", start);
+  const block = s.slice(start, Math.min(end, start + HEADER_MAX));
+  const a = block.indexOf("\r\n\r\n"), b = block.indexOf("\n\n");
   let he = end, bs = end;
-  if (a >= 0 && a < end && (b < 0 || a < b)) { he = a; bs = a + 4; }
-  else if (b >= 0 && b < end) { he = b; bs = b + 2; }
+  if (a >= 0 && (b < 0 || a < b)) { he = start + a; bs = he + 4; }
+  else if (b >= 0) { he = start + b; bs = he + 2; }
   const headers = {};
   for (const line of s.slice(start, he).replace(/\r?\n[ \t]+/g, " ").split(/\r?\n/)) {
     const c = line.indexOf(":");
@@ -73,16 +78,17 @@ function decodeWords(s) {
 
 function splitParts(s, start, end, boundary) {
   const delim = "--" + boundary, out = [];
+  const region = s.slice(start, end);                 // searches cannot run past this part
   const find = from => {
-    for (let k = from; ;) {
-      k = s.indexOf(delim, k);
-      if (k < 0 || k >= end) return -1;
-      if (k === start || s[k - 1] === "\n") return k;
+    for (let k = from - start; ;) {
+      k = region.indexOf(delim, k);
+      if (k < 0) return -1;
+      if (k === 0 || region[k - 1] === "\n") return start + k;
       k += delim.length;
     }
   };
   let cur = -1, k = find(start), closed = false;
-  while (k >= 0) {
+  while (k >= 0 && out.length < MAX_PARTS) {
     if (cur >= 0) { let e = k; if (s[e - 1] === "\n") e--; if (s[e - 1] === "\r") e--; out.push([cur, Math.max(cur, e)]); }
     if (s.startsWith("--", k + delim.length)) { closed = true; break; }
     const nl = s.indexOf("\n", k);
@@ -93,11 +99,12 @@ function splitParts(s, start, end, boundary) {
   return out;
 }
 
-function walk(s, start, end, num, out) {
+function walk(s, start, end, num, out, depth = 0) {
+  if (out.length >= MAX_PARTS) return;
   const { headers, bodyStart } = head(s, start, end);
   const ct = parseParams(headers["content-type"] || "text/plain");
-  if (ct.value.startsWith("multipart/") && ct.params.boundary) {
-    splitParts(s, bodyStart, end, ct.params.boundary).forEach(([a, b], i) => walk(s, a, b, num ? `${num}.${i + 1}` : String(i + 1), out));
+  if (ct.value.startsWith("multipart/") && ct.params.boundary && depth < MAX_DEPTH) {
+    splitParts(s, bodyStart, end, ct.params.boundary).forEach(([a, b], i) => walk(s, a, b, num ? `${num}.${i + 1}` : String(i + 1), out, depth + 1));
     return;
   }
   const cd = parseParams(headers["content-disposition"] || "");

@@ -113,6 +113,7 @@ export async function search(term, folderId = null, count = 100, offset = 0, raw
 }
 
 export async function body(msgId) {
+  checkIds([msgId]);
   const r = await batch("messages.getBody", [{
     id: "GetSimpleBody_0", method: "GET",
     uri: `/ws/v3/mailboxes/@.id==<mb>/messages/@.id==${msgId}/content/simplebody/full`,
@@ -127,6 +128,7 @@ export async function body(msgId) {
 // Full RFC 822 source. Yahoo's attachment download links cannot be fetched, so attachment
 // bytes are cut out of this (see mime.js).
 export async function rawMessage(msgId, retry = true) {
+  checkIds([msgId]);
   const s = await bootstrap();
   const qs = new URLSearchParams({ appId: s.appId, wssid: s.wssid, ymreqid: uuid() });
   const resp = await fetch(`${JWS}/ws/v3/mailboxes/@.id==${s.mailboxId}/messages/@.id==${msgId}/content/rawplaintext?${qs}`, { credentials: "include" });
@@ -160,7 +162,15 @@ export async function docPages(documentId, start, end, retryCount = 0) {
 // ---------- mutations ----------
 // Each id gets its own inner request, as the web client does; one HTTP round trip for all of them.
 // Returns the ids that succeeded and those that failed; throws only if nothing succeeded.
+// Message ids end up inside Yahoo query strings and URIs; anything but Yahoo's id alphabet is refused.
+const MSG_ID = /^[A-Za-z0-9_-]{1,64}$/;
+function checkIds(ids) {
+  const bad = ids.find(id => !MSG_ID.test(String(id)));
+  if (bad !== undefined) throw new ApiError(`refusing malformed message id ${JSON.stringify(String(bad).slice(0, 40))}`);
+}
+
 async function perMessage(name, ids, make) {
+  checkIds(ids);
   const reqs = ids.map((id, i) => make(id, i));
   const r = await batch(name, reqs);
   const byReqId = new Map(r.map(x => [x.id, x]));

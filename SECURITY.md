@@ -23,6 +23,10 @@ Baltazar Mail runs with your Yahoo Mail session, so the most important problems 
 - **Code scanning.** CodeQL scans the extension and the workflows on every push and weekly.
 - **Releases.** Release ZIPs are built by GitHub Actions from a tagged commit, never on a personal machine, and carry a signed build provenance. Verify one with `gh attestation verify baltazar-mail-<version>.zip -R gdevic/baltazar-mail`.
 
+## Reviews
+
+An independent review on 31 October 2026 found six issues, none allowing script to run; all are fixed. The summary is in [docs/security-review.md](docs/security-review.md).
+
 ## Known limits
 
 The extension acts with your Yahoo session; the protections above keep your data from leaving for a third party, but they cannot stop misuse through Yahoo itself, such as sending mail as you, if the extension's own code were compromised. That is why the code is plain, unminified JavaScript with no build step: what is in this repository is exactly what runs.
