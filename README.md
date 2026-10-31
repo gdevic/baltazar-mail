@@ -32,14 +32,20 @@ All names, addresses and messages in these screenshots are invented; `node tools
 
 ## Install
 
+**Microsoft Edge:** install [Baltazar Mail from Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/baltazar-mail/fmfafokapbejponlbknighiecagfcnai). Edge keeps it up to date. Be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon.
+
+**Chrome and other Chromium browsers**, or to run a release before it reaches the store:
+
 1. Download `baltazar-mail-<version>.zip` from the [latest release](https://github.com/gdevic/baltazar-mail/releases/latest) and unzip it into a folder you will keep; it contains one folder, `baltazar-mail`.
-2. Open `edge://extensions` (or `chrome://extensions`) and turn on Developer mode.
+2. Open `chrome://extensions` (or `edge://extensions`) and turn on Developer mode.
 3. Click Load unpacked and select the `baltazar-mail` folder.
 4. Be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon.
 
-To update, unzip the new release over the same `baltazar-mail` folder and click Reload on the extensions page. Removing the extension instead would delete its settings and address book. From a clone of this repository, load the `ext/` folder the same way.
+A copy installed this way says in Settings when a newer release is out. To update, unzip the new release over the same `baltazar-mail` folder and click Reload on the extensions page. Removing the extension instead would delete its settings and address book. From a clone of this repository, load the `ext/` folder the same way.
 
-To publish a release, set `version` in `ext/manifest.json`, commit, and push a matching tag (`git tag v0.13.4 && git push origin v0.13.4`), or run the Release workflow from the Actions tab with that tag. The workflow checks the tag against the manifest, builds the ZIP and creates the release.
+Moving from a ZIP install to the Edge Add-ons copy: the store copy is a separate extension, so set your preferences again once; its address book rebuilds itself from your mail. Then remove the ZIP copy so only one toolbar button remains.
+
+To publish a release, set `version` in `ext/manifest.json`, commit, and run the Release workflow from the Actions tab with a matching tag (for example `v0.16.0`). It runs every test suite, then builds the install ZIP and the store ZIP (`-store.zip`, with `manifest.json` at the top level) and creates the release.
 
 Baltazar Mail relies on an undocumented Yahoo API that can change at any time; what is known about it is in `docs/yahoo-v3.md`. 
 ## Security and privacy
