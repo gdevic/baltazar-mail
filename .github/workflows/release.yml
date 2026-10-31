@@ -69,11 +69,18 @@ jobs:
           zip -qr9 "$zipname" baltazar-mail
           unzip -l "$zipname" | grep -q " baltazar-mail/manifest.json$"
           sha256sum "$zipname" > "$zipname.sha256"
+          # The same files with manifest.json at the top level, as browser stores require.
+          storename="baltazar-mail-$VERSION-store.zip"
+          (cd baltazar-mail && zip -qr9 "../$storename" .)
+          unzip -l "$storename" | grep -q " manifest.json$"
+          sha256sum "$storename" > "$storename.sha256"
 
       - name: Record build provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/baltazar-mail-${{ steps.ver.outputs.version }}.zip
+          subject-path: |
+            dist/baltazar-mail-${{ steps.ver.outputs.version }}.zip
+            dist/baltazar-mail-${{ steps.ver.outputs.version }}-store.zip
 
       - name: Publish
         env:
@@ -93,6 +100,8 @@ jobs:
 
           ### Verify (optional)
           This ZIP was built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-$version.zip -R $REPO\`
+
+          The \`-store.zip\` asset holds the same files with \`manifest.json\` at the top level, as uploaded to browser stores; to install by hand, use the other ZIP.
 
           ### Update
           Unzip the new release over the same \`baltazar-mail\` folder, replacing the files, then click **Reload** on the Baltazar Mail card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.

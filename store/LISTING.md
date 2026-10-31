@@ -1,6 +1,6 @@
 # Microsoft Edge Add-ons: submission kit
 
-Everything to paste into Partner Center for Baltazar Mail. Upload the release ZIP (`baltazar-mail-<version>.zip` from GitHub Releases) as the package. Images are in this folder; `node tools/screenshots.js --store` regenerates them.
+Everything to paste into Partner Center for Baltazar Mail. Upload `baltazar-mail-<version>-store.zip` from GitHub Releases as the package: the same files as the release ZIP, with `manifest.json` at the top level as the store requires. Images are in this folder; `node tools/screenshots.js --store` regenerates them.
 
 ## Account
 
