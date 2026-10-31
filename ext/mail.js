@@ -14,12 +14,15 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
   const stored = (await chrome.storage.local.get("settings")).settings || {};
   settings = { ...DEFAULTS, ...stored };
+  // Row height used to be pixels at the normal text size (22 px is 100%).
+  if (stored.rowH && stored.rowPct == null) settings.rowPct = Math.min(150, Math.max(80, Math.round(stored.rowH / 22 * 20) * 5));
+  delete settings.rowH;
   state.expanded = new Set(settings.expanded);
 }
 
@@ -45,10 +48,11 @@ function applyLayout() {
   r.setProperty("--list-w", settings.listW + "px");
   r.setProperty("--list-h", settings.listH + "%");
   // Text size, as a percentage of the 13px design size, scales every text in the interface
-  // together; rows are never shorter than the text needs.
+  // together. Row height is relative to the text: 100% is 1.7 lines of it (22 px at normal
+  // size), and the 80% minimum still fits the 1.35 line height, at every text size.
   const fs = 13 * settings.textPct / 100;
   r.setProperty("--fs", fs + "px");
-  r.setProperty("--row-h", Math.max(settings.rowH, Math.round(fs * 1.7)) + "px");
+  r.setProperty("--row-h", Math.round(fs * 1.7 * settings.rowPct / 100) + "px");
 }
 
 function syncSettingsForm() {
@@ -56,7 +60,7 @@ function syncSettingsForm() {
   $("lightTheme").value = settings.lightTheme;
   for (const el of document.querySelectorAll("#settings input[type=radio]")) el.checked = settings[el.name] === el.value;
   $("poll").value = settings.pollSec;
-  $("density").value = settings.rowH;
+  $("density").value = settings.rowPct;
   $("textpct").value = settings.textPct;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
   $("undosend").value = settings.undoSendSec;
@@ -1409,7 +1413,7 @@ function wireSettings() {
     applySettings(); saveSettings();
     if (currentBody && state.openId) showBody();
   };
-  $("density").onchange = () => { settings.rowH = Math.min(32, Math.max(18, Number($("density").value) || 22)); applySettings(); saveSettings(); };
+  $("density").onchange = () => { settings.rowPct = Math.min(150, Math.max(80, Math.round((Number($("density").value) || 100) / 5) * 5)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
   wireAddressBook();
   $("settings-reset").onclick = () => { Object.assign(settings, { folderW: DEFAULTS.folderW, listW: DEFAULTS.listW, listH: DEFAULTS.listH }); applySettings(); saveSettings(); };
