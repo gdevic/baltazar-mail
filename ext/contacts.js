@@ -130,6 +130,19 @@ export async function hide(email, hidden = true) {
   await tx(STORE, "readwrite", s => s.put(e));
 }
 
+// Every entry, for the address book manager.
+export async function all() {
+  await loadAll();
+  return [...cache.values()].map(e => ({ name: e.name, email: e.email, sent: e.sent || 0, received: e.received || 0, last: e.last || 0, hidden: !!e.hidden }));
+}
+
+export async function hideMany(emails, hidden = true) {
+  await loadAll();
+  const list = emails.map(x => cache.get(String(x).toLowerCase())).filter(Boolean);
+  for (const e of list) e.hidden = hidden;
+  if (list.length) await tx(STORE, "readwrite", s => { for (const e of list) s.put(e); });
+}
+
 export async function hiddenList() {
   await loadAll();
   return [...cache.values()].filter(e => e.hidden).sort((a, b) => a.email.localeCompare(b.email)).map(e => ({ name: e.name, email: e.email }));

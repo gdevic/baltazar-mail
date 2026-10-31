@@ -128,6 +128,7 @@
 </div>
 <div id="settings" class="hidden">
   <div id="settings-box">
+   <div id="settings-main">
     <b>Layout</b>
     <label><input type="radio" name="layout" value="vertical"> Three columns: folders | messages | preview</label>
     <label><input type="radio" name="layout" value="horizontal"> Folders left, messages above preview</label>
@@ -153,9 +154,18 @@
     <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>
     <label><input type="number" id="undosend" min="0" max="60" step="1" style="width:60px"> seconds to hold a message before sending, so it can be undone (0: send at once)</label>
     <b>Address book</b>
-    <label><span id="hidden-summary">No hidden addresses.</span></label>
-    <div id="hidden-list"></div>
+    <div class="ab-row"><span id="ab-summary">Learned from your Inbox and Sent headers.</span><button id="ab-open">Manage…</button></div>
     <p><button id="settings-close">Close</button> <button id="settings-reset">Reset pane sizes</button></p>
+   </div>
+   <div id="settings-ab" class="hidden">
+    <div class="ab-head"><button id="ab-back" title="Back to Settings (Esc)">‹ Settings</button><b>Address book</b><span></span></div>
+    <div class="ab-tools">
+      <input id="ab-filter" type="search" placeholder="Filter by name or address" autocomplete="off" spellcheck="false">
+      <span class="ab-seg" role="tablist"><button data-tab="all" class="on">All <i id="ab-n-all"></i></button><button data-tab="hidden">Hidden <i id="ab-n-hidden"></i></button></span>
+    </div>
+    <div id="ab-list"></div>
+    <div class="ab-foot"><span id="ab-status"></span><button id="ab-bulk" class="hidden"></button></div>
+   </div>
   </div>
 </div>
 <div id="ctx" class="hidden"></div>

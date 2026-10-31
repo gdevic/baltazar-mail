@@ -359,6 +359,35 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.composeHiddenAfterSend = await page.locator("#compose").isHidden();
   results.readerBack = await page.locator("#reader").isVisible();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "runtime.png") }).catch(() => {});
+
+  // address book: one summary line in Settings, the list on its own page
+  await page.locator("#list").focus(); await page.keyboard.press(",");
+  await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent), null, { timeout: 5000 });
+  const ab = { summary: await page.locator("#ab-summary").textContent(), mainHeight: (await page.locator("#settings-box").boundingBox()).height };
+  await page.locator("#ab-open").click();
+  await page.waitForSelector("#settings-ab:not(.hidden) .ab-item");
+  ab.mainHidden = await page.locator("#settings-main").isHidden();
+  ab.rows = await page.locator("#ab-list .ab-item").count();
+  ab.focus = await page.evaluate(() => document.activeElement.id);
+  await page.keyboard.type("x.com");
+  ab.filtered = await page.locator("#ab-list .ab-item").count();
+  ab.bulkText = await page.locator("#ab-bulk").textContent();
+  await page.locator("#ab-bulk").click();
+  ab.hiddenCount = await page.locator("#ab-n-hidden").textContent();
+  ab.offRows = await page.locator("#ab-list .ab-item.off").count();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "addressbook.png"), clip: { x: 340, y: 60, width: 600, height: 600 } }).catch(() => {});
+  await page.locator(".ab-seg button[data-tab=hidden]").click();
+  ab.hiddenTabBulk = await page.locator("#ab-bulk").textContent();
+  await page.locator("#ab-list .ab-item .ab-eye").first().click();
+  ab.afterEye = await page.locator("#ab-n-hidden").textContent();
+  await page.keyboard.press("Escape");
+  ab.filterCleared = await page.locator("#ab-filter").inputValue();
+  await page.keyboard.press("Escape");
+  ab.backOnMain = await page.locator("#settings-main").isVisible();
+  ab.summaryAfter = await page.locator("#ab-summary").textContent();
+  await page.keyboard.press("Escape");
+  ab.closed = await page.locator("#settings").isHidden();
+  results.ab = ab;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });
@@ -381,6 +410,12 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.searchHelp.placeholder === "Search" && results.searchHelp.tip === null && results.searchHelp.open && results.searchHelp.below && results.searchHelp.filled === "invoice OR receipt" &&
     results.searchHelp.focused === "search" && results.searchHelp.closed && results.searchHelp.keptText === "invoice OR receipt", "search help: " + JSON.stringify(results.searchHelp));
   expect(results.empty.archive === "No messages in Archive." && results.empty.parent === "No messages in Travel.\nIts 1 subfolder holds 12 messages." && results.empty.gone === 0, "empty folder: " + JSON.stringify(results.empty));
+  {
+    const ab = results.ab, hidN = Number(ab.hiddenCount);
+    expect(/^\d+ addresses learned from Inbox and Sent/.test(ab.summary) && ab.mainHidden && ab.rows >= 5 && ab.focus === "ab-filter" && ab.filtered >= 2 && ab.bulkText.startsWith("Hide ") &&
+      hidN >= ab.filtered - 1 && ab.offRows === ab.filtered && /^Show (all )?\d+ again$/.test(ab.hiddenTabBulk) && Number(ab.afterEye) === hidN - 1 && ab.filterCleared === "" && ab.backOnMain &&
+      new RegExp(`· ${hidN - 1} hidden from suggestions`).test(ab.summaryAfter) && ab.closed, "address book: " + JSON.stringify(ab));
+  }
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));

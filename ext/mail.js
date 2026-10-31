@@ -1093,7 +1093,12 @@ function onKey(e) {
   if (viewer.isOpen()) { viewer.onKey(e); return; }
   const openModal = modals.find(id => !$(id).classList.contains("hidden"));
   if (openModal) {
-    if (e.key === "Escape") { if (openModal === "movebox") closeMovePicker(); else $(openModal).classList.add("hidden"); }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (openModal === "movebox") closeMovePicker();
+      else if (openModal === "settings" && addressBookEscape()) {}
+      else $(openModal).classList.add("hidden");
+    }
     return;
   }
   const inSearch = document.activeElement === $("search");
@@ -1183,14 +1188,86 @@ function toggleTheme() {
 
 function openSettings(show) {
   $("settings").classList.toggle("hidden", !show);
-  if (show) renderHidden();
+  if (show) { showAddressBook(false); renderAbSummary(); }
 }
 
-async function renderHidden() {
-  const list = await contacts.hiddenList();
-  $("hidden-summary").textContent = list.length ? `${list.length} hidden from suggestions (× in the dropdown hides; restore here):` : "No hidden addresses. The × in the address dropdown hides one for good.";
-  $("hidden-list").innerHTML = list.map(a => `<div><span>${esc(a.name ? `${a.name} <${a.email}>` : a.email)}</span><button data-restore="${esc(a.email)}">Restore</button></div>`).join("");
-  $("hidden-list").onclick = async e => { const b = e.target.closest("[data-restore]"); if (b) { await contacts.hide(b.dataset.restore, false); renderHidden(); } };
+// ---------- address book manager ----------
+// Settings shows one summary line; the list lives on its own page inside the dialog, with a
+// filter, an All / Hidden switch and a bulk action for whatever the filter shows.
+const AB_MAX_ROWS = 300;
+const EYE = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>`;
+const EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 3.8A6.4 6.4 0 0 1 8 3.5c4.1 0 6.5 4.5 6.5 4.5a11 11 0 0 1-1.6 2.1M10.1 10.6A2 2 0 0 1 7 8.4M4.2 5A11 11 0 0 0 1.5 8S3.9 12.5 8 12.5c1 0 1.9-.3 2.7-.7M2 2l12 12"/></svg>`;
+let abTab = "all", abAll = [];
+
+async function renderAbSummary() {
+  const list = await contacts.all();
+  const hidden = list.filter(c => c.hidden).length;
+  $("ab-summary").textContent = list.length
+    ? `${list.length.toLocaleString()} addresses learned from Inbox and Sent${hidden ? ` · ${hidden.toLocaleString()} hidden from suggestions` : ""}`
+    : "Learned from your Inbox and Sent headers; nothing collected yet.";
+}
+
+async function showAddressBook(show) {
+  $("settings-main").classList.toggle("hidden", show);
+  $("settings-ab").classList.toggle("hidden", !show);
+  if (!show) { renderAbSummary(); return; }
+  abAll = (await contacts.all()).sort((a, b) => b.last - a.last || a.email.localeCompare(b.email));
+  renderAddressBook();
+  $("ab-filter").focus();
+}
+
+function renderAddressBook() {
+  const q = $("ab-filter").value.trim().toLowerCase();
+  const hiddenN = abAll.filter(c => c.hidden).length;
+  $("ab-n-all").textContent = abAll.length.toLocaleString();
+  $("ab-n-hidden").textContent = hiddenN.toLocaleString();
+  for (const b of document.querySelectorAll(".ab-seg button")) b.classList.toggle("on", b.dataset.tab === abTab);
+  const match = abAll.filter(c => (abTab === "all" || c.hidden) && (!q || c.email.includes(q) || c.name.toLowerCase().includes(q)));
+  const shown = match.slice(0, AB_MAX_ROWS);
+  const day = t => t ? new Date(t * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
+  $("ab-list").innerHTML = shown.length ? shown.map(c => `<div class="ab-item${c.hidden ? " off" : ""}" data-email="${esc(c.email)}">
+      <span class="ab-who"><span class="ab-name">${esc(c.name || c.email)}</span>${c.name ? `<span class="ab-mail">${esc(c.email)}</span>` : ""}</span>
+      <span class="ab-stats" title="${c.sent} sent to, ${c.received} received from">↑${c.sent} ↓${c.received}</span>
+      <span class="ab-last" title="Last message">${day(c.last)}</span>
+      <button class="ab-eye" title="${c.hidden ? "Hidden from suggestions. Click to show again" : "Suggested when writing. Click to hide"}">${c.hidden ? EYE_OFF : EYE}</button></div>`).join("")
+    : `<div class="ab-empty">${abTab === "hidden" && !q ? "No hidden addresses. Hide one here, or with × in the address suggestions while writing." : q ? `No address matches “${esc(q)}”.` : "No addresses collected yet."}</div>`;
+  $("ab-status").textContent = !match.length ? "" : match.length > shown.length
+    ? `Showing ${shown.length} of ${match.length.toLocaleString()}, most recent first; filter to narrow.` : `${match.length.toLocaleString()} shown, most recent first.`;
+  // Bulk action: hide what a filter found, or restore what the Hidden view shows.
+  const visible = match.filter(c => !c.hidden), bulk = $("ab-bulk");
+  if (abTab === "hidden" && match.length) { bulk.textContent = q ? `Show ${match.length} again` : `Show all ${match.length} again`; bulk.dataset.act = "show"; }
+  else if (abTab === "all" && q && visible.length > 1) { bulk.textContent = `Hide ${visible.length} shown`; bulk.dataset.act = "hide"; }
+  else bulk.dataset.act = "";
+  bulk.classList.toggle("hidden", !bulk.dataset.act);
+  bulk.onclick = async () => {
+    const act = bulk.dataset.act, targets = act === "show" ? match : visible;
+    if (!act || !targets.length) return;
+    for (const c of targets) c.hidden = act === "hide";
+    renderAddressBook();
+    status(`${act === "hide" ? "hid" : "restored"} ${targets.length} address${targets.length === 1 ? "" : "es"} ${act === "hide" ? "from" : "to"} suggestions`);
+    await contacts.hideMany(targets.map(c => c.email), act === "hide");
+  };
+}
+
+function wireAddressBook() {
+  $("ab-open").onclick = () => showAddressBook(true);
+  $("ab-back").onclick = () => showAddressBook(false);
+  $("ab-filter").oninput = () => renderAddressBook();
+  for (const b of document.querySelectorAll(".ab-seg button")) b.onclick = () => { abTab = b.dataset.tab; renderAddressBook(); };
+  $("ab-list").onclick = async e => {
+    const btn = e.target.closest(".ab-eye"); if (!btn) return;
+    const email = btn.closest(".ab-item").dataset.email, c = abAll.find(x => x.email === email);
+    c.hidden = !c.hidden;
+    renderAddressBook();
+    await contacts.hide(email, c.hidden);
+  };
+}
+// Esc on the address book page clears the filter, then goes back to Settings.
+function addressBookEscape() {
+  if ($("settings-ab").classList.contains("hidden")) return false;
+  if ($("ab-filter").value) { $("ab-filter").value = ""; renderAddressBook(); }
+  else showAddressBook(false);
+  return true;
 }
 
 function wireSettings() {
@@ -1208,6 +1285,7 @@ function wireSettings() {
   $("markread").onchange = () => { const v = $("markread").value.trim(); settings.markReadSec = v === "" ? null : Math.max(0, Number(v) || 0); saveSettings(); };
   $("density").onchange = () => { settings.rowH = Math.min(32, Math.max(18, Number($("density").value) || 22)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
+  wireAddressBook();
   $("settings-reset").onclick = () => { Object.assign(settings, { folderW: DEFAULTS.folderW, listW: DEFAULTS.listW, listH: DEFAULTS.listH }); applySettings(); saveSettings(); };
   $("settings").onclick = e => { if (e.target.id === "settings") openSettings(false); };
   $("gear").onclick = () => openSettings($("settings").classList.contains("hidden"));
