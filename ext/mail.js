@@ -187,6 +187,7 @@ function renderFolders() {
 // Patch counts in place so the tree (and any focus in its filter) is not rebuilt for a flag change.
 function updateFolderCounts() {
   for (const el of $("folder-list").querySelectorAll(".folder")) {
+    if (el.dataset.id === STARRED) { el.querySelector(".ct").textContent = state.starredCount == null ? "" : state.starredCount >= STARRED_MAX ? `${STARRED_MAX}+` : (state.starredCount || ""); continue; }
     const f = state.byId.get(el.dataset.id); if (!f) continue;
     el.querySelector(".ct").textContent = f.unread ? f.unread : (f.total || "");
     el.classList.toggle("unread", !!f.unread);
@@ -211,6 +212,7 @@ async function loadFolders(silent = false) {
     state.modseq.set(f.id, f.highestModSeq);
   }
   renderFolders();
+  if (changed.length || state.starredCount == null) refreshStarredCount();
   if (!silent) status(`${r.folders.length} folders`, r.ms);
   return changed;
 }
@@ -789,6 +791,7 @@ async function doSetStarred(ids, flagged) {
   try {
     const r = await api.setStarred(ids, flagged);
     applyFlags(r.ok, { flagged });
+    refreshStarredCount();
     status(`${flagged ? "starred" : "unstarred"} ${plural(r.ok.length, "message")}`, r.ms); partial(r, "star");
     const okSet = new Set(r.ok);
     pushUndo({ label: `${flagged ? "star" : "unstar"} ${plural(r.ok.length, "message")}`,
@@ -946,6 +949,18 @@ async function openFolder(id) {
 
 const STARRED = "starred";
 const STARRED_Q = "is:flagged -folderType:(SYNC)-folderType:(INVISIBLE)-folderType:(TRASH)-folderType:(BULK)";
+const STARRED_MAX = 500;
+
+// Yahoo reports no total for a search, so the count is the length of the starred list itself.
+let starredCounting = null;
+function refreshStarredCount() {
+  if (starredCounting) { starredCounting.again = true; return; }
+  starredCounting = { again: false };
+  api.search(STARRED_Q, null, STARRED_MAX, 0, true)
+    .then(r => { state.starredCount = r.messages.length; updateFolderCounts(); })
+    .catch(() => {})
+    .finally(() => { const again = starredCounting.again; starredCounting = null; if (again) refreshStarredCount(); });
+}
 async function openStarred() {
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term: "Starred", raw: STARRED_Q, starred: true };

@@ -131,6 +131,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.locator("#folder-list .folder", { hasText: "Starred" }).click(); await page.waitForTimeout(400);
   const starCall = calls.filter(c => c.name === "messageGroups.getList").pop();
   results.starredView = { q: decodeURIComponent(starCall?.envelope?.requests?.[0]?.uri.split("q=")[1] || ""), title: await page.locator("#list-title").textContent(),
+    count: await page.locator("#folder-list .folder.view .ct").textContent(),
+    countQuery: calls.some(c => /count%3A500|count:500/.test(c.envelope?.requests?.[0]?.uri || "") && /is%3Aflagged|is:flagged/.test(c.envelope?.requests?.[0]?.uri || "")),
     active: await page.locator("#folder-list .folder.active").textContent(), order: (await page.locator("#folder-list .folder .nm").allTextContents()).slice(0, 3).join(",") };
   await page.locator("#folder-list .folder", { hasText: "Projects" }).click(); await page.waitForTimeout(400);
 
@@ -312,8 +314,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
-  expect(results.starCol.call === "messages.starFlagUpdate" && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
-  expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));
+  expect(results.starCol.call.split(",")[0] === "messages.starFlagUpdate" && !results.starCol.call.includes("getBody") && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
+  expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.count === "8" && results.starredView.countQuery && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));
