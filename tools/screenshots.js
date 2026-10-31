@@ -1,7 +1,8 @@
 // README screenshots: the real extension in Chromium against a mocked Yahoo backend filled with
 // invented mail, so no real names, addresses or messages appear. node tools/screenshots.js
 // Writes docs/screenshots/{light,viewer,dark,settings}.png. With --store, writes the same scenes at
-// the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo, to store/.
+// the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo and the 440x280 and 1400x560
+// promotional tiles, to store/.
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
@@ -349,6 +350,35 @@ function listFor(q) {
     await logo.setViewportSize({ width: 300, height: 300 });
     await logo.setContent(`<html><body style="margin:0;background:transparent"><img src="data:image/svg+xml;base64,${fs.readFileSync(path.join(EXT, "icons", "icon.svg")).toString("base64")}" width="300" height="300"></body></html>`);
     await logo.screenshot({ path: path.join(OUT, "..", "logo-300.png"), omitBackground: true });
+
+    // Promotional tiles: icon, name and tagline in the Graphite palette; the large one with a
+    // slice of the light-theme screenshot.
+    const icon = `data:image/svg+xml;base64,${fs.readFileSync(path.join(EXT, "icons", "icon.svg")).toString("base64")}`;
+    const shot = `data:image/png;base64,${fs.readFileSync(path.join(OUT, "light.png")).toString("base64")}`;
+    const font = "font-family:Inter,'Segoe UI','Helvetica Neue',Arial,sans-serif";   // single quotes: it sits in a style attribute
+    const tiles = [
+      ["promo-small.png", 440, 280, `
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">
+          <img src="${icon}" width="92" height="92">
+          <div style="font-size:36px;font-weight:700;color:#efe9da;letter-spacing:-0.5px">Baltazar Mail</div>
+          <div style="font-size:16px;color:#d9a441">Fast, ad-free Yahoo Mail client</div>
+        </div>`],
+      ["promo-large.png", 1400, 560, `
+        <div style="position:absolute;left:90px;top:0;bottom:0;width:560px;display:flex;flex-direction:column;justify-content:center">
+          <div style="display:flex;align-items:center;gap:22px"><img src="${icon}" width="104" height="104">
+            <div style="font-size:60px;font-weight:700;color:#efe9da;letter-spacing:-1px;line-height:1.05">Baltazar<br>Mail</div></div>
+          <div style="font-size:27px;color:#d9a441;margin:26px 0 22px">Fast, ad-free Yahoo Mail client</div>
+          ${["Dark reading pane that keeps colours", "Attachments open in place", "No server, no ads, no tracking"].map(t =>
+            `<div style="font-size:21px;color:#c9c4b7;margin:6px 0;display:flex;align-items:center;gap:14px"><span style="width:9px;height:9px;border-radius:50%;background:#d9a441"></span>${t}</div>`).join("")}
+        </div>
+        <img src="${shot}" style="position:absolute;left:720px;top:70px;width:900px;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);border:1px solid #3a424c">`],
+    ];
+    for (const [file, w, h, body] of tiles) {
+      await logo.setViewportSize({ width: w, height: h });
+      await logo.setContent(`<html><body style="margin:0;width:${w}px;height:${h}px;overflow:hidden;position:relative;${font};background:radial-gradient(circle at 25% 30%,#242a31,#15181c 70%)">${body}</body></html>`);
+      await logo.waitForTimeout(200);
+      await logo.screenshot({ path: path.join(OUT, "..", file) });
+    }
   }
 
   await ctx.close();

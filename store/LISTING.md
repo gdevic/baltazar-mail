@@ -68,6 +68,10 @@ Description:
 
 Logo: `logo-300.png`
 
+Small promotional tile (440 x 280): `promo-small.png`
+
+Large promotional tile (1400 x 560): `promo-large.png`
+
 Screenshots, in this order: `screenshots/light.png`, `screenshots/viewer.png`, `screenshots/dark.png`, `screenshots/settings.png`
 
 Search terms (7 terms, 16 words): yahoo mail; yahoo mail client; email client; webmail; ad-free email; dark mode email; pdf attachment viewer
