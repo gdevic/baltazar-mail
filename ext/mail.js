@@ -1370,14 +1370,17 @@ async function poll() {
   checkUpdate().catch(() => {});  // network at most once a day; otherwise a storage read
 }
 
-// A newer release on GitHub: a line in Settings and a dot on the gear.
+// The installed version at the foot of Settings; when GitHub has a newer release, that line
+// says so and the gear gets a dot.
 async function checkUpdate() {
-  const have = chrome.runtime.getManifest().version, v = await update.latest().catch(() => null);
-  const avail = !!v && update.newer(v, have), note = $("update-note");
+  const have = chrome.runtime.getManifest().version, note = $("update-note");
+  if (!note.classList.contains("avail")) note.textContent = `Baltazar Mail ${have}`;
+  const v = await update.latest().catch(() => null);
+  const avail = !!v && update.newer(v, have);
   $("gear").classList.toggle("has-update", avail);
   $("gear").title = avail ? `Settings (version ${v} available)` : "Settings";
-  note.classList.toggle("hidden", !avail);
-  if (!avail) return;
+  note.classList.toggle("avail", avail);
+  if (!avail) { note.textContent = `Baltazar Mail ${have}`; return; }
   const a = Object.assign(document.createElement("a"), { href: update.RELEASES, target: "_blank", rel: "noopener", textContent: "Download it from GitHub" });
   note.replaceChildren(`Version ${v} is available (you have ${have}). `, a, ". Checked daily with GitHub; no data about you is sent.");
 }

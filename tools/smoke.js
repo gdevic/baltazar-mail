@@ -71,8 +71,12 @@ const folders = [
     mutations.push(name + ":" + reqs);
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: { failedRequests: [], successRequests: [] } }, error: null }) });
   });
+  await page.route("https://api.github.com/**", r => r.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: "v0.1.0" }) }));
   await page.goto(`http://127.0.0.1:${port}/mail.html`);
   await page.waitForSelector("#rows .row");
+  // the installed version is always at the foot of Settings
+  await page.waitForFunction(() => document.getElementById("update-note").textContent === "Baltazar Mail 0.14.0", null, { timeout: 4000 }).catch(() => {});
+  const versionLine = await page.locator("#update-note").textContent();
   const rows = await page.locator("#rows .row").count();
   const foldersShown = await page.locator("#folders .folder").allTextContents();
   await page.keyboard.press("j"); await page.keyboard.press("j"); await page.keyboard.press("Enter");
@@ -123,6 +127,7 @@ const folders = [
   const afterRead = await page.locator("#st-undo").textContent();
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
+  expect(versionLine === "Baltazar Mail 0.14.0", "version line: " + versionLine);
   expect(scoped.chip === "in Inbox" && scoped.divider === 1 && scoped.allChip === "All mail" && scoped.allDivider === 0, "search scope: " + JSON.stringify(scoped));
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
