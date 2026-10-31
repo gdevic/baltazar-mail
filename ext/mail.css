@@ -80,9 +80,11 @@ body.dragging iframe { pointer-events: none; }
 .row:hover { background: var(--bg3); }
 .row.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
 .row > span { overflow: hidden; text-overflow: ellipsis; }
-.row .fl { display: flex; align-items: center; justify-content: center; margin-left: -4px; color: var(--fg2); }
+.row .fl { display: flex; align-items: center; justify-content: center; margin-left: -4px; color: var(--fg3); }
 .row .fl svg { width: 13px; height: 13px; }
+.row .fl path { stroke-width: 1.5; }
 .row.unread .fl { color: var(--fg); }
+.row.unread .fl path { stroke-width: 1.9; }
 .row .st { text-align: center; font-size: 13px; color: transparent; cursor: pointer; }
 .row:hover .st { color: var(--fg3); }
 .row .st:hover { color: var(--accent); }

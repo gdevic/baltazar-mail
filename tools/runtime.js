@@ -47,8 +47,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       const id = uri.match(/@\.id==(MSG[^/]+)/)[1];
       const message = msg(Number(id.split("_")[1]), id.split("_")[0].slice(3));
       message.attachments = [
-        { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf" },
-        { partId: "3", filename: "data.csv", size: 900, disposition: "attachment", type: "text", subtype: "csv", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/csv" },
+        { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/2?appid=x" },
+        { partId: "3", filename: "data.csv", size: 900, disposition: "attachment", type: "text", subtype: "csv", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/csv", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/3?appid=x" },
         { partId: "4", filename: "src.zip", size: 400, disposition: "attachment", type: "application", subtype: "zip", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/zip" },
         { partId: "5", filename: "photo.png", size: 70, disposition: "attachment", type: "image", subtype: "png", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/png", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/5?appid=x" },
         { partId: "6", filename: "cv.docx", size: 33000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.wordprocessingml.document", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/docx", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/6?appid=x" },
@@ -65,20 +65,23 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 
+  let thumbFull = false;
   const thumbPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
   const zipBytes = Buffer.from("UEsDBBQAAAAAAI8CX12Tpho8uAEAALgBAAAKAAAAc3JjL21haW4uY2ludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KUEsDBBQAAAAAAI8CX10gMDo2BgAAAAYAAAAJAAAAUkVBRE1FLm1kaGVsbG8KUEsBAhQDFAAAAAAAjwJfXZOmGjy4AQAAuAEAAAoAAAAAAAAAAAAAAIABAAAAAHNyYy9tYWluLmNQSwECFAMUAAAAAACPAl9dIDA6NgYAAAAGAAAACQAAAAAAAAAAAAAAgAHgAQAAUkVBRE1FLm1kUEsFBgAAAAACAAIAbwAAAA0CAAAAAA==", "base64");
   await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => {
     const u = route.request().url();
-    if (u.endsWith("/dl/csv")) return route.fulfill({ contentType: "text/csv", body: "name,qty\nZ80,2\n6502,1\n" });
-    if (u.endsWith("/dl/zip")) return route.fulfill({ contentType: "application/zip", body: zipBytes });
-    if (u.endsWith("/dl/pdf")) return route.fulfill({ contentType: "application/pdf", body: "%PDF-1.4\n%%EOF\n" });
+    // Yahoo's download links cannot be fetched (redirect the page cannot follow), as in production.
+    if (u.includes("/dl/")) return route.abort("failed");
+    if (u.includes("/text/3")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "name,qty\nZ80,2\n6502,1\n" } }) });
+    if (u.includes("/text/2")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "Quarterly report\nPage 1" } }) });
     if (u.includes("/text/")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "Jorge Ruiz\nEngineer" } }) });
+    if (u.includes("/thumb/") && u.includes("size=2048w")) thumbFull = true;
     return route.fulfill({ contentType: "image/png", body: thumbPng });
   });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
-  page.on("console", m => { if (m.type() === "error" && !m.text().includes("Content Security Policy")) errors.push("console: " + m.text().slice(0, 200)); });
+  page.on("console", m => { if (m.type() === "error" && !m.text().includes("Content Security Policy") && !m.text().includes("net::ERR_FAILED")) errors.push("console: " + m.text().slice(0, 200)); });
   await page.goto(`chrome-extension://${extId}/mail.html`);
   await page.evaluate(() => chrome.storage.local.set({ settings: { pollSec: 5, undoSendSec: 2 } }));
   await page.reload();
@@ -111,14 +114,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.screenshot({ path: path.join(__dirname, "..", "out", "strip.png"), clip: { x: 700, y: 560, width: 580, height: 160 } }).catch(() => {});
   await view(1); results.vCsv = await page.locator("#v-body td").allTextContents();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-csv.png"), clip: { x: 40, y: 30, width: 640, height: 220 } }).catch(() => {});
-  await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.querySelector("#v-body table") && document.getElementById("v-name").textContent === "src.zip", null, { timeout: 5000 });
-  results.vZip = await page.locator("#v-body td:first-child").allTextContents();
+  await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.getElementById("v-name").textContent === "src.zip" && document.querySelector("#v-body #v-dl2"), null, { timeout: 5000 });
+  results.vZip = await page.locator("#v-body").textContent();
   await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body img.v-img", { timeout: 5000 });
-  results.vImg = await page.locator("#v-body img.v-img").count();
+  results.vImg = await page.locator("#v-body img.v-img").count() === 1 && thumbFull;
   await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body pre", { timeout: 5000 });
   results.vDoc = await page.locator("#v-body pre").textContent();
-  await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body iframe", { timeout: 5000 });
-  results.vPdf = (await page.locator("#v-body iframe").getAttribute("src")).slice(0, 5);
+  await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.getElementById("v-name").textContent === "report.pdf" && document.querySelector("#v-body pre"), null, { timeout: 5000 });
+  results.vPdf = await page.locator("#v-body pre").textContent();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer.png") }).catch(() => {});
   await page.keyboard.press("Escape");
   results.vClosed = await page.locator("#viewer").isHidden();
@@ -248,7 +251,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.starCol.call === "messages.starFlagUpdate" && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.attach.cards === 5 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC", "attachment strip: " + JSON.stringify(results.attach));
-  expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge") && results.vPdf === "blob:" && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vClosed]));
+  expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("No preview") && results.vImg === true && results.vDoc.includes("Jorge") && results.vPdf.includes("Quarterly") && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vClosed]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));
   expect(results.fwdChips.length === 5 && results.fwd.atts.length === 5 && results.fwd.atts[0].messageReference?.pid === "2" && results.fwd.uri.includes("uploadCount=0&totalAttachments=5") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));

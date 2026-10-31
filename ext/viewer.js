@@ -87,10 +87,20 @@ export function renderStrip(message, attachments, isCurrent) {
 }
 
 // ---------- fetching ----------
+// Yahoo's download link redirects somewhere a fetch cannot follow, so file bytes are not
+// always available. Images come from the thumbnail service at full size, as in Yahoo's own
+// viewer; other files try the download and fall back to Yahoo's text extraction.
+function imageUrl(a) {
+  if (!a.thumbnailUrl) return null;
+  const u = a.thumbnailUrl.replace(/&amp;/g, "&").replace(/[?&](size|w|h)=[^&]*/g, "");
+  return u + (u.includes("?") ? "&" : "?") + "size=2048w&w=2048&h=2048";
+}
+
 async function fetchBlob(a) {
   if (!blobCache.has(a.downloadUrl)) {
     blobCache.set(a.downloadUrl, (async () => {
-      const resp = await fetch(a.downloadUrl.replace(/&amp;/g, "&"), { credentials: "include" });
+      const img = kindOf(a) === "image" ? imageUrl(a) : null;
+      const resp = await fetch(img || a.downloadUrl.replace(/&amp;/g, "&"), { credentials: "include" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.blob();
     })());
@@ -148,7 +158,20 @@ async function show(i) {
       body.querySelector("pre").textContent = t || "(no text)";
       return;
     }
-    const blob = await fetchBlob(a);
+    let blob;
+    try {
+      if (k !== "image" && a.textExtractionUrl) throw new Error("use text");
+      blob = await fetchBlob(a);
+    } catch (fetchErr) {
+      if (stale()) return;
+      if (k === "image" || k === "audio" || k === "video" || k === "zip" || !a.textExtractionUrl) throw fetchErr;
+      const t = await extractedText(a);
+      if (stale()) return;
+      if ((extOf(a.filename) === "csv" || extOf(a.filename) === "tsv") && t) { renderTable(body, t, extOf(a.filename) === "tsv" ? "\t" : null); return; }
+      body.innerHTML = note(k === "text" || k === "code" ? "Text as stored by Yahoo." : "Text extracted by Yahoo; layout, images and formatting are not shown. Download for the original.") + "<pre></pre>";
+      body.querySelector("pre").textContent = t || "(no text)";
+      return;
+    }
     if (stale()) return;
     const ext = extOf(a.filename);
     if (k === "image") {
@@ -191,8 +214,8 @@ async function show(i) {
     }
   } catch (e) {
     if (stale()) return;
-    body.innerHTML = center(`Could not load the preview (${esc(e.message)}). <button id="v-dl2">Open in tab</button>`);
-    $("v-dl2").onclick = () => openInTab(a);
+    body.innerHTML = center(`No preview available for this file. <button id="v-dl2">Download</button>`);
+    $("v-dl2").onclick = () => download(a);
   }
 }
 
@@ -244,13 +267,8 @@ async function zipListing(blob) {
 
 // ---------- download / open ----------
 async function download(a) {
-  try {
-    const blob = await fetchBlob(a);
-    const link = document.createElement("a");
-    link.href = objectUrl(blob);
-    link.download = a.filename || "attachment";
-    document.body.appendChild(link); link.click(); link.remove();
-  } catch { openInTab(a); }
+  // A background tab on Yahoo's link: the browser follows the redirect and saves the original.
+  chrome.tabs.create({ url: a.downloadUrl.replace(/&amp;/g, "&"), active: false });
 }
 
 async function openInTab(a) {
@@ -260,5 +278,5 @@ async function openInTab(a) {
     const u = URL.createObjectURL(new Blob([blob], { type: MIME[ext] || (k === "text" || k === "code" ? "text/plain;charset=utf-8" : blob.type) }));
     window.open(u, "_blank");
     setTimeout(() => URL.revokeObjectURL(u), 60000);
-  } catch { window.open(a.downloadUrl, "_blank"); }
+  } catch { chrome.tabs.create({ url: a.downloadUrl.replace(/&amp;/g, "&") }); }
 }
