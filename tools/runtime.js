@@ -7,6 +7,7 @@ const os = require("os");
 
 const EXT = path.join(__dirname, "..", "ext");
 const now = Math.floor(Date.now() / 1000);
+const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
 const msg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, attachmentCount: i % 3 === 0 ? 1 : 0, csid: `csid${i}`,
   flags: { read: i % 2 === 0, flagged: false },
   headers: { subject: `Subject ${folder}-${i}`, from: [{ name: `Sender ${i}`, email: `s${i}@x.com` }], to: [{ name: "Me", email: "me@yahoo.com" }], cc: [{ name: "Other", email: "o@x.com" }], date: String(now - i * 40000) },
@@ -82,7 +83,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       for (const r of top.requests || []) responses.push({ id: r.id, httpCode: 200, response: { result: { message: saved } } });
     }
     else if (/"method":"(POST|DELETE)"/.test(post)) responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 }));
-    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)), query: {} } } }]; }
+    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)), query: {} } } }]; }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 
@@ -179,6 +180,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.search.allQ = calls.slice(allFrom).filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope.requests[0].uri.split("q=")[1])).some(q => q.includes("keyword:Z80") && q.includes("-folderType:(TRASH)-folderType:(BULK)"));
   results.search.allTitle = await page.locator("#list-title").textContent();
   results.search.allDivider = await page.locator("#rows .elsewhere").count();
+  // deleting from all-mail results drops the row, since those searches skip Trash
+  const allRows = await page.locator("#rows .row").count();
+  await page.locator("#rows .row").first().click(); await page.waitForTimeout(400);
+  const delSubj = await page.locator("#r-subject").textContent();
+  await page.locator('button[data-act="delete"]').click();
+  await page.waitForFunction(n => document.querySelectorAll("#rows .row").length === n - 1, allRows, { timeout: 4000 }).catch(() => {});
+  await page.waitForFunction(s => document.getElementById("r-subject").textContent !== s, delSubj, { timeout: 4000 }).catch(() => {});
+  results.search.del = { rows: allRows - await page.locator("#rows .row").count(), reader: await page.locator("#r-subject").textContent(), was: delSubj, empty: await page.locator("#reader-empty").isVisible() };
   await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
   results.search.backTitle = await page.locator("#list-title").textContent();
   // search help: plain placeholder, ? opens a popover whose examples fill the box, Esc closes
@@ -298,17 +307,28 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.cardClosed = await page.locator("#card").isHidden();
 
   // spam: mark the open message as spam, check move to Bulk and undo label
-  const before = calls.length;
+  const before = calls.length, spamWas = await page.locator("#r-subject").textContent();
   await page.keyboard.press("!");
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("as spam"), null, { timeout: 4000 });
   const spamCall = calls.slice(before).find(c => c.name === "messages.move");
-  results.spam = { dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator("#st-undo").textContent() };
+  results.spam = { was: spamWas, dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator("#st-undo").textContent() };
   // the reader moves on to the row now under the cursor instead of going blank
   await page.waitForFunction(() => !document.getElementById("reader-head").classList.contains("hidden") &&
     (document.querySelector("#rows .row.sel .sb")?.textContent || "").startsWith(document.getElementById("r-subject").textContent), null, { timeout: 4000 }).catch(() => {});
   results.spam.next = { empty: await page.locator("#reader-empty").isVisible(), subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
   await page.keyboard.press("z");
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Redo: mark"), null, { timeout: 4000 });
+  // undo brings the spammed message back into the reader
+  await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, spamWas, { timeout: 4000 }).catch(() => {});
+  results.spam.undone = { subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
+  // another device deletes the open message: the next refresh shows its neighbour
+  goneElsewhere.add(spamWas.replace(/^Subject (\d+)-(\d+)$/, "MSG$1_$2"));
+  await page.locator("#list").focus(); await page.keyboard.press("R");
+  await page.waitForFunction(s => document.getElementById("r-subject").textContent !== s && !document.getElementById("reader-head").classList.contains("hidden"), spamWas, { timeout: 4000 }).catch(() => {});
+  results.spam.elsewhere = { empty: await page.locator("#reader-empty").isVisible(), subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
+  goneElsewhere.clear();
+  await page.locator("#list").focus(); await page.keyboard.press("R");
+  await page.waitForFunction(() => document.querySelectorAll("#rows .row").length === 8, null, { timeout: 4000 });
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
 
   // print: opens print.html in a new tab with the open message
@@ -453,7 +473,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.starCol.call.split(",")[0] === "messages.starFlagUpdate" && !results.starCol.call.includes("getBody") && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.count === "8" && results.starredView.countQuery && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));
   expect(results.search.chip === "in Projects" && typeof results.search.inQ === "string" && results.search.outQ && results.search.title === "“Z80” in Projects" && /8 matches in other folders/.test(results.search.divider) && results.search.elseRows === 8 &&
-    results.search.offChip === "All mail" && results.search.allQ && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.backTitle === "Projects" &&
+    results.search.offChip === "All mail" && results.search.allQ && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.del.rows === 1 && !results.search.del.empty && results.search.del.reader !== results.search.del.was && results.search.backTitle === "Projects" &&
     results.search.and.tip === "Searched for: Budget AND report AND NOT draft" && results.search.and.idVerify && results.search.and.idExclude && results.search.and.noNegKw && results.search.and.more, "scoped search: " + JSON.stringify(results.search));
   expect(results.searchHelp.placeholder === "Search" && results.searchHelp.tip === null && results.searchHelp.open && results.searchHelp.below && results.searchHelp.filled === "invoice OR receipt" &&
     results.searchHelp.focused === "search" && results.searchHelp.closed && results.searchHelp.keptText === "invoice OR receipt", "search help: " + JSON.stringify(results.searchHelp));
@@ -476,7 +496,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
-  expect(results.spam.dest === "6" && results.spam.undo.includes("as spam") && !results.spam.next.empty && results.spam.next.subject && results.spam.next.sel.startsWith(results.spam.next.subject), "spam moves to Bulk: " + JSON.stringify(results.spam));
+  expect(results.spam.dest === "6" && results.spam.undo.includes("as spam") && !results.spam.next.empty && results.spam.next.subject && results.spam.next.sel.startsWith(results.spam.next.subject) &&
+    results.spam.undone.subject === results.spam.was && results.spam.undone.sel.startsWith(results.spam.was) &&
+    !results.spam.elsewhere.empty && results.spam.elsewhere.subject === results.spam.next.subject && results.spam.elsewhere.sel.startsWith(results.spam.next.subject), "spam moves to Bulk: " + JSON.stringify(results.spam));
   // The original's 7 attachments go by reference; its inline image travels as an uploaded inline part.
   const refs = results.fwd.atts.filter(x => x.messageReference), inl = results.fwd.atts.filter(x => x.disposition === "inline");
   expect(results.fwdChips.length === 7 && refs.length === 7 && refs[0].messageReference?.pid === "2" && inl.length === 1 && results.fwd.uri.includes("uploadCount=1&totalAttachments=8") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));

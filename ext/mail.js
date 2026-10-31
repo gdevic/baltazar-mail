@@ -225,11 +225,13 @@ function updateTitle() {
 
 // ---------- list ----------
 // mode: "fresh" (new view), "refresh" (same view, keep cursor and marks by id, same depth), "more" (next page).
-async function loadList(mode = "fresh") {
+// focusId: after a refresh, put the cursor on this message and open it (undo of a move).
+async function loadList(mode = "fresh", focusId = null) {
   const v = state.view;
   const token = ++state.listToken;
   const prevView = state.prevView;
   const cursorId = state.messages[state.selected]?.id ?? null;
+  const oldOrder = state.messages.map(m => m.id), oldCursor = state.selected;
   const offset = mode === "more" ? state.messages.length : 0;
   const count = mode === "refresh" ? Math.max(PAGE, state.messages.length) : PAGE;
   if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; state.loading = true; renderList(); }
@@ -278,9 +280,18 @@ async function loadList(mode = "fresh") {
   if (mode !== "more") {
     const ids = new Set(state.messages.map(m => m.id));
     for (const id of state.marked) if (!ids.has(id)) state.marked.delete(id);
-    state.selected = mode === "refresh" ? state.messages.findIndex(m => m.id === cursorId) : -1;
+    const at = id => state.messages.findIndex(m => m.id === id);
+    state.selected = mode !== "refresh" ? -1 : focusId && ids.has(focusId) ? at(focusId) : at(cursorId);
+    // The cursor row went away elsewhere (another device): take its nearest survivor, next first.
+    if (mode === "refresh" && state.selected < 0 && oldCursor >= 0) {
+      const next = oldOrder.slice(oldCursor + 1).find(id => ids.has(id)) ?? oldOrder.slice(0, oldCursor).reverse().find(id => ids.has(id));
+      if (next) state.selected = at(next);
+    }
     state.anchor = state.selected;
-    if (state.openId && !ids.has(state.openId) && v.kind === "folder") clearReader();
+    if (mode === "refresh") {
+      const gone = state.openId && oldOrder.includes(state.openId) && !ids.has(state.openId);
+      if (gone || (focusId && state.messages[state.selected]?.id === focusId)) followCursor();
+    } else if (state.openId && !ids.has(state.openId) && v.kind === "folder") clearReader();
   }
   renderList();
   const name = v.starred ? "Starred" : v.kind === "search" ? `“${v.term}” in ${v.scope ? v.scope.name : "all mail"}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
@@ -791,8 +802,13 @@ function removeLocal(ids) {
   state.anchor = state.selected;
   renderList();
   if (curRemoved && state.selected >= 0) select(state.selected);
-  // The reader follows the cursor to the next message; it empties only when the list does.
-  if (openGone) { if (state.selected >= 0) open(state.selected); else clearReader(); }
+  if (openGone) followCursor();
+}
+
+// The open message left the list: the reader moves on to the cursor row and empties only when
+// the list does. While composing, opening would close the draft, so the reader just clears.
+function followCursor() {
+  if (state.selected >= 0 && !compose.isOpen()) open(state.selected); else clearReader();
 }
 
 function bumpFolder(id, dTotal, dUnread) {
@@ -837,11 +853,12 @@ function showUndo() {
 async function undo() {
   const e = undoStack.pop(); if (!e) return;
   status(`undoing: ${e.label}…`);
-  try { await e.undo(); redoStack.push(e); status(`undone: ${e.label}`); }
+  let ok = false;
+  try { await e.undo(); ok = true; redoStack.push(e); status(`undone: ${e.label}`); }
   catch (err) { undoStack.push(e); handleError(err, "undo"); }
   showUndo();
   await loadFolders(true).catch(() => {});
-  await loadList("refresh");
+  await loadList("refresh", ok ? e.reopen : null);
 }
 
 async function redo() {
@@ -896,12 +913,16 @@ async function doMove(ids, folderId, verb = "move") {
   const origins = msgs.map(m => ({ id: m.id, from: m.folder?.id ?? fallback, unread: !m.flags?.read }));
   const moving = origins.filter(o => o.from !== dest.id);
   if (!moving.length) { status(`already in ${folderName(dest)}`); return; }
+  const openWas = state.openId;
   try {
     const r = await api.move(moving.map(o => o.id), dest.id);
     const okSet = new Set(r.ok);
     const done = moving.filter(o => okSet.has(o.id));
     for (const o of done) { bumpFolder(o.from, -1, o.unread ? -1 : 0); bumpFolder(dest.id, 1, o.unread ? 1 : 0); }
-    if (state.view.kind === "folder" && state.view.folderId !== dest.id) removeLocal(r.ok);
+    const v = state.view;
+    const leaves = v.kind === "folder" ? v.folderId !== dest.id
+      : ["TRASH", "BULK"].includes(folderType(dest)) && !v.scope?.ids?.includes(dest.id);
+    if (leaves) removeLocal(r.ok);
     else { for (const m of byIds(r.ok)) m.folder = { ...(m.folder || {}), id: dest.id, name: dest.name }; renderList(); }
     updateFolderCounts();
     const n = plural(done.length, "message"), where = folderName(dest).split("/").pop();
@@ -909,7 +930,7 @@ async function doMove(ids, folderId, verb = "move") {
       spam: [`mark ${n} as spam`, `marked ${n} as spam`], notspam: [`mark ${n} not spam`, `marked ${n} not spam, moved to Inbox`] }[verb];
     status(words[1], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
-    pushUndo({ label: words[0],
+    pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null,
       undo: async () => {
         for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) await api.move(g, from);
         if (known.length < done.length) status(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`);
