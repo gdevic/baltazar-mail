@@ -19,6 +19,6 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Compare with published sources and check advisories
         run: node tools/vendor-check.mjs --upstream --osv
