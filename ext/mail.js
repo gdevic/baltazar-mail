@@ -1035,7 +1035,7 @@ async function openFolder(id) {
 }
 
 const STARRED = "starred";
-const STARRED_Q = "is:flagged -folderType:(SYNC)-folderType:(INVISIBLE)-folderType:(TRASH)-folderType:(BULK)";
+const STARRED_Q = "is:flagged -folderType:(SYNC)-folderType:(INVISIBLE)"; // api.search adds the Spam and Trash exclusion
 const STARRED_MAX = 500;
 
 // Yahoo reports no total for a search, so the count is the length of the starred list itself.

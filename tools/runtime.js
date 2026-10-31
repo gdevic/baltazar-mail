@@ -164,8 +164,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.keyboard.press("Enter");
   await page.waitForSelector("#rows .elsewhere", { timeout: 5000 });
   const qs = calls.slice(searchFrom).filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope.requests[0].uri.split("q=")[1]));
-  results.search.inQ = qs.find(q => q.includes("folderId:(31 OR 32)") && q.includes("keyword:Z80")) || qs;
-  results.search.outQ = !!qs.find(q => q.includes("-folderId:31 -folderId:32") && q.includes("keyword:Z80"));
+  // Spam and Trash are skipped everywhere except when they are the chosen folder
+  results.search.inQ = qs.find(q => q.includes("folderId:(31 OR 32)") && q.includes("keyword:Z80") && !q.includes("folderType:(TRASH)")) || qs;
+  results.search.outQ = !!qs.find(q => q.includes("-folderId:31 -folderId:32") && q.includes("keyword:Z80") && q.includes("-folderType:(TRASH)-folderType:(BULK)"));
   results.search.title = await page.locator("#list-title").textContent();
   results.search.divider = await page.locator("#rows .elsewhere span").textContent();
   results.search.elseRows = await page.locator("#rows .row.else").count();
@@ -173,7 +174,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   // the chip toggles to all mail; Escape returns to the folder
   await page.locator("#search-scope").click();
   results.search.offChip = await page.locator("#search-scope").textContent();
+  const allFrom = calls.length;
   await page.keyboard.press("Enter"); await page.waitForTimeout(400);
+  results.search.allQ = calls.slice(allFrom).filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope.requests[0].uri.split("q=")[1])).some(q => q.includes("keyword:Z80") && q.includes("-folderType:(TRASH)-folderType:(BULK)"));
   results.search.allTitle = await page.locator("#list-title").textContent();
   results.search.allDivider = await page.locator("#rows .elsewhere").count();
   await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
@@ -446,7 +449,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.starCol.call.split(",")[0] === "messages.starFlagUpdate" && !results.starCol.call.includes("getBody") && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.count === "8" && results.starredView.countQuery && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));
   expect(results.search.chip === "in Projects" && typeof results.search.inQ === "string" && results.search.outQ && results.search.title === "“Z80” in Projects" && /8 matches in other folders/.test(results.search.divider) && results.search.elseRows === 8 &&
-    results.search.offChip === "All mail" && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.backTitle === "Projects" &&
+    results.search.offChip === "All mail" && results.search.allQ && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.backTitle === "Projects" &&
     results.search.and.tip === "Searched for: Budget AND report AND NOT draft" && results.search.and.idVerify && results.search.and.idExclude && results.search.and.noNegKw && results.search.and.more, "scoped search: " + JSON.stringify(results.search));
   expect(results.searchHelp.placeholder === "Search" && results.searchHelp.tip === null && results.searchHelp.open && results.searchHelp.below && results.searchHelp.filled === "invoice OR receipt" &&
     results.searchHelp.focused === "search" && results.searchHelp.closed && results.searchHelp.keptText === "invoice OR receipt", "search help: " + JSON.stringify(results.searchHelp));

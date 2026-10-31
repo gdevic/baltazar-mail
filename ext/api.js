@@ -5,6 +5,8 @@ const ORIGIN = "https://mail.yahoo.com";
 const BATCH = ORIGIN + "/c/ws/v3/batch";
 const JWS = "https://apis.mail.yahoo.com";
 const LIST_FILTER = "-folderType:(SYNC)-folderType:(INVISIBLE)";
+// Searches not limited to chosen folders skip Spam and Trash; searching inside those folders still reaches them.
+const ALL_MAIL = "-folderType:(TRASH)-folderType:(BULK)";
 
 export class NotSignedIn extends Error {
   constructor() { super("Not signed in to Yahoo Mail"); this.name = "NotSignedIn"; }
@@ -98,7 +100,7 @@ export async function list(folderId, count = 100, offset = 0) {
 
 // raw: term is already in Yahoo's query language (from:(..) OR to:(..)); otherwise a keyword search.
 export async function search(term, folderId = null, count = 100, offset = 0, raw = false) {
-  const scope = folderId ? `folderId:${folderId} ` : "";
+  const scope = folderId ? `folderId:${folderId} ` : `${ALL_MAIL} `;
   if (raw) {
     const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`${scope}count:${count} offset:${offset} -sort:date ${term}`) }]);
     const res = first(r);
@@ -190,7 +192,7 @@ export function setStarred(ids, flagged) { return update("messages.starFlagUpdat
 // folder and its subfolders, or { starred: true }. Yahoo accepts folderId:(a OR b) for a set;
 // for exclusion only one -folderId: term per folder works.
 export function scopeFilter({ include = null, exclude = null } = {}) {
-  const parts = [];
+  const parts = include?.ids?.length ? [] : [ALL_MAIL];
   if (include?.starred) parts.push("is:flagged");
   else if (include?.ids?.length) parts.push(include.ids.length === 1 ? `folderId:${include.ids[0]}` : `folderId:(${include.ids.join(" OR ")})`);
   if (exclude?.starred) parts.push("-is:flagged");

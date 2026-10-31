@@ -69,7 +69,7 @@ Boolean behaviour (measured 2026-10-31 with set arithmetic on live results): sev
 
 Folder sets: `folderId:(a OR b OR c)` selects several folders (verified with 217 ids, about 450 ms). Exclusion needs one term per folder, `-folderId:a -folderId:b`; `-folderId:(a OR b)` and `NOT (...)` do not exclude.
 
-`is:flagged` selects starred messages across all folders; `-folderType:(TRASH)-folderType:(BULK)` excludes Trash and Spam (verified 2026-10-31).
+`is:flagged` selects starred messages across all folders; `-folderType:(TRASH)-folderType:(BULK)` excludes Trash and Spam (verified 2026-10-31); the client adds it to every search not limited to chosen folders (all mail, other folders, contact history).
 
 `q=folderId:<id> -folderType:(SYNC)-folderType:(INVISIBLE) count:100 offset:0 -sort:date`
 
