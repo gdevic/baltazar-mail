@@ -1,6 +1,6 @@
 // README screenshots: the real extension in Chromium against a mocked Yahoo backend filled with
 // invented mail, so no real names, addresses or messages appear. node tools/screenshots.js
-// Writes docs/screenshots/{light,viewer,dark}.png.
+// Writes docs/screenshots/{light,viewer,dark,settings}.png.
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
@@ -157,6 +157,61 @@ const SCENES = [
    <rect width="1600" height="1067" filter="url(#g)"/>`,
 ];
 
+// The staging review attached to the design thread, typeset by Chromium as a two-page PDF.
+const NOTES_HTML = `<!DOCTYPE html><html><head><style>
+  @page { size: Letter; margin: 0.7in 0.75in; }
+  body { font: 10.5pt/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif; color: #1f2933; margin: 0; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #c2551f; padding-bottom: 10px; margin-bottom: 18px; }
+  h1 { font-size: 21pt; margin: 0; letter-spacing: -0.3px; } .sub { color: #66717d; margin-top: 2px; }
+  .meta { text-align: right; color: #66717d; font-size: 9pt; line-height: 1.6; }
+  h2 { font-size: 12.5pt; color: #c2551f; margin: 20px 0 6px; }
+  .summary { display: flex; gap: 12px; margin: 12px 0 4px; }
+  .stat { flex: 1; border: 1px solid #e3e7eb; border-radius: 6px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 18pt; color: #1f2933; } .stat span { color: #66717d; font-size: 9pt; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 9.5pt; }
+  th { text-align: left; background: #f3f5f7; color: #3e4c59; font-weight: 600; padding: 7px 8px; border-bottom: 1px solid #d9dee3; }
+  td { padding: 7px 8px; border-bottom: 1px solid #eceff2; vertical-align: top; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 8.5pt; font-weight: 600; }
+  .high { background: #fde4dc; color: #a33d12; } .med { background: #fdf1d3; color: #8a5a00; } .low { background: #e3f1e7; color: #2f6b3d; }
+  .shots { display: flex; gap: 22px; align-items: flex-start; margin-top: 10px; }
+  .frame { border: 1px solid #cfd6dc; border-radius: 8px; padding: 8px; background: #fafbfc; }
+  .bar { height: 18px; background: #233142; border-radius: 3px; margin-bottom: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .grid div { height: 40px; background: linear-gradient(135deg, #8fb3c9, #5d7f96); border-radius: 3px; }
+  .foot { height: 22px; background: #d9dee3; border-radius: 3px; margin-top: 8px; }
+  .phone { width: 120px; } .phone .grid { grid-template-columns: 1fr 1fr; } .phone .grid div:nth-child(n+5) { outline: 2px solid #d9480f; }
+  .phone .foot { margin-top: -14px; opacity: .85; } .cap { font-size: 8.5pt; color: #66717d; margin-top: 6px; text-align: center; }
+  ul { margin: 4px 0; padding-left: 18px; } li { margin: 3px 0; }
+  .check li { list-style: none; margin-left: -18px; } .check li::before { content: "\\2713"; color: #2f6b3d; font-weight: 700; margin-right: 8px; }
+  .page2 { break-before: page; }
+</style></head><body>
+<header><div><h1>Website redesign</h1><div class="sub">Staging review, build 0.9.3</div></div>
+<div class="meta">Reviewed by Robin Hale<br>Desktop, tablet and phone<br>12 pages checked</div></header>
+<p>The staging build is a clear improvement over the current site. Navigation is simpler, pages are lighter, and the new typography reads well on every screen size tested. The issues below are listed by priority; none of them blocks the planned launch.</p>
+<div class="summary"><div class="stat"><b>12</b><span>pages reviewed</span></div><div class="stat"><b>1.4 s</b><span>median load, was 3.1 s</span></div><div class="stat"><b>5</b><span>issues found</span></div><div class="stat"><b>0</b><span>launch blockers</span></div></div>
+<h2>Issues</h2>
+<table><tr><th style="width:22%">Area</th><th>Finding</th><th style="width:13%">Priority</th></tr>
+<tr><td>Contact form</td><td>No confirmation after sending; the form simply clears, so it is easy to send twice.</td><td><span class="pill high">High</span></td></tr>
+<tr><td>Gallery</td><td>Below 400 px wide, the last row of thumbnails overlaps the footer (sketch below).</td><td><span class="pill high">High</span></td></tr>
+<tr><td>Header</td><td>The dark header colour leaves too little contrast for the logo; try the lighter variant.</td><td><span class="pill med">Medium</span></td></tr>
+<tr><td>Blog</td><td>Post dates use two formats on the index and article pages.</td><td><span class="pill low">Low</span></td></tr>
+<tr><td>Footer</td><td>The newsletter link opens in the same tab and loses the reader's place.</td><td><span class="pill low">Low</span></td></tr></table>
+<h2>Gallery on narrow screens</h2>
+<div class="shots"><div><div class="frame" style="width:300px"><div class="bar"></div><div class="grid">${"<div></div>".repeat(6)}</div><div class="foot"></div></div><div class="cap">Desktop: correct</div></div>
+<div><div class="frame phone"><div class="bar"></div><div class="grid">${"<div></div>".repeat(6)}</div><div class="foot"></div></div><div class="cap">Phone: last row under the footer</div></div></div>
+<section class="page2"><h2>Checked and working</h2>
+<ul class="check"><li>Navigation menu on desktop, tablet and phone</li><li>Search, including empty and misspelled queries</li><li>Image loading on slow connections</li><li>Keyboard navigation and visible focus</li><li>Print layout of the project pages</li><li>Links and redirects from the old site structure</li></ul>
+<h2>Next steps</h2><ul><li>Fix the two high-priority items before launch.</li><li>Casey to send the light logo variant for the header.</li><li>Second pass on phones once the gallery fix is in.</li></ul></section>
+</body></html>`;
+
+async function renderNotesPdf(ctx) {
+  const pg = await ctx.newPage();
+  await pg.setContent(NOTES_HTML);
+  const pdf = await pg.pdf({ format: "Letter", printBackground: true, preferCSSPageSize: true });
+  await pg.close();
+  return pdf;
+}
+
 async function renderPhotos(ctx) {
   const pg = await ctx.newPage();
   await pg.setViewportSize({ width: 1600, height: 1067 });
@@ -184,6 +239,7 @@ function listFor(q) {
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
   const photos = await renderPhotos(ctx);
+  const notesPdf = await renderNotesPdf(ctx);
 
   await ctx.route("https://mail.yahoo.com/**", async route => {
     const req = route.request();
@@ -213,12 +269,18 @@ function listFor(q) {
     const i = Number((route.request().url().match(/\/(?:thumb|dl)\/(\d+)/) || [])[1] || 0);
     return route.fulfill({ contentType: "image/jpeg", body: photos[i % photos.length] });
   });
+  // Raw message source, from which the extension cuts attachment bytes.
   await ctx.route("https://apis.mail.yahoo.com/**", route => {
     const b64 = buf => buf.toString("base64").replace(/.{76}/g, "$&\r\n");
-    const raw = "From: sam.rivera@example.com\r\nSubject: Fwd: Photos from the coast trip\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nPhotos\r\n" +
-      PHOTO_MSG.attachments.map((a, i) => `--B\r\nContent-Type: image/jpeg; name="${a.filename}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${a.filename}"\r\n\r\n${b64(photos[i])}\r\n`).join("") + "--B--\r\n";
+    const part = (type, name, buf) => `--B\r\nContent-Type: ${type}; name="${name}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${name}"\r\n\r\n${b64(buf)}\r\n`;
+    const design = route.request().url().includes(`@.id==${DESIGN_MSG.id}/`);
+    const raw = "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nBody\r\n" +
+      (design ? part("application/pdf", "staging-notes.pdf", notesPdf) : PHOTO_MSG.attachments.map((a, i) => part("image/jpeg", a.filename, photos[i])).join("")) + "--B--\r\n";
     return route.fulfill({ contentType: "text/plain", body: raw });
   });
+  // The release check sees the installed version, so Settings shows no update note.
+  const version = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8")).version;
+  await ctx.route("https://api.github.com/**", route => route.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: `v${version}` }) }));
 
   const page = await ctx.newPage();
   await page.goto(`chrome-extension://${extId}/mail.html`);
@@ -241,12 +303,24 @@ function listFor(q) {
   await page.mouse.move(W - 5, H - 5);
   await page.screenshot({ path: path.join(OUT, "light.png") });
 
-  // 2. the attachment viewer over it
-  await page.locator("#r-attach .att-card").nth(1).click();
-  await page.waitForFunction(() => { const i = document.querySelector("#v-body img.v-img"); return i && i.complete && i.naturalWidth > 0; });
-  await page.waitForTimeout(300);
+  // 2. the attachment viewer: the design thread's PDF review
+  await page.locator("#folder-list .folder", { hasText: "Website" }).click();
+  await page.waitForFunction(() => document.getElementById("list-title").textContent === "Projects/Website");
+  await page.locator("#rows .row").nth(2).click();
+  await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, DESIGN_MSG.headers.subject);
+  await page.waitForSelector("#r-attach .att-card");
+  await page.locator("#r-attach .att-card").first().click();
+  const pdfFrame = async () => { for (let i = 0; i < 100; i++) { const f = page.frames().find(f => f.url().endsWith("/render.html") && !f.isDetached()); if (f) return f; await page.waitForTimeout(100); } };
+  const viewerFrame = await pdfFrame();
+  await viewerFrame.waitForFunction(() => document.querySelectorAll(".page canvas, .canvasWrapper canvas").length >= 1 && document.querySelector(".textLayer span"), null, { timeout: 20000 });
+  // zoomed out to show the whole first page
+  for (let i = 0; i < 3; i++) { await page.locator("#v-zout").click(); await page.waitForTimeout(250); }
+  await viewerFrame.waitForFunction(() => document.querySelector(".textLayer span"), null, { timeout: 20000 });
+  await page.waitForTimeout(800);
+  await page.mouse.move(W - 5, H - 5);
   await page.screenshot({ path: path.join(OUT, "viewer.png") });
-  await page.keyboard.press("Escape");
+  await viewerFrame.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await page.waitForSelector("#viewer.hidden", { state: "attached" });
 
   // 3. dark, messages above the preview, a project thread
   await setup({ layout: "horizontal", theme: "dark", darkTheme: "dark", folderW: 230, listH: 36, expanded: ["Projects"] });
@@ -257,6 +331,15 @@ function listFor(q) {
   await page.waitForTimeout(800);
   await page.mouse.move(W - 5, 60);
   await page.screenshot({ path: path.join(OUT, "dark.png") });
+
+  // 4. Settings, in the light theme, with the default intervals and the app hidden behind it
+  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: 230, listW: 560, pollSec: 20, markReadSec: 2 });
+  await page.locator("#list").focus(); await page.keyboard.press(",");
+  await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
+  await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent));
+  await page.waitForTimeout(300);
+  const box = await page.locator("#settings-box").boundingBox(), pad = 16;
+  await page.screenshot({ path: path.join(OUT, "settings.png"), clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } });
 
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });
