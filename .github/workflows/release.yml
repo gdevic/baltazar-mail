@@ -1,7 +1,8 @@
 # Publishes a GitHub release whose asset is a ZIP of the extension: unzip it anywhere and load
 # the folder inside with "Load unpacked". Runs when a v* tag is pushed, or from the Actions tab
 # (Run workflow) with a tag name, which then tags the selected branch.
-# The tag must match the version in ext/manifest.json, e.g. v0.13.4.
+# The tag must match the version in ext/manifest.json, e.g. v0.13.4. Nothing is published unless
+# every test suite passes first (tests.yml).
 name: Release
 
 on:
@@ -19,7 +20,13 @@ permissions:
   attestations: write
 
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
+
   release:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

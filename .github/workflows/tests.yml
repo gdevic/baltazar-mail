@@ -1,0 +1,41 @@
+# All test suites: the unit tests, then the extension itself in Playwright's Chromium against a
+# mocked Yahoo (smoke.js, runtime.js). Runs before every release, and from the Actions tab
+# (Run workflow) on any branch.
+name: Tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Unit tests
+        run: |
+          node --version
+          for t in query contacts bytes update darken; do
+            echo "::group::$t"
+            node "tools/$t-test.mjs"
+            echo "::endgroup::"
+          done
+
+      # The version every test has been run with; not saved to the repository.
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Smoke test
+        run: node tools/smoke.js
+
+      - name: Runtime test (the real extension)
+        run: node tools/runtime.js
