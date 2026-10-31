@@ -2,6 +2,8 @@
 
 A fast, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) extension. It reuses the Yahoo sign-in already present in the browser and talks to the same API that Yahoo's own web client uses, so it is as quick as the official UI without any of its clutter. Everything works with the mouse; press `?` in the app for keyboard shortcuts.
 
+![YMail in the light theme: folders, message list and preview, with photo attachments listed under the message](docs/screenshots/light.png)
+
 ## Features
 
 - **Reading:** three-column or stacked layout with resizable panes, ten light and dark palettes, a Starred view across all folders, and remote images loaded automatically except in Spam and Trash.
@@ -11,6 +13,16 @@ A fast, ad-free front end for Yahoo Mail, packaged as a Chromium (Edge/Chrome) e
 - **Address book:** built from your own Inbox and Sent headers, with autocomplete ranked by recency and use. Settings › Address book lists it with a filter and hide/restore, also in bulk.
 - **Attachments:** listed under the message and previewed in place: PDF with selectable text and zoom, Word, Excel and other spreadsheets, PowerPoint and older Office formats through Yahoo's converter, images, text and code, CSV, HTML, audio, video and ZIP listings.
 - **Also:** contact cards on hover, printing, and all settings kept between sessions.
+
+Attachments open in place, here a photo; PDFs, Office documents and spreadsheets render the same way:
+
+![Attachment viewer showing a photo over the message](docs/screenshots/viewer.png)
+
+The dark theme with the message list above the preview:
+
+![Dark theme with the message list above the preview](docs/screenshots/dark.png)
+
+All names, addresses and messages in these screenshots are invented; `node tools/screenshots.js` regenerates them.
 
 ## Install
 
