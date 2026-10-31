@@ -1,0 +1,24 @@
+# Checks the bundled third-party libraries: each file is byte-identical to its published source,
+# and no library version has a known vulnerability in the OSV database. Runs on changes to the
+# libraries, weekly (new advisories appear without any change here), and on demand.
+name: Bundled libraries
+
+on:
+  push:
+    paths: ["ext/vendor/**", "tools/vendor-check.mjs", ".github/workflows/vendor.yml"]
+  pull_request:
+    paths: ["ext/vendor/**", "tools/vendor-check.mjs", ".github/workflows/vendor.yml"]
+  schedule:
+    - cron: "37 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compare with published sources and check advisories
+        run: node tools/vendor-check.mjs --upstream --osv
