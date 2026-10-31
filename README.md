@@ -19,6 +19,8 @@ Status: browsing, search, reading, mailbox actions (read/unread, star, archive, 
 | `/` | search; `Esc` clears |
 | `g i` `g s` `g t` `g d` | Inbox, Sent, Trash, Drafts |
 | `g *` | Starred messages in all folders |
+| `/` then Enter | Search the current folder and its subfolders (or Starred); matches in other folders are listed below a divider |
+| `/` then Shift+Enter | Search all mail (or click the scope chip, or Backspace in the empty box) |
 | `g f` | focus folder filter; type, arrows, `Enter` |
 | `x` | select / deselect (Ctrl-click toggles, Shift-click ranges, Ctrl+A all) |
 | `e` `#` `v` `u` `s` | archive, delete, move, read/unread, star; apply to the selection |

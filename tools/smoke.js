@@ -80,8 +80,13 @@ const folders = [
   const subject = await page.locator("#r-subject").textContent();
   const frameHtml = await page.frameLocator("#r-body").locator("body").innerHTML();
   await page.keyboard.press("/"); await page.keyboard.type("Z80"); await page.keyboard.press("Enter");
-  await page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("search"));
+  await page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("“Z80” in Inbox"));
   const hit = await page.locator("#rows .row .sb mark").first().textContent();
+  const scoped = { chip: await page.locator("#search-scope").textContent(), divider: await page.locator("#rows .elsewhere").count() };
+  await page.keyboard.press("/"); await page.keyboard.press("Shift+Enter");
+  await page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("“Z80” in all mail"));
+  scoped.allChip = await page.locator("#search-scope").textContent();
+  scoped.allDivider = await page.locator("#rows .elsewhere").count();
   await page.keyboard.press("g"); await page.keyboard.press("s");
   await page.waitForFunction(() => document.getElementById("list-title").textContent === "Sent");
   const sentRows = await page.locator("#rows .row").count();
@@ -118,6 +123,7 @@ const folders = [
   const afterRead = await page.locator("#st-undo").textContent();
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
+  expect(scoped.chip === "in Inbox" && scoped.divider === 1 && scoped.allChip === "All mail" && scoped.allDivider === 0, "search scope: " + JSON.stringify(scoped));
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
   expect(afterUndo.rows === 95, "undo restored rows");

@@ -19,6 +19,7 @@ const folders = [
   { id: "62", name: "Archive", types: ["ARCHIVE"], unread: 0, total: 0, highestModSeq: 16 },
   { id: "6", name: "Bulk", types: ["BULK"], unread: 0, total: 2, highestModSeq: 17 },
   { id: "31", name: "Projects", types: ["USER"], unread: 0, total: 5, highestModSeq: 13 },
+  { id: "32", name: "Projects/FPGA", types: ["USER"], unread: 0, total: 3, highestModSeq: 14 },
 ];
 const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", isPrimary: true, isSending: true, type: "FREE", signature: "<i>sig</i>", signatureActive: true }];
 
@@ -135,6 +136,28 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     countQuery: calls.some(c => /count%3A500|count:500/.test(c.envelope?.requests?.[0]?.uri || "") && /is%3Aflagged|is:flagged/.test(c.envelope?.requests?.[0]?.uri || "")),
     active: await page.locator("#folder-list .folder.active").textContent(), order: (await page.locator("#folder-list .folder .nm").allTextContents()).slice(0, 3).join(",") };
   await page.locator("#folder-list .folder", { hasText: "Projects" }).click(); await page.waitForTimeout(400);
+
+  // search from a folder covers it and its subfolders; other folders are searched alongside
+  const searchFrom = calls.length;
+  await page.locator("#search").click(); await page.keyboard.type("Z80");
+  results.search = { chip: await page.locator("#search-scope").textContent() };
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("#rows .elsewhere", { timeout: 5000 });
+  const qs = calls.slice(searchFrom).filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope.requests[0].uri.split("q=")[1]));
+  results.search.inQ = qs.find(q => q.includes("folderId:(31 OR 32)") && q.includes("keyword:Z80")) || qs;
+  results.search.outQ = !!qs.find(q => q.includes("-folderId:31 -folderId:32") && q.includes("keyword:Z80"));
+  results.search.title = await page.locator("#list-title").textContent();
+  results.search.divider = await page.locator("#rows .elsewhere span").textContent();
+  results.search.elseRows = await page.locator("#rows .row.else").count();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "search-scope.png"), clip: { x: 0, y: 0, width: 760, height: 720 } }).catch(() => {});
+  // the chip toggles to all mail; Escape returns to the folder
+  await page.locator("#search-scope").click();
+  results.search.offChip = await page.locator("#search-scope").textContent();
+  await page.keyboard.press("Enter"); await page.waitForTimeout(400);
+  results.search.allTitle = await page.locator("#list-title").textContent();
+  results.search.allDivider = await page.locator("#rows .elsewhere").count();
+  await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+  results.search.backTitle = await page.locator("#list-title").textContent();
 
   // star column: click toggles star without opening the message
   const starBefore = calls.length;
@@ -316,6 +339,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.starCol.call.split(",")[0] === "messages.starFlagUpdate" && !results.starCol.call.includes("getBody") && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.count === "8" && results.starredView.countQuery && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));
+  expect(results.search.chip === "in Projects" && typeof results.search.inQ === "string" && results.search.outQ && results.search.title === "“Z80” in Projects" && /8 matches in other folders/.test(results.search.divider) && results.search.elseRows === 8 &&
+    results.search.offChip === "All mail" && results.search.allTitle === "“Z80” in all mail" && results.search.allDivider === 0 && results.search.backTitle === "Projects", "scoped search: " + JSON.stringify(results.search));
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));

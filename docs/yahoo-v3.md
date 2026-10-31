@@ -65,6 +65,8 @@ Multiple ids can go in one `q=id:(a,b,c)` selector; the UI numbers inner request
 
 ## List query language
 
+Folder sets: `folderId:(a OR b OR c)` selects several folders (verified with 217 ids, about 450 ms). Exclusion needs one term per folder, `-folderId:a -folderId:b`; `-folderId:(a OR b)` and `NOT (...)` do not exclude.
+
 `is:flagged` selects starred messages across all folders; `-folderType:(TRASH)-folderType:(BULK)` excludes Trash and Spam (verified 2026-10-31).
 
 `q=folderId:<id> -folderType:(SYNC)-folderType:(INVISIBLE) count:100 offset:0 -sort:date`

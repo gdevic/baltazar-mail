@@ -176,6 +176,20 @@ const update = (name, ids, payload) => perMessage(name, ids, (id, i) => ({
 
 export function setRead(ids, read) { return update("messages.readFlagUpdate", ids, { message: { flags: { read } } }); }
 export function setStarred(ids, flagged) { return update("messages.starFlagUpdate", ids, { message: { flags: { flagged } } }); }
+// Search limited to a scope or to everything outside it. scope: { ids: [folderId...] } for a
+// folder and its subfolders, or { starred: true }. Yahoo accepts folderId:(a OR b) for a set;
+// for exclusion only one -folderId: term per folder works.
+export async function searchScoped(term, { raw = null, include = null, exclude = null } = {}, count = 100, offset = 0) {
+  const parts = [];
+  if (include?.starred) parts.push("is:flagged");
+  else if (include?.ids?.length) parts.push(include.ids.length === 1 ? `folderId:${include.ids[0]}` : `folderId:(${include.ids.join(" OR ")})`);
+  if (exclude?.starred) parts.push("-is:flagged");
+  else if (exclude?.ids?.length) parts.push(exclude.ids.map(id => `-folderId:${id}`).join(" "));
+  parts.push(raw || `keyword:${term}`);
+  const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`count:${count} offset:${offset} -sort:date ${parts.join(" ")}`) }]);
+  return { messages: first(r).messages || [], ms: r.ms };
+}
+
 export async function searchQuery(q, count = 20) {
   const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q2(`count:${count} offset:0 -sort:date ${q}`) }]);
   return { messages: first(r).messages || [], ms: r.ms };

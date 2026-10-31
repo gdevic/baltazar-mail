@@ -10,7 +10,7 @@
 <div id="app" class="hidden">
   <header id="top">
     <span id="brand">YMail</span>
-    <input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+    <span id="search-box"><button id="search-scope" class="hidden" tabindex="-1"></button><input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false"></span>
     <button id="compose-btn" title="New message (c)">New message</button>
     <span id="account"></span>
     <button id="gear" title="Settings">⚙</button>
@@ -172,6 +172,8 @@
       <tr><td>/</td><td>search (Esc clears)</td></tr>
       <tr><td>g i / g s / g t / g d / g b / g a</td><td>Inbox / Sent / Trash / Drafts / Spam / Archive</td></tr>
       <tr><td>g *</td><td>Starred (all folders)</td></tr>
+      <tr><td>/ then Enter</td><td>Search this folder and its subfolders; hits in other folders follow below</td></tr>
+      <tr><td>/ then Shift+Enter</td><td>Search all mail</td></tr>
       <tr><td>g f</td><td>focus folder list (type to filter, Enter to open)</td></tr>
       <tr><td>x</td><td>select / deselect message (Ctrl-click, Shift-click for ranges)</td></tr>
       <tr><td>Ctrl+A</td><td>select all loaded</td></tr>

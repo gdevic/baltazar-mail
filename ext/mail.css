@@ -36,8 +36,18 @@ body.dragging iframe { pointer-events: none; }
 #settings-box input[type=number] { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; font: inherit; }
 #top { grid-area: top; display: flex; align-items: center; gap: 12px; padding: 0 10px; background: var(--bg2); border-bottom: 1px solid var(--line); }
 #brand { font-weight: 600; color: var(--accent); letter-spacing: .5px; }
-#search { flex: 1; max-width: 520px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px; font: inherit; }
-#search:focus { outline: none; border-color: var(--sel-line); }
+#search-box { flex: 1; max-width: 520px; display: flex; align-items: center; gap: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 0 2px 0 3px; }
+#search-box:focus-within { border-color: var(--sel-line); }
+#search { flex: 1; min-width: 0; background: transparent; color: var(--fg); border: 0; padding: 3px 5px; font: inherit; }
+#search:focus { outline: none; }
+#search-scope { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--line); background: var(--bg2); color: var(--fg2); border-radius: 10px; padding: 0 8px; font-size: 11px; line-height: 17px; cursor: pointer; }
+#search-scope:hover { border-color: var(--accent); color: var(--fg); }
+#search-scope.off { border-style: dashed; color: var(--fg3); }
+#search-scope.hidden { display: none; }
+.elsewhere { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 8px; margin-top: 6px; font-size: 11px; color: var(--fg2); background: var(--bg2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.elsewhere a, .else-link { color: var(--accent); text-decoration: none; font-size: 11px; font-weight: 400; }
+.elsewhere a:hover, .else-link:hover { text-decoration: underline; }
+.row.else:not(.sel) { opacity: .8; }
 #account { color: var(--fg2); margin-left: auto; }
 
 #folders { grid-area: folders; overflow-y: auto; padding: 4px 0; background: var(--bg2); min-width: 0; }

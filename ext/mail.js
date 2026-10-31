@@ -58,7 +58,7 @@ systemDark.addEventListener("change", () => { if (settings.theme === "system") a
 const state = {
   folders: [], byId: new Map(), expanded: new Set(),
   view: { kind: "folder", folderId: null, term: "" },
-  messages: [], more: false, selected: -1, openId: null,
+  messages: [], more: false, selected: -1, openId: null, elsewhere: [],
   marked: new Set(), anchor: -1,
   modseq: new Map(), polling: null, kbFolder: -1, listToken: 0, signedIn: false,
 };
@@ -234,9 +234,17 @@ async function loadList(mode = "fresh") {
   if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; renderList(); }
   else if (mode === "more" && !state.messages.length) return;
   status(mode === "more" ? "loading more…" : "loading…");
-  let r;
+  let r, other = null;
   try {
-    r = v.kind === "search" ? await api.search(v.raw || v.term, null, count, offset, !!v.raw) : await api.list(v.folderId, count, offset);
+    if (v.kind === "search" && v.scope) {
+      // The scope and everything outside it are searched together; hits elsewhere are listed
+      // below the scoped ones once those are complete.
+      const scoped = mode === "more" ? state.messages.filter(x => !x.elsewhere).length : 0;
+      [r, other] = await Promise.all([
+        api.searchScoped(v.term, { raw: v.raw, include: v.scope }, count, scoped),
+        mode === "more" ? null : api.searchScoped(v.term, { raw: v.raw, exclude: v.scope }, ELSEWHERE_MAX, 0).catch(() => ({ messages: [] })),
+      ]);
+    } else r = v.kind === "search" ? await api.search(v.raw || v.term, null, count, offset, !!v.raw) : await api.list(v.folderId, count, offset);
   } catch (e) {
     if (token !== state.listToken) return;
     if (mode === "fresh" && prevView) { state.view = prevView; renderFolders(); }
@@ -245,11 +253,14 @@ async function loadList(mode = "fresh") {
   }
   if (token !== state.listToken) return;
   state.prevView = null;
+  if (other) state.elsewhere = other.messages.map(x => ({ ...x, elsewhere: true }));
+  else if (mode !== "more") state.elsewhere = [];
   if (mode === "more") {
     const have = new Set(state.messages.map(m => m.id));
-    state.messages = state.messages.concat(r.messages.filter(m => !have.has(m.id)));
+    state.messages = state.messages.filter(x => !x.elsewhere).concat(r.messages.filter(m => !have.has(m.id)));
   } else state.messages = r.messages;
   state.more = r.messages.length >= Math.min(count, PAGE);
+  if (!state.more) state.messages = state.messages.concat(state.elsewhere);
   if (mode !== "more") {
     const ids = new Set(state.messages.map(m => m.id));
     for (const id of state.marked) if (!ids.has(id)) state.marked.delete(id);
@@ -258,9 +269,19 @@ async function loadList(mode = "fresh") {
     if (state.openId && !ids.has(state.openId) && v.kind === "folder") clearReader();
   }
   renderList();
-  const name = v.starred ? "Starred" : v.kind === "search" ? `search: ${v.term}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
+  const name = v.starred ? "Starred" : v.kind === "search" ? `“${v.term}” in ${v.scope ? v.scope.name : "all mail"}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
   $("list-title").textContent = name;
-  status(`${name}: ${state.messages.length} messages`, r.ms);
+  const elseN = state.elsewhere.length, elseStr = elseN >= ELSEWHERE_MAX ? `${ELSEWHERE_MAX}+` : String(elseN);
+  if (v.kind === "search" && v.scope && elseN && state.more) {
+    // Elsewhere hits wait below the scoped pages; offer them up front.
+    const link = document.createElement("a");
+    link.className = "else-link"; link.href = "#";
+    link.textContent = `+${elseStr} elsewhere`; link.title = "Search all mail (Shift+Enter in the search box)";
+    link.onclick = e => { e.preventDefault(); doSearch(v.term, true); };
+    $("list-title").append(" ", link);
+  }
+  const scopedN = state.messages.filter(x => !x.elsewhere).length;
+  status(`${name}: ${scopedN} messages${v.scope && elseN ? `, ${elseStr} more in other folders` : ""}`, r.ms);
 }
 
 function renderList() {
@@ -272,12 +293,23 @@ function renderList() {
   let lastDay = null;
   const showFolder = state.view.kind === "search";
   const outgoing = ["SENT", "DRAFT"].includes(folderType(state.byId.get(state.view.folderId)));
+  let divided = false;
   state.messages.forEach((m, i) => {
     const h = m.headers || {};
+    if (m.elsewhere && !divided) {
+      divided = true; lastDay = null;
+      const v = state.view, n = state.elsewhere.length, scopedN = i;
+      const d = document.createElement("div");
+      d.className = "elsewhere";
+      d.innerHTML = `<span>${scopedN ? "" : `Nothing in ${esc(v.scope?.name || "this folder")}. `}${n >= ELSEWHERE_MAX ? `${ELSEWHERE_MAX}+ matches` : `${n} match${n === 1 ? "" : "es"}`} in other folders</span>` +
+        `<a href="#" title="Search all mail, with paging (Shift+Enter in the search box)">Search all mail</a>`;
+      d.querySelector("a").onclick = e => { e.preventDefault(); doSearch(v.term, true); };
+      frag.appendChild(d);
+    }
     const day = dayLabel(h.date);
     if (day !== lastDay) { const d = document.createElement("div"); d.className = "day"; d.textContent = day; frag.appendChild(d); lastDay = day; }
     const el = document.createElement("div");
-    el.className = "row" + (m.flags?.read ? "" : " unread") + (i === state.selected ? " sel" : "") + (state.marked.has(m.id) ? " marked" : "");
+    el.className = "row" + (m.flags?.read ? "" : " unread") + (m.elsewhere ? " else" : "") + (i === state.selected ? " sel" : "") + (state.marked.has(m.id) ? " marked" : "");
     el.dataset.i = i;
     el.draggable = true;
     const who = outgoing ? h.to?.[0] : h.from?.[0];
@@ -380,7 +412,8 @@ function updateToolbar() {
   $("toolbar").querySelector('[data-act="read"]').textContent = first && !first.flags?.read ? "Mark read" : "Mark unread";
   $("toolbar").querySelector('[data-act="star"]').textContent = first && first.flags?.flagged ? "Unstar" : "Star";
   $("toolbar").querySelector('[data-act="spam"]').textContent = spamLabel();
-  $("list-count").textContent = `${state.messages.length}${state.more ? "+" : ""}` + (state.marked.size ? ` · ${state.marked.size} selected` : "");
+  const elseN = state.messages.filter(x => x.elsewhere).length;
+  $("list-count").textContent = `${state.messages.length - elseN}${state.more ? "+" : ""}${elseN ? ` (+${elseN} elsewhere)` : ""}` + (state.marked.size ? ` · ${state.marked.size} selected` : "");
 }
 
 // ---------- reader ----------
@@ -477,6 +510,7 @@ async function searchPerson(email) {
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term: email, raw: personQuery(email) };
   $("search").value = email;
+  updateScopeChip();
   renderFolders();
   await loadList("fresh");
   $("list").focus();
@@ -699,6 +733,7 @@ function removeLocal(ids) {
   const cur = state.messages[state.selected];
   const curRemoved = cur && set.has(cur.id);
   state.messages = keep;
+  state.elsewhere = state.elsewhere.filter(m => !set.has(m.id));
   for (const id of ids) state.marked.delete(id);
   if (state.openId && set.has(state.openId)) clearReader();
   state.selected = curRemoved ? Math.min(state.selected, keep.length - 1) : keep.findIndex(m => m.id === cur?.id);
@@ -942,6 +977,7 @@ async function openFolder(id) {
   state.prevView = state.view;
   state.view = { kind: "folder", folderId: id, term: "" };
   $("search").value = "";
+  scopeOff = false; updateScopeChip();
   renderFolders();
   await loadList("fresh");
   $("list").focus();
@@ -965,17 +1001,48 @@ async function openStarred() {
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term: "Starred", raw: STARRED_Q, starred: true };
   $("search").value = "";
+  scopeOff = false; updateScopeChip();
   renderFolders();
   await loadList("fresh");
   $("list").focus();
 }
 
-async function doSearch(term) {
+// ---------- search scope ----------
+// A search covers the folder being viewed and its subfolders (or Starred), shown as a chip in
+// the search box. The chip toggles to all mail; Shift+Enter always searches all mail.
+const ELSEWHERE_MAX = 50;
+let scopeOff = false;
+
+function scopeOfView(v = state.view) {
+  if (v.starred) return { starred: true, name: "Starred" };
+  if (v.kind === "search") return v.scope || (v.back ? scopeOfView(v.back) : null);
+  const f = state.byId.get(v.folderId);
+  if (!f) return null;
+  const subs = state.folders.filter(x => x.name.startsWith(f.name + "/") && !isHidden(x));
+  return { id: f.id, name: folderName(f).split("/").pop(), full: folderName(f), ids: [f.id, ...subs.map(x => x.id)], subs: subs.length };
+}
+
+function updateScopeChip() {
+  const chip = $("search-scope"), s = scopeOfView();
+  chip.classList.toggle("hidden", !s);
+  if (!s) return;
+  chip.classList.toggle("off", scopeOff);
+  chip.textContent = scopeOff ? "All mail" : `in ${s.name}`;
+  chip.title = scopeOff ? `Searching all mail. Click to search only ${s.full || s.name}.`
+    : `Searching ${s.full || s.name}${s.subs ? ` and ${s.subs} subfolder${s.subs === 1 ? "" : "s"}` : ""}. Click (or Backspace in an empty box) for all mail; Shift+Enter searches all mail.`;
+}
+
+async function doSearch(term, everywhere = false) {
   term = term.trim();
   if (!term) return;
+  const scope = everywhere || scopeOff ? null : scopeOfView();
+  const back = state.view.kind === "search" ? state.view.back : state.view;
   state.prevView = state.view;
-  state.view = { kind: "search", folderId: null, term };
+  state.view = { kind: "search", folderId: null, term, scope, back };
+  $("search").value = term;
+  if (everywhere) scopeOff = true;
   renderFolders();
+  updateScopeChip();
   await loadList("fresh");
   $("list").focus();
 }
@@ -995,12 +1062,20 @@ function onKey(e) {
   const inFolderFilter = document.activeElement === $("folder-filter");
   const onButton = document.activeElement?.tagName === "BUTTON";
   if (e.key === "Escape") {
-    if (inSearch) { $("search").value = ""; $("search").blur(); if (state.view.kind === "search") openFolder(inboxId()); return; }
+    if (inSearch) {
+      $("search").value = ""; $("search").blur();
+      if (state.view.kind === "search" && !state.view.starred) { const b = state.view.back; b?.starred ? openStarred() : openFolder(b?.folderId || inboxId()); }
+      return;
+    }
     if (inFolderFilter) { state.kbFolder = -1; renderFolders(); $("list").focus(); return; }
     if (!$("ctx").classList.contains("hidden")) { hideContextMenu(); return; }
     if (state.marked.size) { clearMarks(); return; }
   }
-  if (inSearch) { if (e.key === "Enter") doSearch($("search").value); return; }
+  if (inSearch) {
+    if (e.key === "Enter") doSearch($("search").value, e.shiftKey);
+    else if (e.key === "Backspace" && !$("search").value && scopeOfView() && !scopeOff) { scopeOff = true; updateScopeChip(); }
+    return;
+  }
   if (inFolderFilter) {
     const items = [...$("folder-list").querySelectorAll(".folder")];
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -1200,5 +1275,6 @@ compose.init({
   scheduleSend,
 });
 $("more-btn").onclick = () => loadList("more");
+$("search-scope").onclick = () => { scopeOff = !scopeOff; updateScopeChip(); $("search").focus(); };
 $("help").onclick = e => { if (e.target.id === "help") $("help").classList.add("hidden"); };
 start();
