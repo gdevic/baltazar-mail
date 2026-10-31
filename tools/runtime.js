@@ -27,7 +27,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
-  const calls = [];
+  const calls = [], docCalls = [];
   await ctx.route("https://mail.yahoo.com/**", async route => {
     const req = route.request();
     if (req.url() === "https://mail.yahoo.com/") return route.fulfill({ contentType: "text/html", body: '<html><script>window.AppBootstrapData={"appId":"YMailCLDNovation","mailWssid":"w1","primaryMailbox":{"email":"me@yahoo.com","id":"MB1"}}</script></html>' });
@@ -52,8 +52,19 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
         { partId: "4", filename: "src.zip", size: 400, disposition: "attachment", type: "application", subtype: "zip", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/zip" },
         { partId: "5", filename: "photo.png", size: 70, disposition: "attachment", type: "image", subtype: "png", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/png", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/5?appid=x" },
         { partId: "6", filename: "cv.docx", size: 33000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.wordprocessingml.document", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/docx", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/6?appid=x" },
+        { partId: "7", filename: "budget.xlsx", size: 17000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.spreadsheetml.sheet", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/xlsx" },
+        { partId: "8", filename: "deck.pptx", size: 90000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.presentationml.presentation", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pptx", documentId: "DOC8" },
       ];
       responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>` } } } }];
+    }
+    else if (uri === "/ws/docpreview/v2/fetch") {
+      // Yahoo's converter: first ask is still queued, then pages arrive entity-encoded.
+      docCalls.push({ docId: headers["docs-document-id"], ...top.payload });
+      const enc = s => s.replace(/[<>"&=#;:/ ]/g, c => `&#${c.charCodeAt(0)};`);
+      const pages = {};
+      if (top.payload.retryCount > 0) for (let n = top.payload.start_page; n <= Math.min(5, top.payload.end_page); n++)
+        pages["page" + n] = { html: enc(`<div class="aps-page"><p class="t">Slide ${n === 1 ? "one" : n}</p><script>bad()</script><a href="javascript:bad()">x</a></div>`), css: ".aps-page .t { font-size: 20pt; }", statuscode: 700, pdfEmbed: false };
+      responses = [{ id: top.id, httpCode: 200, response: Object.keys(pages).length ? { code: 800, statuscode: 600, info: { num_pages: 5, dimension: { w: 900, h: 1400 } }, pages } : { code: 814, statuscode: 600, pages: {} } }];
     }
     else if (top.id === "SaveMessage") {
       const saved = { ...msg(99, "3"), id: "MSGDRAFT_99", immutableid: "IMM99", csid: top.payloadParts[0].payload.message.csid };
@@ -65,6 +76,26 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 
+  // Raw message source holding the real attachment bytes, numbered as Yahoo numbers them.
+  const FX = path.join(__dirname, "fixtures");
+  const b64 = buf => buf.toString("base64").replace(/.{76}/g, "$&\r\n");
+  const part = (type, name, buf) => `--BOUND\r\nContent-Type: ${type}; name="${name}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${name}"\r\n\r\n${b64(buf)}\r\n`;
+  const rawFor = () => "From: s@x.com\r\nSubject: test\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"BOUND\"\r\n\r\npreamble\r\n" +
+    "--BOUND\r\nContent-Type: text/plain\r\n\r\nBody\r\n" +
+    part("application/pdf", "report.pdf", fs.readFileSync(path.join(FX, "report.pdf"))) +
+    part("text/csv", "data.csv", Buffer.from("name,qty\nZ80,2\n6502,1\n")) +
+    part("application/zip", "src.zip", zipBytes) +
+    part("image/png", "photo.png", thumbPng) +
+    part("application/octet-stream", "cv.docx", fs.readFileSync(path.join(FX, "cv.docx"))) +
+    part("application/octet-stream", "budget.xlsx", fs.readFileSync(path.join(FX, "budget.xlsx"))) +
+    part("application/octet-stream", "deck.pptx", Buffer.from("not really a deck")) + "--BOUND--\r\n";
+  const rawCalls = [];
+  await ctx.route("https://apis.mail.yahoo.com/**", route => {
+    const u = route.request().url();
+    rawCalls.push({ url: u, origin: route.request().headers().origin });
+    if (u.includes("/content/rawplaintext")) return route.fulfill({ contentType: "text/plain", body: rawFor() });
+    return route.fulfill({ status: 404, body: "" });
+  });
   let thumbFull = false;
   const thumbPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
   const zipBytes = Buffer.from("UEsDBBQAAAAAAI8CX12Tpho8uAEAALgBAAAKAAAAc3JjL21haW4uY2ludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KUEsDBBQAAAAAAI8CX10gMDo2BgAAAAYAAAAJAAAAUkVBRE1FLm1kaGVsbG8KUEsBAhQDFAAAAAAAjwJfXZOmGjy4AQAAuAEAAAoAAAAAAAAAAAAAAIABAAAAAHNyYy9tYWluLmNQSwECFAMUAAAAAACPAl9dIDA6NgYAAAAGAAAACQAAAAAAAAAAAAAAgAHgAQAAUkVBRE1FLm1kUEsFBgAAAAACAAIAbwAAAA0CAAAAAA==", "base64");
@@ -111,18 +142,43 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), labels: await page.locator("#r-attach .att-thumb").allTextContents(),
     stripBelowBody: await page.evaluate(() => document.getElementById("r-attach").getBoundingClientRect().top >= document.getElementById("r-body").getBoundingClientRect().bottom - 1) };
   const view = async i => { await page.locator("#r-attach .att-card").nth(i).click(); await page.waitForSelector("#viewer:not(.hidden)"); await page.waitForFunction(() => !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 5000 }); };
+  const next = async name => { await page.keyboard.press("ArrowRight"); await page.waitForFunction(n => document.getElementById("v-name").textContent === n && !document.getElementById("v-body").textContent.startsWith("Loading"), name, { timeout: 8000 }); };
+  const shadowText = sel => page.evaluate(s => [...document.querySelectorAll(s)].map(h => h.shadowRoot?.textContent || "").join("|"), sel);
   await page.screenshot({ path: path.join(__dirname, "..", "out", "strip.png"), clip: { x: 700, y: 560, width: 580, height: 160 } }).catch(() => {});
-  await view(1); results.vCsv = await page.locator("#v-body td").allTextContents();
-  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-csv.png"), clip: { x: 40, y: 30, width: 640, height: 220 } }).catch(() => {});
-  await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.getElementById("v-name").textContent === "src.zip" && document.querySelector("#v-body #v-dl2"), null, { timeout: 5000 });
-  results.vZip = await page.locator("#v-body").textContent();
-  await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body img.v-img", { timeout: 5000 });
-  results.vImg = await page.locator("#v-body img.v-img").count() === 1 && thumbFull;
-  await page.keyboard.press("ArrowRight"); await page.waitForSelector("#v-body pre", { timeout: 5000 });
-  results.vDoc = await page.locator("#v-body pre").textContent();
-  await page.keyboard.press("ArrowRight"); await page.waitForFunction(() => document.getElementById("v-name").textContent === "report.pdf" && document.querySelector("#v-body pre"), null, { timeout: 5000 });
-  results.vPdf = await page.locator("#v-body pre").textContent();
-  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer.png") }).catch(() => {});
+  // PDF: PDF.js renders canvas pages with a selectable text layer; zoom buttons appear
+  await view(0);
+  await page.waitForFunction(() => document.querySelector("#v-body .v-pdf .page canvas") && /Quarterly/.test(document.querySelector("#v-body .v-pdf .textLayer")?.textContent || ""), null, { timeout: 15000 });
+  const scale0 = await page.evaluate(() => document.querySelector("#v-body .v-pdf .page").getBoundingClientRect().width);
+  await page.keyboard.press("+"); await page.waitForTimeout(400);
+  const scale1 = await page.evaluate(() => document.querySelector("#v-body .v-pdf .page").getBoundingClientRect().width);
+  results.vPdf = { pages: await page.locator("#v-body .v-pdf .page").count(), zoomed: scale1 > scale0 * 1.1, zoomBar: await page.locator("#v-zoom").isVisible(), meta: await page.locator("#v-meta").textContent() };
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-pdf.png") }).catch(() => {});
+  const dl = page.waitForEvent("download", { timeout: 5000 }).catch(() => null);
+  await page.locator("#v-dl").click();
+  const d = await dl;
+  results.vDownload = d ? d.suggestedFilename() + ":" + (fs.statSync(await d.path()).size === fs.statSync(path.join(FX, "report.pdf")).size) : "none";
+  await next("data.csv"); results.vCsv = await page.locator("#v-body td").allTextContents();
+  results.vZoomHidden = await page.locator("#v-zoom").isHidden();
+  await next("src.zip"); results.vZip = await page.locator("#v-body td:first-child").allTextContents();
+  await next("photo.png"); results.vImg = await page.locator("#v-body img.v-img").count();
+  await next("cv.docx");
+  await page.waitForFunction(() => /Jorge Ruiz/.test(document.querySelector("#v-body .v-doc")?.shadowRoot?.textContent || ""), null, { timeout: 8000 });
+  results.vDoc = await shadowText("#v-body .v-doc");
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-docx.png") }).catch(() => {});
+  await next("budget.xlsx");
+  results.vSheet = { cells: await page.locator("#v-body .v-grid td").allTextContents(), tabs: await page.locator("#v-body .v-tabs button").count() };
+  await page.locator("#v-body .v-tabs button", { hasText: "Q2" }).click();
+  results.vSheet2 = await page.locator("#v-body .v-grid td").allTextContents();
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-xlsx.png") }).catch(() => {});
+  await next("deck.pptx");
+  await page.waitForFunction(() => document.querySelectorAll("#v-body .v-page").length >= 3, null, { timeout: 8000 });
+  await page.evaluate(() => document.querySelector("#v-body .v-more")?.scrollIntoView());
+  await page.waitForFunction(() => document.querySelectorAll("#v-body .v-page").length === 5, null, { timeout: 8000 }).catch(() => {});
+  const pptHtml = await page.evaluate(() => [...document.querySelectorAll("#v-body .v-page")].map(h => h.shadowRoot.innerHTML).join(""));
+  results.vSlides = { pages: await page.locator("#v-body .v-page").count(), text: await shadowText("#v-body .v-page"), clean: !/<script|javascript:/i.test(pptHtml), retried: docCalls.some(c => c.retryCount > 0), docId: docCalls[0]?.docId };
+  await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-pptx.png") }).catch(() => {});
+  results.rawFetches = rawCalls.filter(c => c.url.includes("rawplaintext")).length;
+  results.rawOrigin = rawCalls[0]?.origin;
   await page.keyboard.press("Escape");
   results.vClosed = await page.locator("#viewer").isHidden();
 
@@ -250,11 +306,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.starCol.call === "messages.starFlagUpdate" && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
-  expect(results.attach.cards === 5 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC", "attachment strip: " + JSON.stringify(results.attach));
-  expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("No preview") && results.vImg === true && results.vDoc.includes("Jorge") && results.vPdf.includes("Quarterly") && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vClosed]));
+  expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
+  expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
+  expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));
+  expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8", "converter: " + JSON.stringify(results.vSlides));
+  expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));
-  expect(results.fwdChips.length === 5 && results.fwd.atts.length === 5 && results.fwd.atts[0].messageReference?.pid === "2" && results.fwd.uri.includes("uploadCount=0&totalAttachments=5") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
+  expect(results.fwdChips.length === 7 && results.fwd.atts.length === 7 && results.fwd.atts[0].messageReference?.pid === "2" && results.fwd.uri.includes("uploadCount=0&totalAttachments=7") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
   expect(results.palette === 16, "16 text colours");
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));

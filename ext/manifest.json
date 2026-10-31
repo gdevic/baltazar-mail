@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YMail",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "A fast, ad-free front end for Yahoo Mail that reuses your existing Yahoo sign-in. Works equally well with mouse or keyboard.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -29,6 +29,6 @@
     "declarativeNetRequest"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; frame-src 'self' blob:"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; frame-src 'self' blob:"
   }
 }

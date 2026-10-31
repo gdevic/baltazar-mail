@@ -1136,7 +1136,7 @@ wireSettings();
 wireSplitters();
 wireMovePicker();
 wireContactCards();
-viewer.init({ thumb: thumbFor, cleanHtml, status });
+viewer.init({ thumb: thumbFor, raw: api.rawMessage, docPages: api.docPages, cleanHtml, status });
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;

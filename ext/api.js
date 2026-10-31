@@ -3,6 +3,7 @@
 
 const ORIGIN = "https://mail.yahoo.com";
 const BATCH = ORIGIN + "/c/ws/v3/batch";
+const JWS = "https://apis.mail.yahoo.com";
 const LIST_FILTER = "-folderType:(SYNC)-folderType:(INVISIBLE)";
 
 export class NotSignedIn extends Error {
@@ -37,7 +38,7 @@ export async function bootstrap(force = false) {
 const uuid = () => crypto.randomUUID();
 
 // One batch envelope, one HTTP round trip. Returns the inner responses array.
-export async function batch(name, requests, retry = true, files = []) {
+export async function batch(name, requests, retry = true, files = [], headers = {}) {
   const s = await bootstrap();
   const fill = r => ({ payloadType: "embedded", ...r, uri: r.uri.replaceAll("<mb>", s.mailboxId), ...(r.requests ? { requests: r.requests.map(fill) } : {}) });
   const reqs = requests.map(fill);
@@ -46,13 +47,13 @@ export async function batch(name, requests, retry = true, files = []) {
   for (const f of files || []) fd.append(encodeURIComponent(f.name), f, f.name);
   const qs = new URLSearchParams({ name, appId: s.appId, wssid: s.wssid, ymreqid: uuid(), nonblocking: "true" });
   const t0 = performance.now();
-  const resp = await fetch(`${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include" });
+  const resp = await fetch(`${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include", headers });
   const ms = Math.round(performance.now() - t0);
   if ((resp.status === 401 || resp.status === 403) && retry) {
     session = null;
     await chrome.storage.session.remove("ymSession");
     await bootstrap(true);
-    return batch(name, requests, false, files);
+    return batch(name, requests, false, files, headers);
   }
   const text = await resp.text();
   let doc;
@@ -62,7 +63,7 @@ export async function batch(name, requests, retry = true, files = []) {
     if (code === "EP-4010" && retry) {
       // Origin rewrite rule not installed yet (worker still starting); ask it and retry once.
       await chrome.runtime.sendMessage({ type: "ensureRules" }).catch(() => {});
-      return batch(name, requests, false, files);
+      return batch(name, requests, false, files, headers);
     }
     if (code === "EC-4008") { session = null; throw new NotSignedIn(); }
     throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}`, doc.error);
@@ -121,6 +122,39 @@ export async function body(msgId) {
   // Attachment metadata lives on the message; simpleBody carries it only for some messages.
   const attachments = res.message.attachments?.length ? res.message.attachments : (res.simpleBody?.attachments || []);
   return { message: res.message, html: res.simpleBody?.html || "", attachments, ms: r.ms };
+}
+
+// Full RFC 822 source. Yahoo's attachment download links cannot be fetched, so attachment
+// bytes are cut out of this (see mime.js).
+export async function rawMessage(msgId, retry = true) {
+  const s = await bootstrap();
+  const qs = new URLSearchParams({ appId: s.appId, wssid: s.wssid, ymreqid: uuid() });
+  const resp = await fetch(`${JWS}/ws/v3/mailboxes/@.id==${s.mailboxId}/messages/@.id==${msgId}/content/rawplaintext?${qs}`, { credentials: "include" });
+  if ((resp.status === 401 || resp.status === 403) && retry) {
+    session = null;
+    await chrome.storage.session.remove("ymSession");
+    await bootstrap(true);
+    return rawMessage(msgId, false);
+  }
+  if (!resp.ok) throw new ApiError(`rawMessage: HTTP ${resp.status}`, (await resp.text()).slice(0, 300));
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+// Yahoo's document converter, for formats with no renderer here. PDF pages come back as JPEG
+// images, Office documents as HTML plus CSS, spreadsheets one sheet per page. Pages are 1-based.
+// code 800 is success; a page with statuscode 700 is ready.
+export async function docPages(documentId, start, end, retryCount = 0) {
+  const r = await batch("document.fetch", [{
+    id: "FetchDocument", method: "POST", uri: "/ws/docpreview/v2/fetch",
+    payload: { start_page: start, end_page: end, retryCount },
+  }], true, [], { "docs-document-id": documentId });
+  const x = r[0];
+  if (!x || x.httpCode < 200 || x.httpCode >= 300 || !x.response) throw new ApiError(`document.fetch: HTTP ${x?.httpCode ?? "?"}`, x);
+  const res = x.response;
+  const pages = Object.entries(res.pages || {})
+    .map(([k, p]) => ({ n: Number(k.replace(/\D/g, "")), html: p.html || "", css: p.css || "", ok: p.statuscode === 700 }))
+    .sort((p, q) => p.n - q.n);
+  return { code: res.code, total: res.info?.num_pages || 0, width: res.info?.dimension?.w || 0, height: res.info?.dimension?.h || 0, pages };
 }
 
 // ---------- mutations ----------
