@@ -303,6 +303,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("as spam"), null, { timeout: 4000 });
   const spamCall = calls.slice(before).find(c => c.name === "messages.move");
   results.spam = { dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator("#st-undo").textContent() };
+  // the reader moves on to the row now under the cursor instead of going blank
+  await page.waitForFunction(() => !document.getElementById("reader-head").classList.contains("hidden") &&
+    (document.querySelector("#rows .row.sel .sb")?.textContent || "").startsWith(document.getElementById("r-subject").textContent), null, { timeout: 4000 }).catch(() => {});
+  results.spam.next = { empty: await page.locator("#reader-empty").isVisible(), subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
   await page.keyboard.press("z");
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Redo: mark"), null, { timeout: 4000 });
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
@@ -472,7 +476,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
-  expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));
+  expect(results.spam.dest === "6" && results.spam.undo.includes("as spam") && !results.spam.next.empty && results.spam.next.subject && results.spam.next.sel.startsWith(results.spam.next.subject), "spam moves to Bulk: " + JSON.stringify(results.spam));
   // The original's 7 attachments go by reference; its inline image travels as an uploaded inline part.
   const refs = results.fwd.atts.filter(x => x.messageReference), inl = results.fwd.atts.filter(x => x.disposition === "inline");
   expect(results.fwdChips.length === 7 && refs.length === 7 && refs[0].messageReference?.pid === "2" && inl.length === 1 && results.fwd.uri.includes("uploadCount=1&totalAttachments=8") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));

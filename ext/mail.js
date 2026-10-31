@@ -786,11 +786,13 @@ function removeLocal(ids) {
   state.messages = keep;
   state.elsewhere = state.elsewhere.filter(m => !set.has(m.id));
   for (const id of ids) state.marked.delete(id);
-  if (state.openId && set.has(state.openId)) clearReader();
+  const openGone = state.openId && set.has(state.openId);
   state.selected = curRemoved ? Math.min(state.selected, keep.length - 1) : keep.findIndex(m => m.id === cur?.id);
   state.anchor = state.selected;
   renderList();
   if (curRemoved && state.selected >= 0) select(state.selected);
+  // The reader follows the cursor to the next message; it empties only when the list does.
+  if (openGone) { if (state.selected >= 0) open(state.selected); else clearReader(); }
 }
 
 function bumpFolder(id, dTotal, dUnread) {
