@@ -14,7 +14,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowH: 22, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -44,7 +44,11 @@ function applyLayout() {
   r.setProperty("--folder-w", settings.folderW + "px");
   r.setProperty("--list-w", settings.listW + "px");
   r.setProperty("--list-h", settings.listH + "%");
-  r.setProperty("--row-h", settings.rowH + "px");
+  // Text size, as a percentage of the 13px design size, scales every text in the interface
+  // together; rows are never shorter than the text needs.
+  const fs = 13 * settings.textPct / 100;
+  r.setProperty("--fs", fs + "px");
+  r.setProperty("--row-h", Math.max(settings.rowH, Math.round(fs * 1.7)) + "px");
 }
 
 function syncSettingsForm() {
@@ -53,6 +57,7 @@ function syncSettingsForm() {
   for (const el of document.querySelectorAll("#settings input[type=radio]")) el.checked = settings[el.name] === el.value;
   $("poll").value = settings.pollSec;
   $("density").value = settings.rowH;
+  $("textpct").value = settings.textPct;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
   $("undosend").value = settings.undoSendSec;
   $("composeFont").value = settings.composeFont; $("composeSize").value = String(settings.composeSize);
@@ -663,6 +668,8 @@ function bodyDoc(html, images, look = "light") {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:${dark ? DARK.fg : "#111"};word-wrap:break-word}` +
     (dark ? `html{background:${DARK.bg};color-scheme:dark}a{color:${DARK.link}}` : look === "dim" ? "html{background:#fff;filter:brightness(.9)}" : "") +
+    // the text size setting zooms the message as a whole, so mail that fixes its own sizes follows too
+    (settings.textPct !== 100 ? `html{zoom:${settings.textPct / 100}}` : "") +
     `img{max-width:100%;height:auto${images ? "" : ";display:none"}}pre{white-space:pre-wrap}blockquote{border-left:3px solid ${dark ? DARK.rule : "#ccc"};margin:6px 0;padding-left:10px;color:${dark ? DARK.quote : "#444"}}</style></head>` +
     `<body>${html}</body></html>`;
 }
@@ -1397,6 +1404,11 @@ function wireSettings() {
   $("composeSize").onchange = () => { settings.composeSize = Number($("composeSize").value) || 13; saveSettings(); };
   $("undosend").onchange = () => { settings.undoSendSec = Math.min(60, Math.max(0, Number($("undosend").value) || 0)); saveSettings(); };
   $("markread").onchange = () => { const v = $("markread").value.trim(); settings.markReadSec = v === "" ? null : Math.max(0, Number(v) || 0); saveSettings(); };
+  $("textpct").onchange = () => {
+    settings.textPct = Math.min(150, Math.max(85, Math.round((Number($("textpct").value) || 100) / 5) * 5));
+    applySettings(); saveSettings();
+    if (currentBody && state.openId) showBody();
+  };
   $("density").onchange = () => { settings.rowH = Math.min(32, Math.max(18, Number($("density").value) || 22)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
   wireAddressBook();
