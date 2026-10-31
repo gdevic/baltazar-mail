@@ -457,17 +457,14 @@ function updateToolbar() {
 let currentBody = null;
 let markReadTimer = null;
 
-// Yahoo's HTML is server-sanitised; this strips what could still navigate or beacon from the frame.
+// Yahoo's HTML is server-sanitised; DOMPurify (vendor/purify.min.js) removes anything that could
+// still run, navigate or submit. Links open in a new tab, since the reader frame cannot navigate.
+const purify = globalThis.DOMPurify;
+purify.addHook("afterSanitizeAttributes", node => {
+  if (node.tagName === "A" && node.hasAttribute("href")) { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+});
 function cleanHtml(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.querySelectorAll("script, meta, link, base, object, embed, iframe, form").forEach(e => e.remove());
-  for (const el of doc.querySelectorAll("*")) {
-    for (const a of [...el.attributes]) {
-      if (a.name === "ping" || a.name.startsWith("on")) el.removeAttribute(a.name);
-      else if (/^(href|src|action)$/.test(a.name) && !/^(https?:|mailto:|cid:|#)/i.test(a.value.trim())) el.removeAttribute(a.name);
-    }
-  }
-  return doc.body.innerHTML;
+  return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] });
 }
 
 // Inline parts (cid images) are served by cloud-apis.mail.yahoo.com and need the session cookies,
@@ -581,7 +578,7 @@ async function thumbFor(a) {
 function bodyDoc(html, images) {
   const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? "https: data:" : "'none'"};`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
-    `<base target="_blank"><style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:#111;word-wrap:break-word}` +
+    `<style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:#111;word-wrap:break-word}` +
     `img{max-width:100%;height:auto${images ? "" : ";display:none"}}pre{white-space:pre-wrap}blockquote{border-left:3px solid #ccc;margin:6px 0;padding-left:10px;color:#444}</style></head>` +
     `<body>${html}</body></html>`;
 }

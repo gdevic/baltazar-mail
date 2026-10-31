@@ -1,7 +1,7 @@
-// Attachment strip under the message body and an in-app viewer. Attachment bytes come from the
-// message source and are rendered locally: PDF.js for PDF, docx-preview for Word, SheetJS for
-// spreadsheets, native elements for images and media. Formats with no renderer here use
-// Yahoo's document converter, and failing that, Yahoo's extracted text.
+// Attachment strip under the message body and the viewer. Attachment bytes come from the message
+// source. Images and media play in native elements here; everything else is parsed and drawn in
+// the sandboxed render.html (PDF.js, docx-preview, SheetJS, ZIP listings, text). Formats with no
+// renderer there use Yahoo's document converter, and failing that, Yahoo's extracted text.
 
 import { listParts, extract } from "./mime.js";
 
@@ -132,37 +132,6 @@ function objectUrl(blob, type) {
 const MIME = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
   mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4", flac: "audio/flac", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4" };
 
-// ---------- libraries (loaded on first use) ----------
-const loaded = new Map();
-function loadScript(path) {
-  if (!loaded.has(path)) loaded.set(path, new Promise((ok, no) => {
-    const s = document.createElement("script");
-    s.src = path; s.onload = ok; s.onerror = () => { loaded.delete(path); no(new Error(`could not load ${path}`)); };
-    document.head.appendChild(s);
-  }));
-  return loaded.get(path);
-}
-function loadCss(path) {
-  if (document.querySelector(`link[href="${path}"]`)) return;
-  const l = document.createElement("link");
-  l.rel = "stylesheet"; l.href = path;
-  document.head.appendChild(l);
-}
-
-const PDFJS = "vendor/pdfjs/";
-let pdfjs = null;
-async function loadPdfjs() {
-  if (!pdfjs) pdfjs = (async () => {
-    const lib = await import(`./${PDFJS}pdf.min.mjs`);
-    lib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL(`${PDFJS}pdf.worker.min.mjs`);
-    globalThis.pdfjsLib = lib;           // pdf_viewer.mjs reads the core library from here
-    const ui = await import(`./${PDFJS}pdf_viewer.mjs`);
-    loadCss(`${PDFJS}pdf_viewer.css`);
-    return { lib, ui };
-  })().catch(e => { pdfjs = null; throw e; });
-  return pdfjs;
-}
-
 // ---------- viewer ----------
 let current = null;   // { cleanup(), zoom(dir) } for the renderer on screen
 
@@ -181,7 +150,6 @@ function close() {
 }
 
 const center = html => `<div class="v-center">${html}</div>`;
-const note = text => `<div class="v-note">${esc(text)}</div>`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Office formats that have a renderer here; the rest go to Yahoo's converter.
@@ -202,12 +170,12 @@ async function show(i) {
   body.innerHTML = center("Loading…");
   const stale = () => msgId !== id || index !== at || !isOpen();
   const ctx = { a, k, body, stale, meta };
+  const bytes = async () => (await fetchBlob(a)).arrayBuffer();
   try {
-    if (k === "pdf") return await showPdf(ctx, await fetchBlob(a));
-    if (k === "doc" && isDocx(a)) return await showDocx(ctx, await fetchBlob(a));
-    if (k === "sheet" && isSheet(a)) return await showSheet(ctx, await fetchBlob(a));
-    if (k === "doc" || k === "sheet" || k === "slide") return await showConverted(ctx);
-    if (k === "other") return await showConverted(ctx);
+    if (k === "pdf") return await sandboxed(ctx, { kind: "pdf", bytes: await bytes() });
+    if (k === "doc" && isDocx(a)) return await sandboxed(ctx, { kind: "docx", bytes: await bytes() });
+    if (k === "sheet" && isSheet(a)) return await sandboxed(ctx, { kind: "sheet", bytes: await bytes() });
+    if (k === "doc" || k === "sheet" || k === "slide" || k === "other") return await showConverted(ctx);
     const blob = await fetchBlob(a);
     if (stale()) return;
     const ext = extOf(a.filename);
@@ -222,20 +190,12 @@ async function show(i) {
     } else if (k === "html") {
       const html = hooks.cleanHtml(await blob.text());
       body.innerHTML = `<iframe sandbox="" referrerpolicy="no-referrer" title="HTML"></iframe>`;
-      body.querySelector("iframe").srcdoc = `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:">${html}`;
+      body.querySelector("iframe").srcdoc = `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">${html}`;
     } else if (k === "zip") {
-      const entries = await zipListing(blob);
-      if (stale()) return;
-      body.innerHTML = note(`${entries.length} entries; download to extract.`) +
-        `<table><tr><th>Name</th><th>Size</th><th>Packed</th><th>Modified</th></tr>${entries.map(e =>
-          `<tr><td>${esc(e.name)}</td><td>${e.dir ? "" : sizeStr(e.size)}</td><td>${e.dir ? "" : sizeStr(e.packed)}</td><td>${esc(e.date)}</td></tr>`).join("")}</table>`;
+      await sandboxed(ctx, { kind: "zip", bytes: await blob.arrayBuffer() });
     } else {
       if (blob.size > 3 * 1048576) { body.innerHTML = center(`Too large to preview (${sizeStr(blob.size)}). <button id="v-dl2">Download</button>`); $("v-dl2").onclick = () => download(a); return; }
-      let text = await blob.text();
-      if (ext === "csv" || ext === "tsv") { renderTable(body, text, ext === "tsv" ? "\t" : null); return; }
-      if (ext === "json") { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {} }
-      body.innerHTML = "<pre></pre>";
-      body.querySelector("pre").textContent = text;
+      await sandboxed(ctx, { kind: "text", text: await blob.text(), ext });
     }
   } catch (e) {
     if (stale()) return;
@@ -247,117 +207,72 @@ async function show(i) {
   }
 }
 
-// ----- PDF: PDF.js with its text layer, so text can be selected and searched -----
-async function showPdf({ body, stale, meta }, blob) {
-  const { lib, ui } = await loadPdfjs();
-  const data = new Uint8Array(await blob.arrayBuffer());
-  if (stale()) return;
-  const base = chrome.runtime.getURL(PDFJS);
-  const task = lib.getDocument({
-    data, cMapUrl: base + "cmaps/", cMapPacked: true, standardFontDataUrl: base + "standard_fonts/",
-    wasmUrl: base + "wasm/", iccUrl: base + "iccs/", enableScripting: false, isEvalSupported: false,
+// ---------- sandboxed rendering ----------
+// Files are parsed and drawn by render.html, a manifest sandbox page: opaque origin, no cookies,
+// no extension APIs, no network beyond its own files (see render.js). Messages from it are
+// treated as untrusted: only known types are acted on, and links are checked before opening.
+const SAFE_LINK = /^(https?:|mailto:)/i;
+const CHUNK = 3;
+
+function sandboxed(ctx, request) {
+  const { a, body, stale, meta } = ctx;
+  return new Promise((resolve, reject) => {
+    const frame = document.createElement("iframe");
+    frame.className = "v-box";
+    frame.title = "Preview";
+    frame.setAttribute("sandbox", "allow-scripts");
+    frame.style.visibility = "hidden";
+    const send = (m, transfer) => frame.contentWindow?.postMessage(m, "*", transfer || []);
+    const timer = setTimeout(() => reject(new Error("the preview did not start")), 30000);
+    const onMessage = async e => {
+      if (e.source !== frame.contentWindow || stale()) return;
+      const m = e.data || {};
+      switch (m.type) {
+        case "ready":
+          send({ type: "render", ...request }, request.bytes ? [request.bytes] : []);
+          break;
+        case "done":
+          clearTimeout(timer);
+          frame.style.visibility = "";
+          body.querySelector(".v-center")?.remove();
+          frame.focus();
+          resolve();
+          break;
+        case "error":
+          clearTimeout(timer);
+          reject(new Error(String(m.message || "preview failed").slice(0, 200)));
+          break;
+        case "meta":
+          meta(String(m.text || "").slice(0, 120));
+          break;
+        case "zoomable":
+          $("v-zoom").classList.remove("hidden");
+          if (current) current.zoom = dir => send({ type: "zoom", dir });
+          break;
+        case "link":
+          if (typeof m.href === "string" && SAFE_LINK.test(m.href.trim())) window.open(m.href.trim(), "_blank", "noopener,noreferrer");
+          break;
+        case "key":
+          if (["Escape", "ArrowLeft", "ArrowRight"].includes(m.key)) onKey({ key: m.key, preventDefault() {} });
+          break;
+        case "more":
+          if (request.kind !== "pages" || !Number.isInteger(m.next) || m.next < 1 || m.next > request.total) break;
+          try {
+            const r = await fetchPages(a.documentId, m.next, Math.min(request.total, m.next + CHUNK - 1), stale);
+            if (r && !stale()) send({ type: "pages", pages: r.pages.map(p => ({ html: p.html, css: p.css })) });
+          } catch (err) { send({ type: "pages", error: err.message }); }
+          break;
+      }
+    };
+    window.addEventListener("message", onMessage);
+    current = { cleanup: () => { clearTimeout(timer); window.removeEventListener("message", onMessage); } };
+    frame.src = "render.html";
+    body.appendChild(frame);
   });
-  const doc = await task.promise;
-  if (stale()) { doc.destroy(); return; }
-  body.innerHTML = `<div class="v-pdf" tabindex="-1"><div class="pdfViewer"></div></div>`;
-  const container = body.querySelector(".v-pdf");
-  const eventBus = new ui.EventBus();
-  const linkService = new ui.PDFLinkService({ eventBus, externalLinkTarget: ui.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
-  const viewer = new ui.PDFViewer({ container, eventBus, linkService, textLayerMode: 1, annotationMode: lib.AnnotationMode.ENABLE, removePageBorders: false });
-  linkService.setViewer(viewer);
-  eventBus.on("pagesinit", () => { viewer.currentScaleValue = "page-width"; container.focus(); });
-  const pageInfo = () => meta(`page ${viewer.currentPageNumber} of ${doc.numPages}`);
-  eventBus.on("pagechanging", pageInfo);
-  viewer.setDocument(doc);
-  linkService.setDocument(doc);
-  pageInfo();
-  $("v-zoom").classList.remove("hidden");
-  current = {
-    cleanup: () => { viewer.setDocument(null); linkService.setDocument(null); doc.destroy(); },
-    zoom: dir => {
-      if (dir === 0) viewer.currentScaleValue = "page-width";
-      else viewer.currentScale = Math.min(5, Math.max(0.25, viewer.currentScale * (dir > 0 ? 1.2 : 1 / 1.2)));
-    },
-  };
 }
 
-// Links inside rendered documents open in a new tab; in-document anchors scroll.
-function guardLinks(host, root) {
-  host.addEventListener("click", e => {
-    const link = e.composedPath().find(n => n.tagName === "A" && n.getAttribute?.("href"));
-    if (!link) return;
-    e.preventDefault();
-    const href = link.getAttribute("href");
-    if (href.startsWith("#")) {
-      const name = decodeURIComponent(href.slice(1));
-      (root.getElementById?.(name) || root.querySelector(`[name="${CSS.escape(name)}"]`))?.scrollIntoView({ block: "start" });
-    } else if (/^(https?:|mailto:)/i.test(href)) window.open(href, "_blank", "noopener,noreferrer");
-  });
-}
-
-// ----- Word (.docx): docx-preview, rendered into a shadow root so its styles stay put -----
-async function showDocx({ body, stale }, blob) {
-  await loadScript("vendor/jszip.min.js");
-  await loadScript("vendor/docx-preview.min.js");
-  if (stale()) return;
-  const host = document.createElement("div");
-  host.className = "v-doc"; host.tabIndex = -1;
-  const root = host.attachShadow({ mode: "open" });
-  const wrap = document.createElement("div");
-  root.appendChild(wrap);
-  await globalThis.docx.renderAsync(blob, wrap, wrap, { inWrapper: true, ignoreLastRenderedPageBreak: true, useBase64URL: true, renderComments: false, experimental: true });
-  if (stale()) return;
-  body.innerHTML = "";
-  body.appendChild(host);
-  guardLinks(host, root);
-  host.focus();
-}
-
-// ----- Spreadsheets: SheetJS, one tab per sheet, an Excel-style grid -----
-const colName = n => { let s = ""; for (n++; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
-const MAX_ROWS = 5000, MAX_COLS = 200;
-
-async function showSheet({ body, stale, meta }, blob) {
-  await loadScript("vendor/xlsx.full.min.js");
-  const wb = globalThis.XLSX.read(new Uint8Array(await blob.arrayBuffer()), { type: "array", sheetRows: MAX_ROWS + 1, cellStyles: false });
-  if (stale()) return;
-  const names = wb.SheetNames;
-  body.innerHTML = `<div class="v-sheet"><div class="v-grid" tabindex="-1"></div><div class="v-tabs">${names.map((n, i) => `<button data-i="${i}">${esc(n)}</button>`).join("")}</div></div>`;
-  const grid = body.querySelector(".v-grid"), tabs = body.querySelector(".v-tabs");
-  const render = i => {
-    tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", Number(b.dataset.i) === i));
-    const ws = wb.Sheets[names[i]];
-    const rows = globalThis.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "", blankrows: true });
-    const cols = Math.min(MAX_COLS, rows.reduce((m, r) => Math.max(m, r.length), 0));
-    const shown = rows.slice(0, MAX_ROWS);
-    meta(`${names.length > 1 ? `sheet ${i + 1} of ${names.length} · ` : ""}${rows.length >= MAX_ROWS ? `first ${MAX_ROWS} rows` : `${rows.length} rows`}`);
-    grid.innerHTML = `<table><thead><tr><th class="rn"></th>${Array.from({ length: cols }, (_, c) => `<th>${colName(c)}</th>`).join("")}</tr></thead><tbody>${
-      shown.map((r, ri) => `<tr><th class="rn">${ri + 1}</th>${Array.from({ length: cols }, (_, c) => {
-        const v = r[c] ?? "";
-        return `<td${/^-?[\d.,]+%?$|^[$€£¥]/.test(v) ? ' class="num"' : ""}>${esc(v)}</td>`;
-      }).join("")}</tr>`).join("")}</tbody></table>`;
-    grid.scrollTo(0, 0);
-    grid.focus();
-  };
-  tabs.onclick = e => { const b = e.target.closest("button"); if (b) render(Number(b.dataset.i)); };
-  tabs.classList.toggle("hidden", names.length < 2);
-  render(0);
-}
-
-// ----- Everything else: Yahoo's converter (pages load as you scroll), then its plain text -----
+// ----- Formats with no renderer here: Yahoo's converter (pages load as you scroll), then its text -----
 const PENDING = new Set([605, 612, 621, 814]);
-function sanitizePage(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.querySelectorAll("script, meta, link, base, object, embed, iframe, form, frame").forEach(e => e.remove());
-  for (const el of doc.querySelectorAll("*")) {
-    for (const at of [...el.attributes]) {
-      if (at.name.startsWith("on") || at.name === "ping") el.removeAttribute(at.name);
-      else if (/^(href|src|xlink:href|action)$/.test(at.name) && !/^(https?:|mailto:|#|data:image\/)/i.test(at.value.trim())) el.removeAttribute(at.name);
-    }
-  }
-  return doc.body.innerHTML;
-}
-const decodeEntities = s => { const t = document.createElement("textarea"); t.innerHTML = s; return t.value; };
 
 async function fetchPages(docId, s, e, stale) {
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -371,99 +286,19 @@ async function fetchPages(docId, s, e, stale) {
 }
 
 async function showConverted(ctx) {
-  const { a, body, stale, meta } = ctx;
+  const { a, stale } = ctx;
   if (!a.documentId) return showText(ctx);
-  const CHUNK = 3;
   const first = await fetchPages(a.documentId, 1, CHUNK, stale);
   if (!first || stale()) return;
   const total = first.total || first.pages.length;
-  const imageLike = first.pages.some(p => /data:image\/(jpeg|png);base64,[^"]{2000}/.test(p.html.slice(0, 4000)) && !/<p[\s>]/.test(p.html.slice(0, 4000)));
-  body.innerHTML = note("Converted by Yahoo. Download for the original.") + `<div class="v-pages${imageLike ? " img" : ""}" tabindex="-1"></div><div class="v-more"></div>`;
-  const list = body.querySelector(".v-pages"), more = body.querySelector(".v-more");
-  meta(`${total} page${total === 1 ? "" : "s"}`);
-  const add = r => {
-    for (const p of r.pages) {
-      const host = document.createElement("div");
-      host.className = "v-page";
-      const root = host.attachShadow({ mode: "open" });
-      root.innerHTML = `<style>:host{display:block} .aps-page{position:relative;overflow:auto} img{max-width:100%;height:auto}</style><style>${decodeEntities(p.css).replace(/<\/?style[^>]*>/gi, "")}</style>${sanitizePage(decodeEntities(p.html))}`;
-      guardLinks(host, root);
-      list.appendChild(host);
-    }
-  };
-  add(first);
-  list.focus();
-  let next = first.pages.length + 1, busy = false;
-  if (next > total) { more.remove(); return; }
-  more.textContent = "Loading more pages…";
-  const io = new IntersectionObserver(async ([entry]) => {
-    if (!entry.isIntersecting || busy || stale()) return;
-    busy = true;
-    try {
-      const r = await fetchPages(a.documentId, next, Math.min(total, next + CHUNK - 1), stale);
-      if (!r || stale()) return;
-      add(r);
-      next += r.pages.length;
-      if (next > total) { io.disconnect(); more.remove(); }
-    } catch (e) { io.disconnect(); more.textContent = `Could not load the remaining pages (${e.message}).`; }
-    finally { busy = false; }
-  }, { root: body, rootMargin: "600px" });
-  io.observe(more);
-  current = { cleanup: () => io.disconnect() };
+  await sandboxed(ctx, { kind: "pages", total, pages: first.pages.map(p => ({ html: p.html, css: p.css })) });
 }
 
-async function showText({ a, k, body, stale }) {
-  const t = await extractedText(a);
+async function showText(ctx) {
+  const { a, k, stale } = ctx;
+  const text = await extractedText(a);
   if (stale()) return;
-  if ((extOf(a.filename) === "csv" || extOf(a.filename) === "tsv") && t) { renderTable(body, t, extOf(a.filename) === "tsv" ? "\t" : null); return; }
-  body.innerHTML = note(k === "text" || k === "code" ? "Text as stored by Yahoo." : "Text extracted by Yahoo; layout, images and formatting are not shown. Download for the original.") + "<pre></pre>";
-  body.querySelector("pre").textContent = t || "(no text)";
-}
-
-function renderTable(body, text, sep) {
-  const first = text.split(/\r?\n/, 1)[0];
-  sep = sep || ([",", ";", "\t", "|"].map(s => [s, first.split(s).length]).sort((x, y) => y[1] - x[1])[0][0]);
-  const rows = parseDelimited(text, sep);
-  const shown = rows.slice(0, 2000);
-  body.innerHTML = note(`${rows.length} rows${rows.length > shown.length ? `, first ${shown.length} shown` : ""}; separator “${sep === "\t" ? "tab" : sep}”.`) +
-    `<table>${shown.map((r, i) => `<tr>${r.map(c => i === 0 ? `<th>${esc(c)}</th>` : `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</table>`;
-}
-
-function parseDelimited(text, sep) {
-  const rows = []; let row = [], cell = "", q = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; continue; }
-    if (ch === '"' && cell === "") q = true;
-    else if (ch === sep) { row.push(cell); cell = ""; }
-    else if (ch === "\n") { row.push(cell.replace(/\r$/, "")); rows.push(row); row = []; cell = ""; }
-    else cell += ch;
-  }
-  if (cell || row.length) { row.push(cell); rows.push(row); }
-  return rows;
-}
-
-// Lists a ZIP's entries from its central directory; no decompression needed.
-async function zipListing(blob) {
-  const tail = new DataView(await blob.slice(Math.max(0, blob.size - 65557)).arrayBuffer());
-  let eocd = -1;
-  for (let i = tail.byteLength - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw new Error("not a ZIP archive");
-  const count = tail.getUint16(eocd + 10, true), cdSize = tail.getUint32(eocd + 12, true), cdOff = tail.getUint32(eocd + 16, true);
-  const cd = new DataView(await blob.slice(cdOff, cdOff + cdSize).arrayBuffer());
-  const out = []; let p = 0;
-  const dec = new TextDecoder();
-  for (let n = 0; n < count && p + 46 <= cd.byteLength; n++) {
-    if (cd.getUint32(p, true) !== 0x02014b50) break;
-    const time = cd.getUint16(p + 12, true), date = cd.getUint16(p + 14, true);
-    const packed = cd.getUint32(p + 20, true), size = cd.getUint32(p + 24, true);
-    const nl = cd.getUint16(p + 28, true), xl = cd.getUint16(p + 30, true), cl = cd.getUint16(p + 32, true);
-    const name = dec.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nl));
-    const d = `${1980 + (date >> 9)}-${String((date >> 5) & 15).padStart(2, "0")}-${String(date & 31).padStart(2, "0")} ${String(time >> 11).padStart(2, "0")}:${String((time >> 5) & 63).padStart(2, "0")}`;
-    out.push({ name, size, packed, date: d, dir: name.endsWith("/") });
-    p += 46 + nl + xl + cl;
-  }
-  return out;
+  await sandboxed(ctx, { kind: "text", text, ext: extOf(a.filename), source: k === "text" || k === "code" ? "stored" : "extracted" });
 }
 
 // ---------- download / open ----------

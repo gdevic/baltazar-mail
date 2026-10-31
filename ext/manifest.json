@@ -19,16 +19,19 @@
   },
   "host_permissions": [
     "https://mail.yahoo.com/*",
-    "https://*.mail.yahoo.com/*",
-    "https://*.yahoo.com/*",
-    "https://*.yusercontent.com/*",
-    "https://*.yimg.com/*"
+    "https://*.mail.yahoo.com/*"
   ],
   "permissions": [
     "storage",
     "declarativeNetRequest"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; frame-src 'self' blob:"
+    "extension_pages": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.yusercontent.com https://*.mail.yahoo.com; media-src blob:; font-src 'self' data:; connect-src 'self' https://mail.yahoo.com https://*.mail.yahoo.com; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'",
+    "sandbox": "sandbox allow-scripts; default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'"
+  },
+  "sandbox": {
+    "pages": [
+      "render.html"
+    ]
   }
 }

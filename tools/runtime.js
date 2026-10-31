@@ -115,7 +115,13 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
-  page.on("console", m => { if (m.type() === "error" && !m.text().includes("Content Security Policy") && !m.text().includes("net::ERR_FAILED")) errors.push("console: " + m.text().slice(0, 200)); });
+  const cspViolations = [];
+  const onConsole = m => {
+    const t = m.text();
+    if (/Content Security Policy|violates the following/.test(t)) cspViolations.push(t.slice(0, 220));
+    else if (m.type() === "error" && !t.includes("net::ERR_FAILED")) errors.push("console: " + t.slice(0, 200));
+  };
+  page.on("console", onConsole);
   await page.goto(`chrome-extension://${extId}/mail.html`);
   await page.evaluate(() => chrome.storage.local.set({ settings: { pollSec: 5, undoSendSec: 2 } }));
   await page.reload();
@@ -209,45 +215,62 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForTimeout(500);
   results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), labels: await page.locator("#r-attach .att-thumb").allTextContents(),
     stripBelowBody: await page.evaluate(() => document.getElementById("r-attach").getBoundingClientRect().top >= document.getElementById("r-body").getBoundingClientRect().bottom - 1) };
-  const view = async i => { await page.locator("#r-attach .att-card").nth(i).click(); await page.waitForSelector("#viewer:not(.hidden)"); await page.waitForFunction(() => !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 5000 }); };
-  const next = async name => { await page.keyboard.press("ArrowRight"); await page.waitForFunction(n => document.getElementById("v-name").textContent === n && !document.getElementById("v-body").textContent.startsWith("Loading"), name, { timeout: 8000 }); };
-  const shadowText = sel => page.evaluate(s => [...document.querySelectorAll(s)].map(h => h.shadowRoot?.textContent || "").join("|"), sel);
+  const view = async i => { await page.locator("#r-attach .att-card").nth(i).click(); await page.waitForSelector("#viewer:not(.hidden)"); await page.waitForFunction(() => !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 15000 }); };
+  // Playwright's key press waits for the key-up to land in the focused frame, which a preview frame
+  // replaced by that key never acknowledges; move with the › button, and test keys separately.
+  const next = async name => { await page.locator("#v-next").click(); await page.waitForFunction(n => document.getElementById("v-name").textContent === n && !document.getElementById("v-body").textContent.startsWith("Loading"), name, { timeout: 15000 }); };
+  // Previews render in the sandboxed render.html frame; find the live one.
+  const box = async () => {
+    for (let i = 0; i < 100; i++) { const f = page.frames().find(f => f.url().endsWith("/render.html") && !f.isDetached()); if (f) return f; await page.waitForTimeout(100); }
+    throw new Error("no render frame");
+  };
+  const inBox = async fn => (await box()).evaluate(fn);
   await page.screenshot({ path: path.join(__dirname, "..", "out", "strip.png"), clip: { x: 700, y: 560, width: 580, height: 160 } }).catch(() => {});
-  // PDF: PDF.js renders canvas pages with a selectable text layer; zoom buttons appear
+  // PDF: PDF.js in the sandbox renders canvas pages with a selectable text layer; zoom buttons appear
   await view(0);
-  await page.waitForFunction(() => document.querySelector("#v-body .v-pdf .page canvas") && /Quarterly/.test(document.querySelector("#v-body .v-pdf .textLayer")?.textContent || ""), null, { timeout: 15000 });
-  const scale0 = await page.evaluate(() => document.querySelector("#v-body .v-pdf .page").getBoundingClientRect().width);
+  let f = await box();
+  await f.waitForFunction(() => document.querySelector(".pdfViewer .page canvas") && /Quarterly/.test(document.querySelector(".textLayer")?.textContent || ""), null, { timeout: 15000 });
+  results.vSandbox = await f.evaluate(() => ({ origin: self.origin, cookies: (() => { try { return document.cookie; } catch { return "blocked"; } })(), chrome: typeof chrome !== "undefined" && !!chrome.runtime?.id }));
+  results.vSandbox.fetch = await f.evaluate(async () => { try { await fetch("https://mail.yahoo.com/"); return "allowed"; } catch { return "blocked"; } });
+  const scale0 = await f.evaluate(() => document.querySelector(".pdfViewer .page").getBoundingClientRect().width);
   await page.keyboard.press("+"); await page.waitForTimeout(400);
-  const scale1 = await page.evaluate(() => document.querySelector("#v-body .v-pdf .page").getBoundingClientRect().width);
-  results.vPdf = { pages: await page.locator("#v-body .v-pdf .page").count(), zoomed: scale1 > scale0 * 1.1, zoomBar: await page.locator("#v-zoom").isVisible(), meta: await page.locator("#v-meta").textContent() };
+  const scale1 = await f.evaluate(() => document.querySelector(".pdfViewer .page").getBoundingClientRect().width);
+  results.vPdf = { pages: await f.evaluate(() => document.querySelectorAll(".pdfViewer .page").length), zoomed: scale1 > scale0 * 1.1, zoomBar: await page.locator("#v-zoom").isVisible(), meta: await page.locator("#v-meta").textContent() };
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-pdf.png") }).catch(() => {});
   const dl = page.waitForEvent("download", { timeout: 5000 }).catch(() => null);
   await page.locator("#v-dl").click();
   const d = await dl;
   results.vDownload = d ? d.suggestedFilename() + ":" + (fs.statSync(await d.path()).size === fs.statSync(path.join(FX, "report.pdf")).size) : "none";
-  await next("data.csv"); results.vCsv = await page.locator("#v-body td").allTextContents();
+  // keys pressed inside a preview are forwarded to the viewer
+  await f.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  await page.waitForFunction(() => document.getElementById("v-name").textContent === "data.csv" && !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 15000 });
+  results.vKeyForward = true; results.vCsv = await inBox(() => [...document.querySelectorAll("td")].map(t => t.textContent));
   results.vZoomHidden = await page.locator("#v-zoom").isHidden();
-  await next("src.zip"); results.vZip = await page.locator("#v-body td:first-child").allTextContents();
+  await next("src.zip"); results.vZip = await inBox(() => [...document.querySelectorAll("td:first-child")].map(t => t.textContent));
   await next("photo.png"); results.vImg = await page.locator("#v-body img.v-img").count();
   await next("cv.docx");
-  await page.waitForFunction(() => /Jorge Ruiz/.test(document.querySelector("#v-body .v-doc")?.shadowRoot?.textContent || ""), null, { timeout: 8000 });
-  results.vDoc = await shadowText("#v-body .v-doc");
+  f = await box();
+  await f.waitForFunction(() => /Jorge Ruiz/.test(document.body.textContent), null, { timeout: 8000 });
+  results.vDoc = await f.evaluate(() => document.body.textContent);
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-docx.png") }).catch(() => {});
   await next("budget.xlsx");
-  results.vSheet = { cells: await page.locator("#v-body .v-grid td").allTextContents(), tabs: await page.locator("#v-body .v-tabs button").count() };
-  await page.locator("#v-body .v-tabs button", { hasText: "Q2" }).click();
-  results.vSheet2 = await page.locator("#v-body .v-grid td").allTextContents();
+  f = await box();
+  results.vSheet = await f.evaluate(() => ({ cells: [...document.querySelectorAll(".grid td")].map(t => t.textContent), tabs: document.querySelectorAll(".tabs button").length }));
+  await f.locator(".tabs button", { hasText: "Q2" }).click();
+  results.vSheet2 = await f.evaluate(() => [...document.querySelectorAll(".grid td")].map(t => t.textContent));
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-xlsx.png") }).catch(() => {});
   await next("deck.pptx");
-  await page.waitForFunction(() => document.querySelectorAll("#v-body .v-page").length >= 3, null, { timeout: 8000 });
-  await page.evaluate(() => document.querySelector("#v-body .v-more")?.scrollIntoView());
-  await page.waitForFunction(() => document.querySelectorAll("#v-body .v-page").length === 5, null, { timeout: 8000 }).catch(() => {});
-  const pptHtml = await page.evaluate(() => [...document.querySelectorAll("#v-body .v-page")].map(h => h.shadowRoot.innerHTML).join(""));
-  results.vSlides = { pages: await page.locator("#v-body .v-page").count(), text: await shadowText("#v-body .v-page"), clean: !/<script|javascript:/i.test(pptHtml), retried: docCalls.some(c => c.retryCount > 0), docId: docCalls[0]?.docId };
+  f = await box();
+  await f.waitForFunction(() => document.querySelectorAll(".page").length >= 3, null, { timeout: 8000 });
+  await f.evaluate(() => document.querySelector(".more")?.scrollIntoView());
+  await f.waitForFunction(() => document.querySelectorAll(".page").length === 5, null, { timeout: 8000 }).catch(() => {});
+  const ppt = await f.evaluate(() => { const pages = [...document.querySelectorAll(".page")]; return { n: pages.length, html: pages.map(h => h.shadowRoot.innerHTML).join(""), text: pages.map(h => h.shadowRoot.textContent).join("|") }; });
+  results.vSlides = { pages: ppt.n, text: ppt.text, clean: !/<script|javascript:/i.test(ppt.html), retried: docCalls.some(c => c.retryCount > 0), docId: docCalls[0]?.docId };
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-pptx.png") }).catch(() => {});
   results.rawFetches = rawCalls.filter(c => c.url.includes("rawplaintext")).length;
   results.rawOrigin = rawCalls[0]?.origin;
-  await page.keyboard.press("Escape");
+  await f.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
   results.vClosed = await page.locator("#viewer").isHidden();
 
   // contact card on hover over From
@@ -393,6 +416,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.keyboard.press("Escape");
   ab.closed = await page.locator("#settings").isHidden();
   results.ab = ab;
+  results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });
@@ -424,7 +448,12 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));
-  expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8", "converter: " + JSON.stringify(results.vSlides));
+  expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8" && results.vKeyForward, "converter: " + JSON.stringify(results.vSlides));
+  {
+    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\//.test(v));
+    expect(unexpected.length === 0, "content security policy blocked something the app needs: " + JSON.stringify(unexpected.slice(0, 5)));
+  }
+  expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam"), "spam moves to Bulk: " + JSON.stringify(results.spam));

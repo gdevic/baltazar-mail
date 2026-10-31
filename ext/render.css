@@ -1,0 +1,37 @@
+html, body { margin: 0; height: 100%; background: #fff; color: #111; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
+#root { position: absolute; inset: 0; overflow: auto; outline: none; }
+.center { height: 100%; display: flex; align-items: center; justify-content: center; color: #555; }
+.note { padding: 6px 18px; font-size: 11px; color: #777; background: #f4f4f4; border-bottom: 1px solid #e4e4e4; position: sticky; top: 0; z-index: 2; }
+pre { margin: 0; padding: 14px 18px; font: 12.5px/1.5 Consolas, "Courier New", monospace; white-space: pre-wrap; word-break: break-word; }
+table.plain { border-collapse: collapse; font: 12px Consolas, monospace; margin: 10px; }
+table.plain td, table.plain th { border: 1px solid #ddd; padding: 2px 8px; white-space: nowrap; }
+table.plain th { background: #f0f0f0; position: sticky; top: 0; }
+table.plain tr:nth-child(even) td { background: #fafafa; }
+
+/* PDF */
+#root.pdf { background: #525659; }
+#root.pdf .pdfViewer .page { margin: 10px auto; border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+
+/* Word */
+#root.doc { background: #e8e8e8; }
+
+/* Spreadsheets */
+#root.sheet { display: flex; flex-direction: column; overflow: hidden; }
+.grid { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.grid table { border-collapse: collapse; font: 12px "Segoe UI", Calibri, Arial, sans-serif; }
+.grid td, .grid th { border: 1px solid #ddd; padding: 2px 8px; white-space: nowrap; }
+.grid th { background: #f0f0f0; color: #555; font-weight: 400; text-align: center; position: sticky; top: 0; z-index: 1; }
+.grid th.rn { position: sticky; left: 0; min-width: 34px; text-align: right; z-index: 2; }
+.grid thead th.rn { z-index: 3; }
+.grid td { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+.grid td.num { text-align: right; }
+.tabs { display: flex; gap: 2px; padding: 4px 6px 6px; background: #f0f0f0; border-top: 1px solid #ccc; overflow-x: auto; flex: none; }
+.tabs.hidden { display: none; }
+.tabs button { border: 1px solid #ccc; border-top: 0; background: #e4e4e4; color: #333; padding: 3px 12px; border-radius: 0 0 4px 4px; font-size: 12px; cursor: pointer; }
+.tabs button.on { background: #fff; color: #0a6b2c; font-weight: 600; }
+
+/* Pages from Yahoo's converter */
+#root.pages { background: #e8e8e8; }
+.page-list { padding: 12px 0; }
+.page { background: #fff; color: #000; width: min(900px, calc(100% - 24px)); margin: 0 auto 12px; box-shadow: 0 1px 4px rgba(0,0,0,.3); overflow: auto; }
+.more { text-align: center; color: #777; font-size: 12px; padding: 10px 0 18px; }
