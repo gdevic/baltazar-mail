@@ -91,7 +91,7 @@ export function renderStrip(message, attachments, isCurrent) {
     const src = await hooks.thumb(a);
     if (!src || !isCurrent(message.id)) return;
     const slot = box.querySelector(`.att-thumb[data-i="${i}"]`);
-    if (slot) slot.innerHTML = `<img src="${src}" alt="">`;
+    if (slot) slot.replaceChildren(Object.assign(document.createElement("img"), { src, alt: "" }));
   });
 }
 
@@ -110,9 +110,13 @@ export function parsedMessage(id) {
   return p;
 }
 
+// The blob's type comes from the file name. The sender's header is used only for an image, audio
+// or video type the name does not settle; anything else is untyped, since an image opened in a
+// tab from the viewer would otherwise show the sender's HTML at the extension's address.
+const MEDIA_TYPE = /^(image\/(png|jpeg|gif|webp|bmp|avif|x-icon|vnd\.microsoft\.icon)|audio\/[\w.+-]+|video\/[\w.+-]+)$/i;
 async function fetchBlob(a, id = msgId) {
   const { bytes, type } = extract(await parsedMessage(id), a.partId, a.filename);
-  return new Blob([bytes], { type: MIME[extOf(a.filename)] || type || "application/octet-stream" });
+  return new Blob([bytes], { type: MIME[extOf(a.filename)] || (MEDIA_TYPE.test(type || "") ? type : "application/octet-stream") });
 }
 
 async function extractedText(a) {
@@ -132,7 +136,8 @@ function objectUrl(blob, type) {
 }
 
 const MIME = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
-  mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4", flac: "audio/flac", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4" };
+  avif: "image/avif", ico: "image/x-icon", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", oga: "audio/ogg", m4a: "audio/mp4", aac: "audio/aac", flac: "audio/flac",
+  opus: "audio/ogg", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", m4v: "video/mp4", ogv: "video/ogg" };
 
 // ---------- viewer ----------
 let current = null;   // { cleanup(), zoom(dir) } for the renderer on screen
@@ -360,7 +365,7 @@ async function openInTab(a) {
   try {
     const blob = await fetchBlob(a);
     const u = URL.createObjectURL(new Blob([blob], { type }));
-    window.open(u, "_blank");
+    window.open(u, "_blank", "noopener");
     setTimeout(() => URL.revokeObjectURL(u), 60000);
   } catch { chrome.tabs.create({ url: a.downloadUrl.replace(/&amp;/g, "&") }); }
 }

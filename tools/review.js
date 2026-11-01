@@ -121,6 +121,19 @@ scenario("relative links cannot open extension pages", async (h, expect) => {
   await p.close();
 }, { allow: /Blocked script execution in 'about:srcdoc'/ });   // Playwright's own click in the frame
 
+// ---------- attachments ----------
+scenario("a previewed file's type comes from its name, not the sender", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m) => { if (id.startsWith("MSG1_")) { m.attachments[3].filename = "pic.avif"; m.attachments[3].subtype = "avif"; } };
+  mock.patchRaw = raw => raw.replace('Content-Type: image/png; name="photo.png"', 'Content-Type: text/html; name="pic.avif"');
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.locator("#r-attach .att-card").nth(3).click();
+  await page.waitForSelector("#v-body img.v-img", { timeout: 10000 });
+  const type = await page.locator("#v-body img.v-img").evaluate(async i => (await (await fetch(i.src)).blob()).type);
+  expect(type === "image/avif", "the preview blob is typed by the file name: " + type);
+  const thumb = await page.evaluate(() => [...document.querySelectorAll("#r-attach .att-thumb img")].every(i => i.getAttribute("alt") === "" && i.src.startsWith("data:")));
+  expect(thumb, "thumbnails are image elements with data: sources");
+});
+
 // ---------- dark reader ----------
 scenario("darkenHtml golden values, and crafted styles stay fast", async ({ page }, expect) => {
   const r = await page.evaluate(async () => {

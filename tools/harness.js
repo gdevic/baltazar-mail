@@ -44,10 +44,10 @@ async function launch(opts = {}) {
   const unexpectedHosts = new Set();
   await ctx.route(/^https?:\/\//, r => { unexpectedHosts.add(new URL(r.request().url()).hostname); return r.abort(); });
   const calls = [], docCalls = [];
-  // Knobs a test turns to provoke server behaviour. offline refuses every Yahoo request. patchBody(id, message, simpleBody) edits a
+  // Knobs a test turns to provoke server behaviour. patchRaw(source) edits message sources. offline refuses every Yahoo request. patchBody(id, message, simpleBody) edits a
   // message body before it is answered. handler({ name, envelope, top, uri, post, req })
   // may answer a batch call itself: return { responses } or { error }, or nothing to fall through.
-  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, offline: false, probes: [], images: [], ...opts.mock };
+  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, patchRaw: null, offline: false, probes: [], images: [], ...opts.mock };
   const folders = structuredClone(FOLDERS);
   const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
   // GitHub's release API, asked once a day for the newest version
@@ -174,7 +174,7 @@ async function launch(opts = {}) {
   await ctx.route("https://apis.mail.yahoo.com/**", route => {
     const u = route.request().url();
     rawCalls.push({ url: u, origin: route.request().headers().origin });
-    if (u.includes("/content/rawplaintext")) return route.fulfill({ contentType: "text/plain", body: rawFor() });
+    if (u.includes("/content/rawplaintext")) return route.fulfill({ contentType: "text/plain", body: mock.patchRaw ? mock.patchRaw(rawFor()) : rawFor() });
     return route.fulfill({ status: 404, body: "" });
   });
   const thumbPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
