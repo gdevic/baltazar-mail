@@ -52,7 +52,9 @@ const folders = [
       set: async o => { for (const [k, v] of Object.entries(o)) localStorage.setItem(ns + k, JSON.stringify(v)); } });
     // Installed from a release ZIP unless the test switches to a store install.
     window.chrome = { storage: { session: area("s:"), local: area("l:") }, runtime: { getURL: p => p, getManifest: () => ({ version: "0.14.0" }) },
-      management: { getSelf: async () => ({ installType: localStorage.getItem("installType") || "development" }) } };
+      management: { getSelf: async () => ({ installType: localStorage.getItem("installType") || "development" }) },
+      action: { setIcon: async d => { (window.iconCalls ||= []).push(d); } },
+      tabs: { getCurrent: async () => ({ id: 7 }), update: async (id, p) => { (window.tabUpdates ||= []).push([id, p]); } } };
   });
   await page.route("https://mail.yahoo.com/**", async route => {
     const url = route.request().url();
@@ -209,11 +211,14 @@ const folders = [
     hit: await page.locator("#rows .row .sb mark").first().evaluate(e => { const c = getComputedStyle(e); return c.color !== c.backgroundColor && !/rgba\([^)]*,\s*0\)$/.test(c.backgroundColor); }) };
   await page.keyboard.press("k"); await page.keyboard.press("x");
   await page.emulateMedia({ forcedColors: "none" });
+  // Start-up clears a toolbar dot left by an earlier load and keeps the tab from being discarded.
+  const startup = await page.evaluate(() => ({ icon: JSON.stringify((window.iconCalls || [])[0] || null), tab: JSON.stringify(window.tabUpdates || []) }));
   const expectEnd = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
     "layout, palette and pane sizes survive a reload: " + JSON.stringify(persisted));
   expectEnd(ghAfterZip === 1 && ghAfterStore === 1, "a ZIP install asks GitHub once, a store install never: " + JSON.stringify({ ghAfterZip, ghAfterStore }));
   expectEnd(forced.sel === "solid 2" && forced.marked === "dashed 1" && forced.folder === "solid 2" && forced.hit, "selection, marks, the active folder and search hits show in forced colours: " + JSON.stringify(forced));
+  expectEnd(startup.icon.includes("icons/16.png") && startup.tab === '[[7,{"autoDiscardable":false}]]', "start-up resets the toolbar icon and keeps the tab: " + JSON.stringify(startup));
   expectEnd(!unexpected.size, "no request left for the real network: " + [...unexpected].join(", "));
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();

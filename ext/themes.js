@@ -132,5 +132,7 @@ export function applyTheme(id, level = 0) {
   const style = document.documentElement.style;
   for (const [k, v] of Object.entries(VARS)) style.setProperty(v, t[k]);
   document.documentElement.dataset.theme = t.dark ? "dark" : "light";
+  // Scrollbars, lists, checkboxes and the slider follow the palette too.
+  document.documentElement.style.colorScheme = t.dark ? "dark" : "light";
   return t;
 }

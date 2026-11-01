@@ -1702,6 +1702,11 @@ function showSignIn() {
 }
 
 async function start() {
+  // A new-mail dot left on the toolbar button by an earlier load of this page (a reload, or the
+  // browser discarding the tab) goes; and the browser is asked not to discard this tab, which
+  // would stop the mail checks.
+  try { chrome.action.setIcon({ path: PLAIN_ICONS }).catch(() => {}); } catch { /* no toolbar button */ }
+  try { chrome.tabs.getCurrent().then(t => t && chrome.tabs.update(t.id, { autoDiscardable: false })).catch(() => {}); } catch { /* not in a tab */ }
   await loadSettings();
   applyLayout(); syncSettingsForm();
   $("signin").classList.add("hidden");

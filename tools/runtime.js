@@ -239,6 +239,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const theme = async v => { await page.locator("#list").focus(); await page.keyboard.press(","); await page.locator(`input[name="theme"][value="${v}"]`).check(); await page.locator("#settings-close").click(); await page.waitForTimeout(400); };
   results.darkReader = { lightButton: await page.locator("#r-dark").isVisible() };
   await theme("dark");
+  results.colorScheme = await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+  results.keepTab = await page.evaluate(async () => (await chrome.tabs.getCurrent()).autoDiscardable);
   results.darkReader.button = await page.locator("#r-dark").isVisible() ? await page.locator("#r-dark").textContent() : "hidden";
   results.darkReader.dark = await paper();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "reader-dark.png") }).catch(() => {});
@@ -828,6 +830,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.print.header.visible && results.print.header.onTop && results.print.remote.length > 0, "a message's styles cannot hide or cover the printed header: " + JSON.stringify(results.print));
   const si = results.spamImages;
   expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteCsp.trim() === "img-src data:", "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
+  expect(results.colorScheme === "dark" && results.keepTab === false, "dark palettes set a dark color-scheme; the tab is not discarded: " + JSON.stringify({ cs: results.colorScheme, keep: results.keepTab }));
   const u = results.unsafe;
   expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && u.csp === 1 && !u.handlers.length && u.link && !u.link.ping && u.link.target === "_blank" && /noopener/.test(u.link.rel) && u.pwned === null,
     "the reader removes scripts, forms, frames, refresh, handlers and pings: " + JSON.stringify(u));
