@@ -1001,9 +1001,10 @@ function autoImages(message) {
 // The same decision for a message, honouring images the user loaded in the reader.
 const imagesFor = message => currentBody && message.id === currentBody.message.id ? bodyImages : autoImages(message);
 
-// Printed messages show remote images only when the reader would. An image still addressed to
-// Yahoo's mail hosts (a part that could not be inlined) is always dropped: the print page is the
-// extension's own and would request it with the user's session.
+// Printed messages show remote images only when the reader would. The print page enforces that
+// with its own image policy (print.js); this removes what that policy would block anyway, so the
+// page shows no broken images. An image still addressed to Yahoo's mail hosts (a part that could
+// not be inlined) is always dropped.
 function printableImages(html, allowed) {
   const tpl = document.createElement("template");
   tpl.innerHTML = html;
@@ -1030,12 +1031,12 @@ async function printMessages() {
     let r;
     if (currentBody && currentBody.message.id === id) r = currentBody;
     else { try { r = await api.body(id); r.html = cleanHtml(r.html); } catch (e) { handleError(e, "print"); return; } }
-    const html = printableImages(await inlineYahooParts(r.html), imagesFor(r.message));
-    messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html });
+    const images = imagesFor(r.message);
+    messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html: printableImages(await inlineYahooParts(r.html), images), images });
   }
   const key = `print:${Date.now()}`;
   // The hand-off goes through session storage, whose quota a large selection with images can pass.
-  try { await chrome.storage.session.set({ [key]: { messages, auto: true } }); }
+  try { await chrome.storage.session.set({ [key]: { messages, images: messages.every(m => m.images), auto: true } }); }
   catch (e) { notify(`Could not print ${plural(messages.length, "message")}: too much to hand to the print page at once. Try fewer.`, { detail: e.message, err: e, what: "print" }); return; }
   await chrome.tabs.create({ url: chrome.runtime.getURL(`print.html?job=${encodeURIComponent(key)}`) });
   status(`print: ${plural(messages.length, "message")}`);

@@ -454,8 +454,8 @@ function editorSafe(html) {
   return box.innerHTML;
 }
 
-// The quoted original is the sender's HTML, so it is shown in a sandboxed frame like the reader:
-// its styles and element ids cannot reach the app's own page.
+// The quoted original is the sender's HTML, so it is shown in a sandboxed frame like the reader,
+// with the reader's image policy: its styles and element ids cannot reach the app's own page.
 function renderQuote(expanded) {
   const has = !!draft.quoteHtml;
   $("c-quote-wrap").classList.toggle("hidden", !has);
@@ -464,7 +464,7 @@ function renderQuote(expanded) {
   frame.setAttribute("sandbox", "");
   frame.referrerPolicy = "no-referrer";
   frame.title = "Quoted text";
-  frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:${draft.images ? " https:" : ""}">` +
+  frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:${draft.images ? " https://*.yusercontent.com" : ""}; media-src 'none'">` +
     `<style>body{margin:0;font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif;color:#333;word-wrap:break-word}pre{white-space:pre-wrap;font:inherit}img{max-width:100%;height:auto}</style>` +
     (draft.html ? draft.quoteHtml : `<pre>${esc(draft.quoteText)}</pre>`);
   $("c-quote").replaceChildren(frame);

@@ -47,7 +47,7 @@ async function launch(opts = {}) {
   // Knobs a test turns to provoke server behaviour. offline refuses every Yahoo request. patchBody(id, message, simpleBody) edits a
   // message body before it is answered. handler({ name, envelope, top, uri, post, req })
   // may answer a batch call itself: return { responses } or { error }, or nothing to fall through.
-  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, offline: false, ...opts.mock };
+  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, offline: false, probes: [], images: [], ...opts.mock };
   const folders = structuredClone(FOLDERS);
   const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
   // GitHub's release API, asked once a day for the newest version
@@ -56,10 +56,12 @@ async function launch(opts = {}) {
     ghCalls.push({ url: route.request().url(), cookie: route.request().headers().cookie || "" });
     return route.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: "v99.0.0" }) });
   });
-  await ctx.route("https://ecp.yusercontent.com/**", route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64") }));
+  await ctx.route("https://ecp.yusercontent.com/**", route => (mock.images.push({ url: route.request().url(), from: route.request().frame()?.url() || "" }), route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64") })));
   await ctx.route("https://mail.yahoo.com/**", async route => {
     const req = route.request();
     if (mock.offline) return route.abort("internetdisconnected");
+    // probe addresses planted in test mail: any request for one is a leak with the user's cookies
+    if (req.url().includes("/probe-")) { mock.probes.push({ url: req.url(), from: req.frame()?.url() || "", cookie: !!req.headers().cookie }); return route.fulfill({ status: 404, body: "" }); }
     if (req.url().includes("hidden-in-alt")) mock.hiddenFetched = true;
     if (req.url() === "https://mail.yahoo.com/") return route.fulfill({ contentType: "text/html", body: '<html><script>window.AppBootstrapData={"appId":"YMailCLDNovation","mailWssid":"w1","primaryMailbox":{"email":"me@yahoo.com","id":"MB1"}}</script></html>' });
     const name = new URL(req.url()).searchParams.get("name");
@@ -179,6 +181,7 @@ async function launch(opts = {}) {
   const zipBytes = Buffer.from("UEsDBBQAAAAAAI8CX12Tpho8uAEAALgBAAAKAAAAc3JjL21haW4uY2ludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KUEsDBBQAAAAAAI8CX10gMDo2BgAAAAYAAAAJAAAAUkVBRE1FLm1kaGVsbG8KUEsBAhQDFAAAAAAAjwJfXZOmGjy4AQAAuAEAAAoAAAAAAAAAAAAAAIABAAAAAHNyYy9tYWluLmNQSwECFAMUAAAAAACPAl9dIDA6NgYAAAAGAAAACQAAAAAAAAAAAAAAgAHgAQAAUkVBRE1FLm1kUEsFBgAAAAACAAIAbwAAAA0CAAAAAA==", "base64");
   await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => {
     const u = route.request().url();
+    if (u.includes("/probe-")) { mock.probes.push({ url: u, from: route.request().frame()?.url() || "", cookie: !!route.request().headers().cookie }); return route.fulfill({ status: 404, body: "" }); }
     // Yahoo's download links cannot be fetched (redirect the page cannot follow), as in production.
     if (u.includes("/dl/")) return route.abort("failed");
     if (u.includes("/text/3")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "name,qty\nZ80,2\n6502,1\n" } }) });
@@ -202,7 +205,7 @@ async function launch(opts = {}) {
     // Playwright adds its own listeners to a frame it has looked into; in the reader frame, where
     // no script may run, the browser blocks them and says so on every click and key.
     if (/^about:srcdoc/.test(m.location()?.url || "") && t.includes("the 'allow-scripts' permission is not set")) return;
-    if (/Content Security Policy|violates the following/.test(t)) cspViolations.push(t.slice(0, 220));
+    if (/Content Security Policy|violates the following/.test(t)) cspViolations.push(`${(m.location()?.url || "").replace(/^chrome-extension:\/\/[^/]+\//, "")}: ${t.slice(0, 220)}`);
     // EC-5003 is the error the failed-archive step provokes on purpose; the app logs it
     else if (m.type() === "error" && !t.includes("net::ERR_FAILED") && !t.includes('"code":"EC-5003"')) errors.push("console: " + t.slice(0, 200));
   };

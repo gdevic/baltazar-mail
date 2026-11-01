@@ -2,6 +2,8 @@
 import { esc, noBidi } from "./text.js";
 const fmt = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
 const fmtList = l => (l || []).map(fmt).join(", ");
+// A message without a usable date prints without the line, not as "Invalid Date".
+const when = d => { const t = new Date(Number(d) * 1000); return d && !isNaN(t) ? t.toLocaleString() : ""; };
 const BODY_CSS = ":host{display:block}img{max-width:100%;height:auto}blockquote{border-left:2px solid #bbb;margin:6px 0;padding-left:10px;color:#444}pre{white-space:pre-wrap}";
 
 (async () => {
@@ -9,6 +11,12 @@ const BODY_CSS = ":host{display:block}img{max-width:100%;height:auto}blockquote{
   const job = (await chrome.storage.session.get(key))[key];
   if (!job) { document.getElementById("info").textContent = "Nothing to print (the job has expired)."; return; }
   chrome.storage.session.remove(key);
+  // The reader's image policy, before any message is added: images from Yahoo's image proxy only
+  // when every message may load them (not one from Spam or Trash), otherwise embedded ones only.
+  // Nothing else, so no style, SVG or media element can request a Yahoo address with the session.
+  const csp = Object.assign(document.createElement("meta"), { httpEquiv: "Content-Security-Policy",
+    content: `img-src data:${job.images ? " https://*.yusercontent.com" : ""}; media-src 'none'` });
+  document.head.prepend(csp);
   const pages = document.getElementById("pages");
   for (const m of job.messages) {
     const h = m.headers || {};
@@ -18,7 +26,7 @@ const BODY_CSS = ":host{display:block}img{max-width:100%;height:auto}blockquote{
       <tr><td>From</td><td>${esc(fmtList(h.from))}</td></tr>
       <tr><td>To</td><td>${esc(fmtList(h.to))}</td></tr>
       ${h.cc?.length ? `<tr><td>Cc</td><td>${esc(fmtList(h.cc))}</td></tr>` : ""}
-      <tr><td>Date</td><td>${esc(new Date(Number(h.date) * 1000).toLocaleString())}</td></tr></table>
+      ${when(h.date) ? `<tr><td>Date</td><td>${esc(when(h.date))}</td></tr>` : ""}</table>
       ${m.attachments?.length ? `<div class="att">Attachments: ${m.attachments.map(a => esc(a)).join(", ")}</div>` : ""}</div>
       <div class="body"></div>`;
     // Body HTML was sanitised by the main page; scripts are additionally blocked by the extension

@@ -662,8 +662,10 @@ const { launch } = require("./harness");
     !results.vSlides.escaped && results.vSlides.styled === "26.6667px", "converter: " + JSON.stringify(results.vSlides));
   {
     // img-src 'none' (reader) and img-src data: (reply quote) are a message's images blocked on
-    // purpose: Spam, Trash, or the setting
-    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\//.test(v) && !/img-src ('none|data:\\?")/.test(v));
+    // purpose: Spam, Trash, or the setting. A Yahoo part address in a message frame is blocked by
+    // the extension's own policy as well, since no extension page may load Yahoo-host images.
+    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\//.test(v) && !/img-src ('none|data:\\?")/.test(v) &&
+      !/^about:srcdoc: Loading the image 'https:\/\/cloud-apis\.mail\.yahoo\.com\//.test(v));
     expect(unexpected.length === 0, "content security policy blocked something the app needs: " + JSON.stringify(unexpected.slice(0, 5)));
   }
   expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));

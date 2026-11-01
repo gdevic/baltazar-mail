@@ -26,7 +26,7 @@
     "declarativeNetRequest"
   ],
   "content_security_policy": {
-    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.yusercontent.com https://*.mail.yahoo.com; media-src blob:; font-src 'self' data:; connect-src 'self' https://mail.yahoo.com https://*.mail.yahoo.com https://api.github.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.yusercontent.com; media-src blob:; font-src 'self' data:; connect-src 'self' https://mail.yahoo.com https://*.mail.yahoo.com https://api.github.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
     "sandbox": "sandbox allow-scripts; default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'"
   },
   "sandbox": {

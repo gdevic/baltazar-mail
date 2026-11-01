@@ -45,6 +45,61 @@ async function newMessage(page, { to = "q@example.com", subject = "Test", text =
   if (text) await page.keyboard.type(text);
 }
 
+// ---------- images that must not load ----------
+// Every way a message can ask for an image: probes on Yahoo's own hosts (they would carry the
+// user's cookies) and trackers behind Yahoo's image proxy.
+const LEAKY = `<svg width="10" height="10"><image href="https://cloud-apis.mail.yahoo.com/probe-svg" width="10" height="10"/></svg>` +
+  `<img src="https://cloud-apis.mail.yahoo.com/probe-img" width="5" height="5">` +
+  `<div style="width:9px;height:9px;background:url(https://cloud-apis.mail.yahoo.com/probe-bg)"></div>` +
+  `<picture><source srcset="https://ecp.yusercontent.com/t-source.png"><img src="https://ecp.yusercontent.com/t-img.png"></picture>` +
+  `<video poster="https://ecp.yusercontent.com/t-poster.png" width="9" height="9"></video>` +
+  `<svg width="10" height="10"><image href="https://ecp.yusercontent.com/t-svg.png" width="10" height="10"/></svg>` +
+  `<div style="width:9px;height:9px;background-image:image-set('https://ecp.yusercontent.com/t-set.png' 1x)"></div>` +
+  `<style>.esc{background:\\75 rl(https://ecp.yusercontent.com/t-esc.png)}</style><div class="esc" style="width:9px;height:9px"></div>`;
+const leakyIn = prefix => (id, message, body) => { if (id.startsWith(prefix)) body.html += LEAKY; };
+const trackers = (mock, from) => mock.images.filter(i => /\/t-/.test(i.url) && i.from.includes(from)).map(i => i.url.split("/").pop());
+async function printOpen(h) {
+  const [p] = await Promise.all([h.ctx.waitForEvent("page"), h.page.keyboard.press("p")]);
+  await p.waitForSelector(".msg .body", { timeout: 8000 });
+  await p.waitForTimeout(1200);
+  return p;
+}
+
+scenario("printing loads no Yahoo-host image", async (h, expect) => {
+  h.mock.patchBody = leakyIn("MSG1_");
+  await h.page.locator("#rows .row").nth(1).click(); await h.page.waitForTimeout(600);
+  const p = await printOpen(h);
+  expect(!h.mock.probes.length, "no request for a Yahoo host from the print page: " + JSON.stringify(h.mock.probes));
+  expect(trackers(h.mock, "print.html").length > 0, "images through Yahoo's proxy still print when allowed: " + JSON.stringify(trackers(h.mock, "print.html")));
+  await p.close();
+}, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
+
+scenario("printing from Spam loads no remote image", async (h, expect) => {
+  h.mock.patchBody = leakyIn("MSG6_");
+  await folder(h.page, "Spam");
+  await h.page.locator("#rows .row").first().click(); await h.page.waitForTimeout(600);
+  const p = await printOpen(h);
+  expect(!trackers(h.mock, "print.html").length && !h.mock.probes.length, "a Spam message prints without remote images: " + JSON.stringify({ trackers: trackers(h.mock, "print.html"), probes: h.mock.probes }));
+  await p.close();
+}, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
+
+scenario("a reply's quoted original loads no Yahoo-host image", async (h, expect) => {
+  h.mock.patchBody = leakyIn("MSG1_");
+  await h.page.locator("#rows .row").nth(1).click(); await h.page.waitForTimeout(600);
+  await h.page.locator("#list").focus(); await h.page.keyboard.press("r"); await h.page.waitForSelector("#compose:not(.hidden)");
+  await h.page.click("#c-quote-toggle"); await h.page.waitForTimeout(800);
+  expect(!h.mock.probes.length, "the quote frame requests no Yahoo host: " + JSON.stringify(h.mock.probes));
+}, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
+
+scenario("a reopened draft loads no Yahoo-host image", async (h, expect) => {
+  h.mock.patchBody = leakyIn("MSG3_");
+  await folder(h.page, "Draft");
+  await h.page.locator("#rows .row").first().click();
+  await h.page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 });
+  await h.page.waitForTimeout(800);
+  expect(!h.mock.probes.length, "the draft editor requests no Yahoo host: " + JSON.stringify(h.mock.probes));
+}, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
+
 // ---------- start-up ----------
 scenario("starting offline says why and recovers by itself", async ({ page, mock }, expect) => {
   const shown = { panel: await page.locator("#signin-fail").isVisible(), app: await page.locator("#app").isVisible(), text: await page.locator("#fail-text").textContent() };
