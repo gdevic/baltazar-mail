@@ -284,11 +284,6 @@ export async function query(qs, count = 100, offset = 0) {
   return { messages: first(r).messages || [], ms: r.ms };
 }
 
-export async function searchQuery(q, count = 20) {
-  const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q2(`count:${count} offset:0 -sort:date ${q}`) }]);
-  return { messages: first(r).messages || [], ms: r.ms };
-}
-const q2 = s => `/ws/v3/mailboxes/@.id==<mb>/messages/@.select==q?q=${encodeURIComponent(s)}`;
 
 export function move(ids, folderId) { return update("messages.move", ids, { message: { folder: { id: String(folderId) } } }); }
 

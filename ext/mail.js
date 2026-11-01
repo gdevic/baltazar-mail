@@ -87,8 +87,6 @@ const state = {
 };
 
 // ---------- helpers ----------
-const addr = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
-const addrs = l => (l || []).map(addr).join(", ");
 const status = (msg, ms) => { $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || null) : null;
@@ -792,8 +790,6 @@ async function searchPerson(email) {
 // Cards under the header: a thumbnail for images and PDFs (Yahoo renders those server-side,
 // behind the session cookies, so the page fetches them), a type tile for everything else.
 const thumbCache = new Map();
-const extOf = n => (String(n || "").match(/\.([a-z0-9]{1,5})$/i)?.[1] || "").toUpperCase();
-const kbStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
 
 async function thumbFor(a) {
   const key = a.thumbnailUrl;
