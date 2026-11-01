@@ -275,7 +275,7 @@ function defaultFont() {
 function applyDefaultFont() {
   const f = defaultFont();
   $("c-editor").style.font = `${f.size}px/1.45 ${f.family}`;
-  $("c-text").style.font = `${f.size}px/1.45 ${/courier|consolas|mono/i.test(f.family) ? f.family : "Consolas, 'Courier New', monospace"}`;
+  $("c-text").style.font = `${f.size}px/1.45 ${/courier|consolas|menlo|mono/i.test(f.family) ? f.family : "var(--mono)"}`;
 }
 
 function setMode(html) {

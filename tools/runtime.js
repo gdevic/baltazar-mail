@@ -388,6 +388,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForFunction(() => document.getElementById("v-name").textContent === "data.csv" && !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 15000 });
   results.vKeyForward = true; results.vCsv = await inBox(() => [...document.querySelectorAll("td")].map(t => t.textContent));
   results.vZoomHidden = await page.locator("#v-zoom").isHidden();
+  // tables and text in the sandboxed renderer use the same monospace stack as the app
+  results.vMono = await inBox(() => getComputedStyle(document.querySelector("table")).fontFamily);
   await next("src.zip"); results.vZip = await inBox(() => [...document.querySelectorAll("td:first-child")].map(t => t.textContent));
   await next("photo.png"); results.vImg = await page.locator("#v-body img.v-img").count();
   await next("cv.docx");
@@ -835,6 +837,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   }
   expect(results.inlineParts.partInlined && results.inlineParts.fromSource && results.inlineParts.clips.startsWith("00100") && results.inlineParts.spacerHeight <= 2 && results.inlineParts.proxyKept && !results.inlineParts.hiddenFetched, "inline images: " + JSON.stringify(results.inlineParts));
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
+  expect(/^ui-monospace, Consolas, Menlo, .*monospace$/.test(results.vMono || ""), "renderer monospace stack: " + results.vMono);
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));
   expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8" && results.vKeyForward &&

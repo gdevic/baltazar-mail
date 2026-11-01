@@ -2,7 +2,7 @@
 :root {
   --bg: #15181c; --bg2: #202429; --bg3: #292f36; --fg: #d8d4c8; --fg2: #9a968c; --fg3: #706e67;
   --line: #3b4148; --sel: #2f3a48; --sel-line: #56708f; --accent: #d9a441; --unread: #f0ece0; --link: #7fb3e0;
-  --font: ui-sans-serif, "Segoe UI", system-ui, sans-serif; --mono: ui-monospace, Consolas, monospace;
+  --font: ui-sans-serif, "Segoe UI", system-ui, sans-serif; --mono: ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace;
   --row-h: 22px; --fs: 13px; --fu: calc(var(--fs) / 13);
   --folder-w: 230px; --list-w: 460px; --list-h: 40%;
 }
@@ -309,9 +309,9 @@ body.dragging iframe { pointer-events: none; }
 #v-body img.v-img { max-width: 100%; max-height: 100%; display: block; margin: auto; position: absolute; inset: 0; cursor: zoom-in; }
 #v-body img.v-img.full { max-width: none; max-height: none; position: static; cursor: zoom-out; }
 #v-body iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
-#v-body pre { margin: 0; padding: 14px 18px; font: 12.5px/1.5 Consolas, "Courier New", monospace; white-space: pre-wrap; word-break: break-word; }
+#v-body pre { margin: 0; padding: 14px 18px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
 #v-body .v-note { padding: 6px 18px; font-size: 11px; color: #777; background: #f4f4f4; border-bottom: 1px solid #e4e4e4; position: sticky; top: 0; }
-#v-body table { border-collapse: collapse; font: 12px Consolas, monospace; margin: 10px; }
+#v-body table { border-collapse: collapse; font: 12px var(--mono); margin: 10px; }
 #v-body td, #v-body th { border: 1px solid #ddd; padding: 2px 8px; white-space: nowrap; }
 #v-body th { background: #f0f0f0; position: sticky; top: 0; }
 #v-body tr:nth-child(even) td { background: #fafafa; }
