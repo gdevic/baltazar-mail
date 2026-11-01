@@ -251,12 +251,17 @@ function sandboxed(ctx, request) {
     frame.setAttribute("sandbox", "allow-scripts");
     frame.style.visibility = "hidden";
     const send = (m, transfer) => frame.contentWindow?.postMessage(m, "*", transfer || []);
-    const timer = setTimeout(() => reject(new Error("the preview did not start")), 30000);
+    // 30 s for the sandbox to start, then 2 minutes to render; a preview that fails takes its
+    // frame with it, so a fallback never sits next to a frame still drawing.
+    const fail = message => { clearTimeout(timer); window.removeEventListener("message", onMessage); frame.remove(); reject(new Error(message)); };
+    let timer = setTimeout(() => fail("the preview did not start"), 30000);
     const onMessage = async e => {
       if (e.source !== frame.contentWindow || stale()) return;
       const m = e.data || {};
       switch (m.type) {
         case "ready":
+          clearTimeout(timer);
+          timer = setTimeout(() => fail("the preview took too long"), 120000);
           send({ type: "render", ...request }, request.bytes ? [request.bytes] : []);
           break;
         case "done":
@@ -267,8 +272,7 @@ function sandboxed(ctx, request) {
           resolve();
           break;
         case "error":
-          clearTimeout(timer);
-          reject(new Error(String(m.message || "preview failed").slice(0, 200)));
+          fail(String(m.message || "preview failed").slice(0, 200));
           break;
         case "meta":
           meta(String(m.text || "").slice(0, 120));
