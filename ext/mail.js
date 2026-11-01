@@ -292,6 +292,7 @@ async function actOnChanges() {
   if (contactsDirty.has(inboxId()) || contactsDirty.has(folderByType("SENT")?.id)) { contactsDirty.clear(); syncContacts(); }
 }
 
+let lastFoldersShown = "", lastStarredCount = 0;
 async function loadFolders(silent = false) {
   const r = await api.folders();
   state.folders = r.folders;
@@ -302,8 +303,12 @@ async function loadFolders(silent = false) {
     if (prev !== undefined && prev !== f.highestModSeq) { changed.push(f.id); listDirty.add(f.id); contactsDirty.add(f.id); }
     state.modseq.set(f.id, f.highestModSeq);
   }
-  renderFolders();
-  if (changed.length || state.starredCount == null) refreshStarredCount();
+  // A poll sees a change in some folder nearly every time; the tree is redrawn only when what it
+  // shows changed, and the Starred count (a 500-message search) is redone at most once a minute,
+  // or at once while Starred is open.
+  const shown = JSON.stringify(r.folders.map(f => [f.id, f.name, f.unread, f.total, f.types]));
+  if (shown !== lastFoldersShown) { lastFoldersShown = shown; renderFolders(); }
+  if (state.starredCount == null || (changed.length && (state.view.starred || Date.now() - lastStarredCount > 60000))) { lastStarredCount = Date.now(); refreshStarredCount(); }
   if (!silent) status(`${r.folders.length} folders`, r.ms);
   return changed;
 }
@@ -356,7 +361,9 @@ async function loadList(mode = "fresh", focusId = null) {
   const cursorId = state.messages[state.selected]?.id ?? null;
   const oldOrder = state.messages.map(m => m.id), oldCursor = state.selected;
   const offset = mode === "more" ? state.messages.length : 0;
-  const count = mode === "refresh" ? Math.max(PAGE, state.messages.length) : PAGE;
+  // A refresh asks for one more than it shows, so a full answer tells whether more exist.
+  const shownN = Math.max(PAGE, state.messages.filter(x => !x.elsewhere).length);
+  const count = mode === "refresh" ? shownN + 1 : PAGE;
   if (mode !== "more" && v.kind === "folder") listDirty.delete(v.folderId);
   // a load that is discarded or fails leaves its folder still to be refreshed
   const stillDirty = () => { if (mode !== "more" && v.kind === "folder") listDirty.add(v.folderId); };
@@ -410,7 +417,8 @@ async function loadList(mode = "fresh", focusId = null) {
     const have = new Set(state.messages.map(m => m.id));
     state.messages = state.messages.filter(x => !x.elsewhere).concat(r.messages.filter(m => !have.has(m.id)));
   } else state.messages = r.messages;
-  state.more = !r.complete && r.messages.length >= Math.min(count, PAGE);
+  if (mode === "refresh" && r.messages.length > shownN) { state.messages = state.messages.slice(0, shownN); state.more = !r.complete; }
+  else state.more = !r.complete && r.messages.length >= (mode === "refresh" ? count : PAGE);
   if (!state.more) state.messages = state.messages.concat(state.elsewhere);
   if (mode !== "more") {
     const ids = new Set(state.messages.map(m => m.id));
@@ -614,7 +622,7 @@ function spamLabel(ids) {
 function updateToolbar() {
   const n = state.marked.size || (state.selected >= 0 ? 1 : 0);
   for (const b of $("toolbar").querySelectorAll("button[data-act]")) {
-    if (b.dataset.act === "undo") b.disabled = busy || !undoStack.length;
+    if (b.dataset.act === "undo") b.disabled = !pendingSends.length && (busy || !undoStack.length);   // z also cancels a send
     else if (b.dataset.act === "redo") b.disabled = busy || !redoStack.length;
     else b.disabled = busy || n === 0;
   }
@@ -752,10 +760,12 @@ function wireContactCards() {
 
 function closeCard() { $("card").classList.add("hidden"); cardFor = null; }
 
+let cardSeq = 0;
 async function openCard(anchor, email, name) {
-  const card = $("card");
+  const card = $("card"), seq = ++cardSeq;
   cardFor = email;
   const c = await contacts.lookup(email);
+  if (seq !== cardSeq) return;          // a newer card was asked for meanwhile
   const me = email.toLowerCase() === $("account").textContent.toLowerCase();
   const when = s => s ? new Date(s * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "never";
   card.innerHTML = `<div class="card-head"><b>${esc(c?.name || name || email)}</b><span>${esc(email)}</span></div>
@@ -775,7 +785,7 @@ async function openCard(anchor, email, name) {
   const q = personQuery(email);
   let res;
   try { res = await api.search(q, null, 5, 0, true); } catch { res = { messages: [] }; }
-  if (cardFor !== email) return;
+  if (cardFor !== email || seq !== cardSeq) return;
   const recent = card.querySelector(".card-recent");
   recent.innerHTML = res.messages.length ? res.messages.map(m => {
     const out = (m.headers.from?.[0]?.email || "").toLowerCase() !== email.toLowerCase();
@@ -877,6 +887,7 @@ async function open(i, how = "user") {
 function showReaderError(e, what) {
   handleError(e, what);
   if (e instanceof api.NotSignedIn) return;
+  currentBody = null;      // the previous message must not come back on a redraw, or print
   $("reader-empty").textContent = `Error ${what}: ${e.message}`;
   $("reader-empty").classList.remove("hidden");
   $("reader-head").classList.add("hidden");
@@ -1331,7 +1342,8 @@ async function doArchive(ids) {
 async function doDelete(ids) {
   if (!ids.length) return;
   const trash = folderByType("TRASH"); if (!trash) { status("no Trash folder"); return; }
-  const viewingTrash = state.view.kind === "folder" && state.view.folderId === trash.id;
+  const v = state.view;
+  const viewingTrash = v.kind === "folder" ? v.folderId === trash.id : !!v.scope?.ids?.includes(trash.id) && byIds(ids).every(m => m.folder?.id === trash.id);
   if (!viewingTrash) { await doMove(ids, trash.id, "delete"); return; }
   ids = byIds(ids).filter(m => m.folder?.id === trash.id).map(m => m.id);
   if (!ids.length) { status("nothing in Trash selected"); return; }
@@ -1532,7 +1544,8 @@ async function doSearch(term, everywhere = false) {
   try { ast = parse(term); check(ast); } catch (e) { notify(`Could not search: ${e.message}.`); return; }
   if (!ast) { status("nothing to search for"); return; }
   const scope = everywhere || scopeOff ? null : scopeOfView();
-  const back = state.view.kind === "search" ? state.view.back : state.view;
+  // a search from a search returns where the first one came from; Starred is a place of its own
+  const back = state.view.kind === "search" && !state.view.starred ? state.view.back : state.view;
   leaveView();
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term, scope, back };
@@ -1558,6 +1571,7 @@ function macLabels() {
 }
 
 const SYMBOL_KEYS = new Set(["#", "!", "?", "/", "*", ","]);
+const REPEATLESS = new Set(["e", "#", "Delete", "Backspace", "!", "p", "s", "u", "v", "x", "z", "Z", "c", "r", "a", "f", "R"]);
 function onKey(e) {
   if (e.target.closest && e.target.closest("#compose")) return;
   if (viewer.isOpen()) { viewer.onKey(e); return; }
@@ -1587,7 +1601,7 @@ function onKey(e) {
     if (state.marked.size) { clearMarks(); return; }
   }
   if (inSearch) {
-    if (e.key === "Enter") { toggleSearchHelp(false); doSearch($("search").value, e.shiftKey); }
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { toggleSearchHelp(false); doSearch($("search").value, e.shiftKey); }
     else if (e.key === "Backspace" && !$("search").value && scopeOfView() && !scopeOff) { scopeOff = true; updateScopeChip(); }
     return;
   }
@@ -1614,6 +1628,10 @@ function onKey(e) {
   // Alt with a letter belongs to the browser and the system. A symbol command may need Option
   // (macOS) or AltGr (many European layouts) to type, so it still counts.
   if (e.altKey && !SYMBOL_KEYS.has(e.key)) return;
+  // Caps Lock flips a letter's case, which here would swap z and Z (undo, redo) or r and R; the
+  // case comes from Shift. A held key does not repeat an action that changes mail.
+  if (/^[a-z]$/i.test(e.key) && e.getModifierState?.("CapsLock")) e = new Proxy(e, { get: (t, p) => p === "key" ? (t.shiftKey ? t.key.toUpperCase() : t.key.toLowerCase()) : typeof t[p] === "function" ? t[p].bind(t) : t[p] });
+  if (e.repeat && REPEATLESS.has(e.key)) { e.preventDefault(); return; }
   if (pendingG) {
     pendingG = false;
     const map = { i: "INBOX", s: "SENT", t: "TRASH", d: "DRAFT", a: "ARCHIVE", b: "BULK" };

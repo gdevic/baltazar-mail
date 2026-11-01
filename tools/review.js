@@ -367,6 +367,94 @@ scenario("opening another draft quickly edits the last one clicked", async ({ pa
   expect(subject === "Subject 3-2", "the composer holds the draft clicked last: " + subject);
 });
 
+// ---------- keyboard and small state ----------
+const key = (page, init) => page.evaluate(i => (document.activeElement || document).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...i })), init);
+
+scenario("Esc from a search in Starred goes back to Starred", async ({ page }, expect) => {
+  await page.locator("#folder-list .folder", { hasText: "Starred" }).first().click(); await page.waitForTimeout(500);
+  await page.locator("#search").click(); await page.keyboard.type("alex"); await page.keyboard.press("Enter"); await page.waitForTimeout(500);
+  await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(500);
+  expect(await page.locator("#list-title").textContent() === "Starred", "back in Starred: " + await page.locator("#list-title").textContent());
+});
+
+scenario("Enter that ends an IME composition does not search", async ({ page }, expect) => {
+  await page.locator("#search").click(); await page.keyboard.type("kanji");
+  await key(page, { key: "Enter", isComposing: true });
+  await page.waitForTimeout(400);
+  expect(await page.locator("#list-title").textContent() === "Inbox", "no search: " + await page.locator("#list-title").textContent());
+});
+
+scenario("Caps Lock does not turn undo into redo, and a held key acts once", async ({ page, calls }, expect) => {
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(400);
+  await page.locator("#list").focus(); await page.keyboard.press("e"); await page.waitForTimeout(500);
+  await key(page, { key: "e", repeat: true }); await key(page, { key: "e", repeat: true }); await page.waitForTimeout(500);
+  const moves = calls.filter(c => c.name === "messages.move").length;
+  await key(page, { key: "Z", modifierCapsLock: true }); await page.waitForTimeout(700);
+  const label = await page.locator("#st-undo").textContent();
+  expect(moves === 1, "a held e archives once: " + moves);
+  expect(/Redo: archive/.test(label) && !/Undo:/.test(label), "Z with Caps Lock undoes: " + label);
+});
+
+scenario("the Undo button can cancel a pending send", async ({ page }, expect) => {
+  await newMessage(page, { subject: "Wait", text: "x" });
+  await page.keyboard.press("Control+Enter"); await page.waitForTimeout(400);
+  const disabled = await page.locator('button[data-act="undo"]').isDisabled();
+  await page.locator('button[data-act="undo"]').click({ timeout: 2000 }).catch(() => {});
+  await page.waitForTimeout(500);
+  expect(!disabled && await page.locator("#compose").isVisible(), "Undo is enabled and cancels the send: " + JSON.stringify({ disabled }));
+}, { settings: { undoSendSec: 5 } });
+
+scenario("a refreshed list of more than a page offers no phantom Load more", async ({ page, mock }, expect) => {
+  const TOTAL = 120;
+  mock.handler = async ({ name, uri }) => {
+    if (name !== "messageGroups.getList" || !/folderId%3A41\b/.test(uri)) return;
+    const q = decodeURIComponent(uri), count = Number(q.match(/count:(\d+)/)[1]), offset = Number(q.match(/offset:(\d+)/)[1]);
+    const all = Array.from({ length: TOTAL }, (_, i) => msg(i + 1, "41"));
+    return { responses: [{ id: "GetMessageGroupList", httpCode: 200, response: { result: { messages: all.slice(offset, offset + count), query: {} } } }] };
+  };
+  await page.locator("#folder-list .folder .tw").first().click().catch(() => {});
+  await page.locator("#folder-list .folder", { hasText: "Travel" }).locator(".tw").click().catch(() => {});
+  await page.locator("#folder-list .folder", { hasText: "2025" }).click(); await page.waitForTimeout(600);
+  const first = await page.locator("#more").isVisible();
+  await page.click("#more-btn"); await page.waitForTimeout(600);
+  const loaded = await page.locator("#rows .row").count(), afterMore = await page.locator("#more").isVisible();
+  await page.locator("#list").focus(); await page.keyboard.press("R"); await page.waitForTimeout(800);
+  const afterRefresh = await page.locator("#more").isVisible();
+  expect(first && loaded === TOTAL && !afterMore && !afterRefresh, "Load more only while more exist: " + JSON.stringify({ first, loaded, afterMore, afterRefresh }));
+});
+
+scenario("a message that failed to open does not come back or print", async (h, expect) => {
+  const { page, mock } = h;
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  mock.handler = async ({ name, uri }) => name === "messages.getBody" && uri.includes("MSG1_3/") ? { error: { code: "EC-5003", message: "Internal error" } } : undefined;
+  await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(600);
+  const pages = h.ctx.pages().length;
+  await page.locator("#list").focus(); await page.keyboard.press("p"); await page.waitForTimeout(800);
+  const st = await page.locator("#st-msg").textContent();
+  expect(h.ctx.pages().length === pages && /open or select a message/.test(st) && await page.locator("#reader-head").isHidden(), "nothing prints: " + st);
+}, { allow: /EC-5003|fetching/ });
+
+scenario("Delete in a search of Trash deletes for good", async ({ page, calls }, expect) => {
+  await folder(page, "Trash");
+  await page.locator("#search").click(); await page.keyboard.type("x"); await page.keyboard.press("Enter"); await page.waitForTimeout(700);
+  const chip = await page.locator("#search-scope").textContent();
+  await page.locator("#rows .row").first().click(); await page.waitForTimeout(300);
+  let asked = "";
+  page.once("dialog", d => { asked = d.message(); d.accept(); });
+  await page.locator("#list").focus(); await page.keyboard.press("#"); await page.waitForTimeout(700);
+  expect(chip === "in Trash" && /Permanently delete/.test(asked) && calls.some(c => c.name === "messages.delete"), "permanent delete from a Trash search: " + JSON.stringify({ chip, asked }));
+});
+
+scenario("polling does not redraw folders or recount Starred for every change", async ({ page, calls, folders }, expect) => {
+  await page.waitForTimeout(1500);
+  const starredQ = () => calls.filter(c => c.name === "messageGroups.getList" && /is%3Aflagged/.test(c.envelope.requests[0].uri) && /count%3A500/.test(c.envelope.requests[0].uri)).length;
+  await page.evaluate(() => { window.__redraws = 0; new MutationObserver(() => window.__redraws++).observe(document.getElementById("folder-list"), { childList: true }); });
+  const s0 = starredQ();
+  for (let i = 0; i < 3; i++) { folders.find(f => f.id === "41").highestModSeq++; await page.waitForTimeout(5200); }
+  const redraws = await page.evaluate(() => window.__redraws), recounts = starredQ() - s0;
+  expect(redraws === 0 && recounts <= 1, "folder changes that show nothing new: " + JSON.stringify({ redraws, recounts }));
+}, { settings: { pollSec: 5 } });
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
