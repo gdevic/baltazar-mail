@@ -20,8 +20,12 @@ const msg = (i, folder) => ({
   headers: { subject: i === 1 ? "Hit ^_Z80^_ here" : `Subject ${i}`, from: [{ name: `Sender ${i}`, email: `s${i}@x.com` }], to: [{ name: "Me", email: "me@yahoo.com" }], date: String(now - i * 40000) },
   folder: { id: folder, name: folder === "1" ? "Inbox" : "Other" }, snippet: "snip",
 });
+// Includes a linked account's Inbox listed before the primary one, and a record without a name or
+// types: the app must open folder 1 and still start.
 const folders = [
-  { id: "1", name: "Inbox", types: ["INBOX"], unread: 3, total: 95, highestModSeq: 10 },
+  { id: "77", acctId: "2", name: "Inbox (linked)", types: ["INBOX"], unread: 0, total: 8, highestModSeq: 17 },
+  { id: "88", unread: 0, total: 0, highestModSeq: 18 },
+  { id: "1", acctId: "1", name: "Inbox", types: ["INBOX"], unread: 3, total: 95, highestModSeq: 10 },
   { id: "2", name: "Sent", types: ["SENT"], unread: 0, total: 8, highestModSeq: 11 },
   { id: "4", name: "Trash", types: ["TRASH"], unread: 0, total: 1, highestModSeq: 12 },
   { id: "62", name: "Archive", types: ["ARCHIVE"], unread: 0, total: 0, highestModSeq: 16 },
@@ -141,6 +145,7 @@ const folders = [
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expect(versionLine === "Baltazar Mail 0.14.0", "version line: " + versionLine);
+  expect(rows === 95 && foldersShown.some(f => f.startsWith("Folder 88")) && foldersShown.some(f => f.startsWith("Inbox (linked)")), "starts with odd folders, opening the primary Inbox: " + JSON.stringify({ rows, foldersShown }));
   expect(scoped.chip === "in Inbox" && scoped.divider === 1 && scoped.allChip === "All mail" && scoped.allDivider === 0, "search scope: " + JSON.stringify(scoped));
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");

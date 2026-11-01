@@ -90,7 +90,12 @@ const addrs = l => (l || []).map(addr).join(", ");
 const status = (msg, ms) => { $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || null) : null;
-const folderByType = t => state.folders.find(f => f.types.includes(t));
+// System folders of the primary account (the one holding Yahoo's own Inbox, folder 1); linked
+// accounts bring an Inbox, Sent and so on of their own.
+const folderByType = t => {
+  const acct = state.byId.get("1")?.acctId, all = state.folders.filter(f => f.types.includes(t));
+  return all.find(f => acct == null || f.acctId == null || f.acctId === acct) || all[0];
+};
 const inboxId = () => folderByType("INBOX")?.id ?? "1";
 const isHidden = f => f.types.some(t => t === "SYNC" || t === "INVISIBLE");
 // Yahoo names the spam folder "Bulk" internally; the web UI shows it as Spam.

@@ -17,8 +17,39 @@ export class ApiError extends Error {
 }
 
 let session = null;
+async function forgetSession() { session = null; await chrome.storage.session.remove("ymSession"); }
 
-// Session values come from the inline AppBootstrapData object in the mail.yahoo.com page.
+// The JSON object literal that starts at the first "{" after marker, or null.
+function objectAfter(text, marker) {
+  const at = text.indexOf(marker); if (at < 0) return null;
+  const start = text.indexOf("{", at); if (start < 0) return null;
+  let depth = 0, inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) { if (c === "\\") i++; else if (c === '"') inString = false; }
+    else if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) { try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; } }
+  }
+  return null;
+}
+
+// Session values from the mail.yahoo.com page: the top-level keys of its inline AppBootstrapData
+// object, or, if that object does not parse as JSON, the first matches of each key in the page.
+// null when the page has none (signed out: Yahoo's landing page).
+export function parseBootstrap(html) {
+  const data = objectAfter(html, "AppBootstrapData");
+  let wssid = data?.mailWssid, appId = data?.appId, mailboxId = data?.primaryMailbox?.id, email = data?.primaryMailbox?.email;
+  if (typeof wssid !== "string" || typeof appId !== "string" || typeof mailboxId !== "string") {
+    wssid = html.match(/"mailWssid"\s*:\s*"([^"]+)"/)?.[1];
+    appId = html.match(/"appId"\s*:\s*"([^"]+)"/)?.[1];
+    mailboxId = html.match(/"primaryMailbox"\s*:\s*\{[^}]*?"id"\s*:\s*"([^"]+)"/)?.[1];
+    email = html.match(/"primaryMailbox"\s*:\s*\{[^}]*?"email"\s*:\s*"([^"]+)"/)?.[1];
+  }
+  if (!wssid || !appId || !mailboxId) return null;
+  return { wssid, appId, mailboxId, email: typeof email === "string" ? email : "" };
+}
+
 export async function bootstrap(force = false) {
   if (!force && session) return session;
   if (!force) {
@@ -26,21 +57,21 @@ export async function bootstrap(force = false) {
     if (stored && Date.now() - stored.at < 6 * 3600e3) return (session = stored);
   }
   const resp = await fetch(ORIGIN + "/", { credentials: "include", cache: "no-store" });
-  const html = await resp.text();
-  const wssid = html.match(/"mailWssid"\s*:\s*"([^"]+)"/);
-  const appId = html.match(/"appId"\s*:\s*"([^"]+)"/);
-  const mailbox = html.match(/"primaryMailbox"\s*:\s*\{[^}]*?"id"\s*:\s*"([^"]+)"/);
-  const email = html.match(/"primaryMailbox"\s*:\s*\{[^}]*?"email"\s*:\s*"([^"]+)"/);
-  if (!wssid || !appId || !mailbox) throw new NotSignedIn();
-  session = { wssid: wssid[1], appId: appId[1], mailboxId: mailbox[1], email: email ? email[1] : "", at: Date.now() };
+  const values = parseBootstrap(await resp.text());
+  if (!values) throw new NotSignedIn();
+  session = { ...values, at: Date.now() };
   await chrome.storage.session.set({ ymSession: session });
   return session;
 }
 
 const uuid = () => crypto.randomUUID();
 
-// One batch envelope, one HTTP round trip. Returns the inner responses array.
+// One batch envelope, one HTTP round trip. Returns the inner responses array. retry allows one
+// fresh sign-in after a 401/403 and, separately, one retry after EP-4010 (header rule not ready).
 export async function batch(name, requests, retry = true, files = [], headers = {}) {
+  return attempt(name, requests, files, headers, { auth: retry, rules: retry });
+}
+async function attempt(name, requests, files, headers, tries) {
   const s = await bootstrap();
   const fill = r => ({ payloadType: "embedded", ...r, uri: r.uri.replaceAll("<mb>", s.mailboxId), ...(r.requests ? { requests: r.requests.map(fill) } : {}) });
   const reqs = requests.map(fill);
@@ -51,23 +82,22 @@ export async function batch(name, requests, retry = true, files = [], headers = 
   const t0 = performance.now();
   const resp = await fetch(`${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include", headers });
   const ms = Math.round(performance.now() - t0);
-  if ((resp.status === 401 || resp.status === 403) && retry) {
-    session = null;
-    await chrome.storage.session.remove("ymSession");
+  if ((resp.status === 401 || resp.status === 403) && tries.auth) {
+    await forgetSession();
     await bootstrap(true);
-    return batch(name, requests, false, files, headers);
+    return attempt(name, requests, files, headers, { ...tries, auth: false });
   }
   const text = await resp.text();
   let doc;
   try { doc = JSON.parse(text); } catch { throw new ApiError(`${name}: HTTP ${resp.status}, non-JSON response`, text.slice(0, 300)); }
   if (doc.error) {
     const code = doc.error.code || "";
-    if (code === "EP-4010" && retry) {
+    if (code === "EP-4010" && tries.rules) {
       // Origin rewrite rule not installed yet (worker still starting); ask it and retry once.
       await chrome.runtime.sendMessage({ type: "ensureRules" }).catch(() => {});
-      return batch(name, requests, false, files, headers);
+      return attempt(name, requests, files, headers, { ...tries, rules: false });
     }
-    if (code === "EC-4008") { session = null; throw new NotSignedIn(); }
+    if (code === "EC-4008") { await forgetSession(); throw new NotSignedIn(); }
     throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}`, doc.error);
   }
   const responses = doc.result?.responses || [];
@@ -83,10 +113,22 @@ function first(r) {
   return x.response.result;
 }
 
-export async function folders() {
+// Every folder with a string id, a name and a types list, whatever shape Yahoo sent.
+export function normalizeFolders(list) {
+  return (Array.isArray(list) ? list : []).filter(f => f && f.id != null).map(f => ({
+    ...f, id: String(f.id), name: typeof f.name === "string" && f.name ? f.name : `Folder ${f.id}`,
+    types: Array.isArray(f.types) ? f.types.filter(t => typeof t === "string") : [],
+  }));
+}
+
+// The folder list is the first call after start-up; an inner sign-in refusal (a session that
+// went stale for this mailbox) gets one fresh sign-in.
+export async function folders(retry = true) {
   const r = await batch("mailbox.sync", [{ id: "GetFolders", uri: "/ws/v3/mailboxes/@.id==<mb>/folders", method: "GET" }]);
+  const code = r[0]?.httpCode ?? 0;
+  if (retry && (code === 401 || code === 403)) { await forgetSession(); await bootstrap(true); return folders(false); }
   const res = first(r);
-  return { folders: res.folders || [], accounts: res.accounts || [], ms: r.ms };
+  return { folders: normalizeFolders(res.folders), accounts: res.accounts || [], ms: r.ms };
 }
 
 export async function list(folderId, count = 100, offset = 0) {
@@ -135,8 +177,7 @@ export async function rawMessage(msgId, retry = true) {
   const qs = new URLSearchParams({ appId: s.appId, wssid: s.wssid, ymreqid: uuid() });
   const resp = await fetch(`${JWS}/ws/v3/mailboxes/@.id==${s.mailboxId}/messages/@.id==${msgId}/content/rawplaintext?${qs}`, { credentials: "include" });
   if ((resp.status === 401 || resp.status === 403) && retry) {
-    session = null;
-    await chrome.storage.session.remove("ymSession");
+    await forgetSession();
     await bootstrap(true);
     return rawMessage(msgId, false);
   }

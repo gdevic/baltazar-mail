@@ -22,7 +22,7 @@ jobs:
       - name: Unit tests
         run: |
           node --version
-          for t in query contacts bytes update darken themes; do
+          for t in query contacts bytes update darken themes api; do
             echo "::group::$t"
             node "tools/$t-test.mjs"
             echo "::endgroup::"
