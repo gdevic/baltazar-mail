@@ -26,7 +26,7 @@ The dark theme with the message list above the preview; the message is darkened 
 
 Settings:
 
-![Settings: layout, theme and palettes, writing, images, behaviour and the address book](docs/screenshots/settings.png)
+![Settings: layout, theme with palettes and contrast, size, writing, images, behaviour and the address book](docs/screenshots/settings.png)
 
 All names, addresses and messages in these screenshots are invented; `node tools/screenshots.js` regenerates them.
 

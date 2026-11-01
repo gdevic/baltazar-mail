@@ -54,7 +54,7 @@ Description:
 
 > Baltazar Mail is a fast, clean, ad-free way to read and write your Yahoo Mail. It opens in its own tab and uses the Yahoo sign-in you already have in the browser, so there is nothing to set up: sign in to mail.yahoo.com once, then click the Baltazar Mail button.
 >
-> Reading: a three-column or stacked layout with resizable panes, light and dark palettes, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their colours and images. A Starred view collects flagged mail from every folder.
+> Reading: a three-column or stacked layout with resizable panes, sixteen light and dark palettes in different hues with a contrast slider, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their colours and images. A Starred view collects flagged mail from every folder.
 >
 > Mailbox: mark messages read or unread, star, archive, move, delete or report them as spam, one at a time or as a selection, with multi-level undo and redo.
 >

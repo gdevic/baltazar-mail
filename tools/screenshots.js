@@ -341,6 +341,13 @@ function listFor(q) {
   if (!STORE) await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
   await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent));
   await page.waitForTimeout(300);
+  // At the store's 800 px the panel scrolls; show it from the Layout heading to the buttons, as a
+  // slightly taller window would, so no section is cut.
+  if (STORE) await page.locator("#settings-box").evaluate(e => {
+    const top = e.querySelector("#settings-main > b").getBoundingClientRect().top - e.getBoundingClientRect().top - 16;
+    e.style.maxHeight = (e.scrollHeight - top) + "px";
+    e.scrollTop = top;
+  });
   const box = await page.locator("#settings-box").boundingBox(), pad = 16;
   // The store takes whole windows only; the README shows the panel alone.
   await page.screenshot({ path: path.join(OUT, "settings.png"), ...(STORE ? {} : { clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } }) });
