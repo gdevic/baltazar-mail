@@ -143,6 +143,8 @@ Spam and not spam in Yahoo's client are plain moves: to the folder of type BULK,
 
 An attachment of another message is forwarded by reference, copied server-side without a download: `{ "disposition": "attachment", "contentId": "<cid>", "messageReference": { "id": "<orig message id>", "pid": "<partId>" } }`, counted in `totalAttachments` but not `uploadCount`. The save answers HTTP 206 when some referenced parts were dropped: inline parts referenced this way become plain attachments and the body's `cid:` links do not resolve, so inline images of a quoted original are re-uploaded as new inline parts instead.
 
+Draft saves refer to the parts of the draft's previous save the same way (`messageReference` to the previous draft id), so a large attachment is uploaded once rather than on every autosave. Not yet verified live: whether a save that replaces draft X may copy parts out of X. The client treats an error or HTTP 206 on such a save as a refusal and saves again with every file uploaded; sends always upload.
+
 `GET .../content/simplebody/full` returns attachment metadata on `message.attachments`; `simpleBody.attachments` is present only for some messages. Each entry has `partId`, `filename`, `size`, `type`, `subtype`, `disposition`, `contentId`, `downloadUrl`, `thumbnailUrl` (server-rendered previews for images and PDFs, cookie-authenticated).
 
 Person search: `(from:("addr") OR to:("addr"))`; `fromEmail:(...)` also exists.

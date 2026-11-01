@@ -102,6 +102,9 @@ let draft = null;          // current compose state
 let autosaveTimer = null;
 let dirty = false;
 let saving = null;         // the draft save in flight
+// A file already stored with a saved draft: { messageId, partId }. Later draft saves refer to that
+// part instead of uploading the file again; a send always uploads.
+const stored = new WeakMap();
 
 export function init(h) {
   hooks = h;
@@ -211,6 +214,7 @@ export async function open(opts) {
       draft.csid = m.csid || draft.csid;
       draft.savedId = m.id;
       draft.files = withFiles([], opts.files || []);
+      (opts.files || []).forEach((f, i) => { if (draft.files.includes(f) && opts.partIds?.[i]) stored.set(f, { messageId: m.id, partId: opts.partIds[i] }); });
       to = h.to || []; cc = h.cc || []; bcc = h.bcc || []; subject = h.subject || "";
       bodyHtml = opts.body.html || "";
       if (api.isMessageId(m.inReplyTo?.messageReference?.id)) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };
@@ -537,15 +541,21 @@ function hasContent() {
 
 function strictGet(f) { if (!f.commit(true)) throw new Error(`Not an address: ${f.input.value.trim()}`); return f.get(); }
 
-function collect() {
+// The message as it will be saved or sent. With upload (a send), every file is uploaded; otherwise files already stored with the draft go as references to their parts.
+function collect(upload = false) {
   const acct = accounts.find(a => a.email === $("c-from").value) || accounts[0];
   const from = { name: acct?.sendingName || "", email: acct?.email || $("c-from").value };
   const d = {
     csid: draft.csid, from, replyTo: acct?.replyToAddress ? { email: acct.replyToAddress } : from,
     to: strictGet(fields.to), cc: strictGet(fields.cc), bcc: strictGet(fields.bcc),
     subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files, refs: draft.refs || [],
-    draftFolderId: hooks.folderByType("DRAFT")?.id,
+    ownRefs: false, draftFolderId: hooks.folderByType("DRAFT")?.id,
   };
+  if (!upload && draft.files.some(f => stored.has(f))) {
+    d.files = draft.files.filter(f => !stored.has(f));
+    d.refs = d.refs.concat(draft.files.filter(f => stored.has(f)).map(f => ({ ...stored.get(f), filename: f.name, size: f.size })));
+    d.ownRefs = true;
+  }
   if (draft.html) {
     // Images in the quoted original travel as new inline parts too, so recipients see them.
     const f = defaultFont();
@@ -571,11 +581,14 @@ async function saveNow(silent = false) {
   try { d = collect(); } catch (e) { if (!silent) warn(e.message); return e.message; }
   if (!d.draftFolderId) { warn("There is no Drafts folder to save the message in."); return "no Drafts folder"; }
   dirty = false;          // edits made while the save is in flight mark the message again
-  const p = api.saveDraft(d);
+  // References to parts of the previous save that Yahoo refuses or drops: saved again, uploading
+  const p = api.saveDraft(d).catch(e => { if (!d.ownRefs) throw e; return { partial: true }; })
+    .then(r => r.partial && d.ownRefs ? (forgetStored(mine), api.saveDraft({ ...d, ...uploadAll(mine) })) : r);
   saving = p;
   try {
     const r = await p;
     mine.savedId = r.message?.id || mine.savedId;
+    remember(mine, r.message);
     if (draft === mine) { hooks.clearNotice("compose"); hooks.status("draft saved", r.ms); }
     return "";
   } catch (e) {
@@ -584,13 +597,22 @@ async function saveNow(silent = false) {
     saveError = e; warn(`The draft could not be saved: ${e.message}`, e); return `draft save failed: ${e.message}`;
   } finally { if (saving === p) saving = null; }
 }
+function forgetStored(mine) { for (const f of mine.files) stored.delete(f); }
+// Every file uploaded again, with only the references to other messages' parts.
+function uploadAll(mine) { return { files: mine.files, refs: mine.refs || [], ownRefs: false }; }
+// Notes which part of the saved draft holds each file (names are unique within a message).
+function remember(mine, message) {
+  if (!message?.id) return;
+  const parts = new Map((message.attachments || []).filter(a => a.disposition !== "inline" && a.partId && a.filename).map(a => [a.filename, a.partId]));
+  for (const f of mine.files) { const pid = parts.get(f.name); if (pid) stored.set(f, { messageId: message.id, partId: pid }); else stored.delete(f); }
+}
 // Settles once no save is in flight.
 const saved = async () => { while (saving) await saving.catch(() => {}); };
 
 async function send() {
   if (!draft) return;
   let d;
-  try { d = collect(); } catch (e) { warn(`Not sent: ${e.message}`); return; }
+  try { d = collect(true); } catch (e) { warn(`Not sent: ${e.message}`); return; }
   if (!d.to.length && !d.cc.length && !d.bcc.length) { warn("Not sent: the message has no recipients."); fields.to.focus(); return; }
   if (!d.subject && !confirm("Send without a subject?")) return;
   const sentId = hooks.folderByType("SENT")?.id;

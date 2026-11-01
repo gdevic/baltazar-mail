@@ -166,7 +166,7 @@ const { launch } = require("./harness");
   await page.locator("#rows .row").nth(2).hover();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "starcol.png"), clip: { x: 235, y: 80, width: 465, height: 180 } }).catch(() => {});
   await page.screenshot({ path: path.join(__dirname, "..", "out", "listcols.png"), clip: { x: 235, y: 80, width: 300, height: 120 } }).catch(() => {});
-  results.starCol = { call: calls.slice(starBefore).map(c => c.name).join(","), on: await page.locator("#rows .row").nth(4).locator(".st.on").count() };
+  results.starCol = { call: calls.slice(starBefore).map(c => c.name).filter(n => n !== "mailbox.sync").join(","), on: await page.locator("#rows .row").nth(4).locator(".st.on").count() };
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
 
   // attachment previews: two cards, PDF gets a thumbnail, CSV a type tile
@@ -566,7 +566,7 @@ const { launch } = require("./harness");
     await folder("Projects");
     results.folderMemory = { before, away, back: await snap() };
 
-    // editing a draft keeps its attachments and inline images: saving it again uploads them
+    // editing a draft keeps its attachments and inline images: saving it again refers to its parts
     await folder("Draft");
     await page.locator("#rows .row").first().click();
     await page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 }).catch(() => {});
@@ -583,7 +583,9 @@ const { launch } = require("./harness");
     await page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 8000 }).catch(() => {});
     const saveCall = calls.slice(callsBefore).find(c => c.name === "messages.saveV3");
     const html = saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.simpleBody?.html || "";
+    const savedAtts = saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.message?.attachments || [];
     results.draftEdit = { inReplyTo: saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.message?.inReplyTo ?? null, chips: chipsNow.length, names: chipsNow.join(" "), imgSrcs, uploaded: (saveCall?.fileParts || []).map(p => p[1]),
+      refs: savedAtts.filter(a => a.messageReference).map(a => `${a.messageReference.id}:${a.messageReference.pid}`),
       partLinks: /cloud-apis\.mail\.yahoo\.com/.test(html), closed: await page.locator("#compose").isHidden(), overlay };
     await folder("Projects");
   }
@@ -719,7 +721,8 @@ const { launch } = require("./harness");
   expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
   const de = results.draftEdit;
   expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 3 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&
-    ["report.pdf", "data.csv", "cv.docx", "deck.pptx"].every(n => de.uploaded.includes(n)) && !de.partLinks && de.closed, "editing a draft keeps its attachments and images: " + JSON.stringify(de));
+    ["2", "3", "6", "8"].every(p => de.refs.some(r => /^MSG3_\d+:/.test(r) && r.endsWith(":" + p))) && de.refs.length === 7 && !de.uploaded.some(n => !n.startsWith("inline-")) && !de.partLinks && de.closed,
+    "editing a draft keeps its attachments, as references to its own parts, and its images: " + JSON.stringify(de));
   expect(de.inReplyTo === null, "a reopened draft drops a reply reference that is not a message id: " + JSON.stringify(de.inReplyTo));
   expect(de.overlay.present && de.overlay.position !== "fixed" && !de.overlay.coversApp, "a quoted box cannot cover the app: " + JSON.stringify(de.overlay));
   expect(de.uploaded.filter(n => n.startsWith("inline-")).every(n => /\.(png|jpg|gif|webp|bmp)$/.test(n)) && de.uploaded.filter(n => n.startsWith("inline-")).length === 3, "only real images become inline parts, bad ones do not stop the save: " + JSON.stringify(de.uploaded));

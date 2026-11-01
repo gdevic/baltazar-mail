@@ -303,14 +303,15 @@ function saveResult(r) {
   const x = r.find(x => x.id === "SaveMessage");
   const code = x?.httpCode ?? 0;
   if (code < 200 || code >= 300) throw new ApiError(`save: HTTP ${code} ${JSON.stringify(x?.response?.error || "").slice(0, 120)}`, x);
-  return x.response?.result?.message || null;
+  // 206: saved, but some parts referenced from other messages were dropped
+  return { message: x.response?.result?.message || null, partial: code === 206 };
 }
 
 const allFiles = d => (d.files || []).concat((d.inline || []).map(i => i.file));
 
 export async function saveDraft(d) {
   const r = await batch("messages.saveV3", [saveRequest(d)], true, allFiles(d));
-  return { message: saveResult(r), ms: r.ms };
+  return { ...saveResult(r), ms: r.ms };
 }
 
 export async function send(d, sentFolderId) {
@@ -329,7 +330,7 @@ export async function send(d, sentFolderId) {
     sendReq,
   ];
   const r = await batch("messages.saveAndSend", [req], true, allFiles(d));
-  const message = saveResult(r);
+  const { message } = saveResult(r);
   const sent = r.find(x => x.id === "SendMessage");
   const code = sent?.httpCode ?? 0;
   if (code < 200 || code >= 300) throw new ApiError(`send: HTTP ${code} ${JSON.stringify(sent?.response?.error || "").slice(0, 120)}`, sent);

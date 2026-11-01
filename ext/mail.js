@@ -945,7 +945,7 @@ async function editDraft(i) {
     } catch (e) { notify("Could not load the draft's attachments, so it was not opened (it is unchanged).", { detail: e.message, err: e, what: "draft" }); return; }
   }
   hideReaderForCompose(true);
-  await compose.open({ mode: "draft", message: r.message, body: r, files, myEmail: $("account").textContent });
+  await compose.open({ mode: "draft", message: r.message, body: r, files, partIds: atts.map(a => a.partId), myEmail: $("account").textContent });
   status("");
 }
 

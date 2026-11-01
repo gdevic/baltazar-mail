@@ -20,12 +20,15 @@ const msgOf = c => c?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload;
 const notice = async page => (await page.locator("#notice").isVisible()) ? await page.locator("#notice-text").textContent() : "";
 const composerHidden = page => page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 5000 }).catch(() => {});
 
-// A save answered the way Yahoo answers it: the stored draft lists its parts with part ids.
+// A save answered the way Yahoo answers it: the stored draft lists its parts with part ids, and a
+// part copied from the previous save keeps that part's filename.
+let lastParts = new Map();
 function savedDraft(top, extra = {}) {
   const m = top.payloadParts[0].payload.message;
   let n = 1;
   const attachments = (m.attachments || []).map(a => ({ partId: String(++n), disposition: a.disposition, contentId: a.contentId,
-    filename: a.multipartName ? decodeURIComponent(a.multipartName.slice("multipart://".length)) : `ref-${a.messageReference?.pid}` }));
+    filename: a.multipartName ? decodeURIComponent(a.multipartName.slice("multipart://".length)) : lastParts.get(a.messageReference?.pid) || "copied" }));
+  lastParts = new Map(attachments.map(a => [a.partId, a.filename]));
   return { id: "MSGDRAFT_99", immutableid: "IMM99", csid: m.csid, headers: m.headers, attachments, ...extra };
 }
 const saveAnswer = (top, code = 200) => ({ responses: [{ id: "SaveMessage", httpCode: code, response: { result: { message: savedDraft(top) } } },
@@ -106,6 +109,35 @@ scenario("discard while the first save is running", async ({ page, calls, mock }
   const del = calls.filter(c => c.name === "messages.delete").map(c => c.envelope.requests[0].uri);
   expect(del.some(u => u.includes("MSGDRAFT_99")), "the draft saved after Discard is deleted: " + JSON.stringify(del));
   expect(!/could not/.test(await notice(page)), "no error notice: " + await notice(page));
+});
+
+scenario("saving again does not upload attachments again", async ({ page, calls, mock }, expect) => {
+  let partial = 0;
+  mock.handler = async ({ name, top }) => {
+    if (name !== "messages.saveV3" && name !== "messages.saveAndSend") return;
+    const refs = (top.payloadParts[0].payload.message.attachments || []).filter(a => a.messageReference);
+    if (refs.length && partial > 0) { partial--; return saveAnswer(top, 206); }
+    return saveAnswer(top);
+  };
+  await newMessage(page, { subject: "Big", text: "one" });
+  await page.setInputFiles("#c-files", { name: "big.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(4096, 1) });
+  await page.keyboard.press("Control+s"); await page.waitForTimeout(400);
+  await page.locator("#c-editor").focus(); await page.keyboard.type(" two");
+  await page.keyboard.press("Control+s"); await page.waitForTimeout(400);
+  const [first, second] = saves(calls);
+  const ref = msgOf(second)?.message?.attachments?.find(a => a.messageReference);
+  expect(first?.fileParts.some(p => p[1] === "big.bin"), "the first save uploads the file");
+  expect(second && !second.fileParts.length && ref?.messageReference.id === "MSGDRAFT_99" && ref.messageReference.pid === "2", "the next save refers to the saved part: " + JSON.stringify({ files: second?.fileParts, atts: msgOf(second)?.message?.attachments }));
+  // Yahoo dropping a referenced part (HTTP 206): the save is repeated with the file uploaded
+  partial = 1;
+  await page.locator("#c-editor").focus(); await page.keyboard.type(" three");
+  await page.keyboard.press("Control+s"); await page.waitForTimeout(600);
+  const after = saves(calls).slice(2);
+  expect(after.length === 2 && after[1].fileParts.some(p => p[1] === "big.bin"), "a dropped reference falls back to uploading: " + JSON.stringify(after.map(c => c.fileParts)));
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+  const sent = calls.filter(c => c.name === "messages.saveAndSend").pop();
+  expect(sent?.fileParts.some(p => p[1] === "big.bin"), "a send always uploads its files: " + JSON.stringify(sent?.fileParts));
 });
 
 // ---------- runner ----------
