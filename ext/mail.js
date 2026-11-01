@@ -1361,10 +1361,20 @@ function restoreView() {
   state.selected = state.anchor = mem.cursorId ? at(mem.cursorId) : -1;
   renderList();
   $("rows").scrollTop = mem.scrollTop;
-  if (mem.openId && ids.has(mem.openId)) open(at(mem.openId)); else clearReader();
+  // While composing, opening would close the draft (as in followCursor)
+  if (mem.openId && ids.has(mem.openId) && !compose.isOpen()) open(at(mem.openId)); else clearReader();
+}
+
+// After a view loads, the list takes the keyboard only if focus is still where it was when the
+// load began; a user who moved on (search box, composer) keeps typing there.
+const focusWhere = () => document.activeElement;
+function focusListIfStill(from) {
+  const now = document.activeElement;
+  if (now === from || now === document.body || now === null) $("list").focus();
 }
 
 async function openFolder(id) {
+  const from = focusWhere();
   leaveView();
   state.prevView = state.view;
   state.view = { kind: "folder", folderId: id, term: "" };
@@ -1374,7 +1384,7 @@ async function openFolder(id) {
   const v = state.view;
   await loadList("fresh");
   if (state.view === v) restoreView();
-  $("list").focus();
+  focusListIfStill(from);
 }
 
 const STARRED = "starred";
@@ -1392,6 +1402,7 @@ function refreshStarredCount() {
     .finally(() => { const again = starredCounting.again; starredCounting = null; if (again) refreshStarredCount(); });
 }
 async function openStarred() {
+  const from = focusWhere();
   leaveView();
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term: "Starred", raw: STARRED_Q, starred: true };
@@ -1401,7 +1412,7 @@ async function openStarred() {
   const v = state.view;
   await loadList("fresh");
   if (state.view === v) restoreView();
-  $("list").focus();
+  focusListIfStill(from);
 }
 
 // ---------- search scope ----------

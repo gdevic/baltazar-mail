@@ -84,6 +84,26 @@ scenario("removing a selection moves to the row after it", async ({ page }, expe
   expect(sel === before[5] && reader === before[5], "the cursor lands on the first row after the removed ones: " + JSON.stringify({ sel, reader, want: before[5] }));
 });
 
+scenario("returning to a folder keeps the composer open", async ({ page }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  await folder(page, "Sent");
+  await newMessage(page, { subject: "Stay", text: "half written" });
+  await folder(page, "Inbox");
+  await page.waitForTimeout(500);
+  const open = await page.locator("#compose").isVisible(), text = await page.locator("#c-editor").innerText().catch(() => "");
+  expect(open && text.includes("half written"), "the composer stays open with its text: " + JSON.stringify({ open, text }));
+});
+
+scenario("a slow folder load does not take focus from the search box", async ({ page, mock }, expect) => {
+  mock.listDelay = 900;
+  await page.locator("#folder-list .folder", { hasText: "Sent" }).first().click();
+  await page.locator("#search").focus(); await page.keyboard.type("budg");
+  await page.waitForTimeout(1500);
+  await page.keyboard.type("et");
+  const focus = await page.evaluate(() => document.activeElement.id), value = await page.locator("#search").inputValue();
+  expect(focus === "search" && value === "budget", "typing continues in the search box: " + JSON.stringify({ focus, value }));
+});
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
