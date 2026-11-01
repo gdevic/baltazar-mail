@@ -1,6 +1,6 @@
 // Browser tests for review findings: each scenario runs on a fresh profile against the mocked
 // Yahoo in harness.js, so no scenario depends on another's state. node tools/review.js [filter]
-const { launch } = require("./harness");
+const { launch, msg } = require("./harness");
 
 const scenarios = [];
 const scenario = (name, fn, opts = {}) => scenarios.push({ name, fn, opts });
@@ -291,6 +291,36 @@ scenario("an undo where some messages fail says so", async ({ page, mock }, expe
   const n = await notice(page);
   expect(/1 of 2 messages could not be/.test(n), "a partial undo is reported as partial: " + JSON.stringify({ n }));
 });
+
+scenario("a failed folder load keeps the list that was shown", async ({ page, mock }, expect) => {
+  const before = await subjects(page);
+  mock.handler = async ({ name, uri }) => name === "messageGroups.getList" && /folderId%3A62\b/.test(uri) ? { error: { code: "EC-5003", message: "Internal error" } } : undefined;
+  await page.locator("#folder-list .folder", { hasText: "Archive" }).first().click(); await page.waitForTimeout(800);
+  const after = await subjects(page), title = await page.locator("#list-title").textContent();
+  expect(after.length === before.length && after[0] === before[0] && title === "Inbox", "the Inbox list stays: " + JSON.stringify({ n: after.length, title }));
+}, { allow: /EC-5003|list/ });
+
+scenario("an action during a refresh does not lose new mail", async ({ page, calls, mock, folders }, expect) => {
+  let slow = false; const seenUris = [];
+  mock.handler = async ({ name, uri }) => {
+    if (name === "messageGroups.getList" && /folderId%3A1\b/.test(uri)) seenUris.push("slow=" + slow);
+    if (name !== "messageGroups.getList" || !/folderId%3A1\b/.test(uri) || !slow) return;
+    await sleep(1500);
+    const fresh = { ...msg(1, "1"), id: "MSG1_NEW", headers: { ...msg(1, "1").headers, subject: "Brand new", date: String(Math.floor(Date.now() / 1000)) } };
+    return { responses: [{ id: "GetMessageGroupList", httpCode: 200, response: { result: { messages: [fresh, ...Array.from({ length: 8 }, (_, i) => msg(i + 1, "1"))], query: {} } } }] };
+  };
+  // the address book's first build also lists Inbox; once it is done, the next Inbox list after a
+  // folder change is the poll's refresh
+  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  slow = true; folders[0].highestModSeq++;
+  const inbox = () => seenUris.filter(u => /slow=true/.test(u)).length;
+  for (let i = 0; i < 80 && !inbox(); i++) await sleep(100);   // the poll's refresh is in flight
+  await page.locator("#list").focus(); await page.keyboard.press("Shift+Z");   // nothing to redo: a no-op action
+  await page.waitForTimeout(3500);
+  slow = false;
+  const s = await subjects(page);
+  expect(s.includes("Brand new"), "new mail shows after the action: " + JSON.stringify(s.slice(0, 2)) );
+}, { settings: { pollSec: 5 } });
 
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {

@@ -358,6 +358,11 @@ async function loadList(mode = "fresh", focusId = null) {
   const offset = mode === "more" ? state.messages.length : 0;
   const count = mode === "refresh" ? Math.max(PAGE, state.messages.length) : PAGE;
   if (mode !== "more" && v.kind === "folder") listDirty.delete(v.folderId);
+  // a load that is discarded or fails leaves its folder still to be refreshed
+  const stillDirty = () => { if (mode !== "more" && v.kind === "folder") listDirty.add(v.folderId); };
+  if (mode === "refresh") state.refreshing = token;
+  // what a fresh load replaces, put back if it fails
+  const shown = mode === "fresh" ? { messages: state.messages, selected: state.selected, anchor: state.anchor, marked: new Set(state.marked), more: state.more, elsewhere: state.elsewhere } : null;
   if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; state.loading = true; renderList(); }
   else if (mode === "more" && !state.messages.length) return;
   status(mode === "more" ? "loading more…" : "loading…");
@@ -384,13 +389,19 @@ async function loadList(mode = "fresh", focusId = null) {
       ]);
     } else r = v.kind === "search" ? await api.search(nq, null, count, offset, true) : await api.list(v.folderId, count, offset);
   } catch (e) {
-    if (token !== state.listToken) return;
+    if (token !== state.listToken) { stillDirty(); return; }
+    if (state.refreshing === token) state.refreshing = null;
     state.loading = false;
-    if (mode === "fresh" && prevView) { state.view = prevView; renderFolders(); }
+    stillDirty();
+    if (mode === "fresh" && prevView) {
+      state.view = prevView; Object.assign(state, shown);
+      renderFolders(); renderList();
+    }
     handleError(e, "list");
     return;
   }
-  if (token !== state.listToken) return;
+  if (token !== state.listToken) { stillDirty(); return; }
+  if (state.refreshing === token) state.refreshing = null;
   state.loading = false;
   state.prevView = null;
   if (other) state.elsewhere = other.messages.map(x => ({ ...x, elsewhere: true }));
@@ -1140,9 +1151,12 @@ async function run(fn) {
   if (busy) { status("busy, try again in a moment"); return; }
   const firstPage = state.loading;
   busy = true; ++state.listToken; updateToolbar();
+  const refreshing = state.refreshing;       // a refresh in flight, which this makes stale
+  state.refreshing = null;
   try { await fn(); } finally {
     busy = false; updateToolbar();
     if (firstPage && state.loading) loadList("fresh");
+    else if (refreshing || (state.view.kind === "folder" && listDirty.has(state.view.folderId))) loadList("refresh");
   }
 }
 
