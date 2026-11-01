@@ -117,7 +117,7 @@ async function fetchBlob(a, id = msgId) {
 
 async function extractedText(a) {
   if (!a.textExtractionUrl) throw new Error("no text extraction available");
-  const resp = await fetch(a.textExtractionUrl.replace(/&amp;/g, "&"), { credentials: "include" });
+  const resp = await fetch(a.textExtractionUrl.replace(/&amp;/g, "&"), { credentials: "include", signal: AbortSignal.timeout(30000) });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const j = await resp.json();
   const t = j?.result?.textExtractResult;

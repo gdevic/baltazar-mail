@@ -645,7 +645,7 @@ async function inlineYahooParts(html) {
     const c = partCache.get(u);
     if (typeof c === "string" || freshFailure(c)) return;
     try {
-      const resp = await fetch(u, { credentials: "include" });
+      const resp = await fetch(u, { credentials: "include", signal: AbortSignal.timeout(30000) });
       if (!resp.ok) throw new Error(resp.status);
       const blob = await resp.blob();
       if (!/^image\/(png|jpeg|gif|webp|bmp|avif)$/i.test(blob.type)) throw new Error(blob.type || "untyped");
@@ -766,7 +766,7 @@ async function thumbFor(a) {
   if (!/[?&]size=/.test(url)) url += (url.includes("?") ? "&" : "?") + "size=240w";
   const p = (async () => {
     try {
-      const resp = await fetch(url, { credentials: "include" });
+      const resp = await fetch(url, { credentials: "include", signal: AbortSignal.timeout(30000) });
       if (!resp.ok) return null;
       const blob = await resp.blob();
       if (!/^image\//.test(blob.type)) return null;

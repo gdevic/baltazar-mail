@@ -23,7 +23,7 @@ async function ask(now) {
   if (c && c.next > now && c.at <= now) return c.version || null;
   let version = c?.version || null, ok = false;
   try {
-    const r = await fetch(LATEST, { credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", headers: { Accept: "application/vnd.github+json" } });
+    const r = await fetch(LATEST, { credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(30000) });
     if (r.ok) { const m = TAG.exec(String((await r.json()).tag_name || "")); if (m) { version = m.slice(1).map(Number).join("."); ok = true; } }
   } catch { /* offline or blocked: keep the last answer */ }
   await chrome.storage.local.set({ updateCheck: { at: now, next: now + (ok ? DAY : RETRY), version } });

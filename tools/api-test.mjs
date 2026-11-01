@@ -1,5 +1,5 @@
 // Session values and folder records as Yahoo may send them. node tools/api-test.mjs
-import { parseBootstrap, normalizeFolders, isMessageId, saveRequest } from "../ext/api.js";
+import { parseBootstrap, normalizeFolders, isMessageId, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage } from "../ext/api.js";
 
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
@@ -33,6 +33,30 @@ ok(saveRequest({ ...base, inReplyTo: { id: "AJk9", replied: true }, refs: [{ mes
 const throws = d => { try { saveRequest(d); return false; } catch { return true; } };
 ok(throws({ ...base, inReplyTo: { id: "X) OR id:(Y", replied: true } }), "bad reply id refused");
 ok(throws({ ...base, refs: [{ messageId: "a/b", partId: "2" }] }), "bad attachment message id refused");
+
+// A stalled connection ends in an error within the deadline; a stalled send says it may have gone.
+{
+  const store = {};
+  globalThis.chrome = { storage: { session: { get: async k => ({ [k]: store[k] }), set: async o => Object.assign(store, o), remove: async k => { delete store[k]; } } }, runtime: { sendMessage: async () => {} } };
+  const boot = '<script>window.AppBootstrapData={"appId":"A","mailWssid":"W","primaryMailbox":{"id":"M","email":"e@x"}}</script>';
+  // the page answers at once; every other request stalls until it is aborted
+  globalThis.fetch = (url, init) => String(url) === "https://mail.yahoo.com/" ? Promise.resolve(new Response(boot)) :
+    new Promise((_, no) => init?.signal?.addEventListener("abort", () => no(init.signal.reason)));
+  Object.assign(TIMEOUTS, { page: 200, batch: 200, perMB: 100, raw: 200 });
+  const alive = setInterval(() => {}, 100);   // Node's timeout signals do not hold the process open
+  const outcome = async p => { const t0 = Date.now(); try { await p; return { ok: true }; } catch (e) { return { e, ms: Date.now() - t0 }; } };
+  const a = await outcome(folders());
+  ok(a.e instanceof Timeout && a.ms < 1500 && /did not answer within/.test(a.e.message), "a stalled request times out: " + (a.e?.message || "resolved"));
+  const b = await outcome(rawMessage("M1"));
+  ok(b.e instanceof Timeout, "a stalled message source times out: " + (b.e?.message || "resolved"));
+  const c = await outcome(send({ ...base, to: [{ email: "x@y.z" }] }, "2"));
+  ok(c.e instanceof Timeout && /may still have been sent/.test(c.e.message), "a stalled send says it may have been sent: " + (c.e?.message || "resolved"));
+  // a file's size buys time: 3 MB at 100 ms per MB on top of 200 ms
+  const big = new File([new Uint8Array(3 * 1048576)], "big.bin");
+  const d = await outcome(send({ ...base, to: [{ email: "x@y.z" }], files: [big] }, "2"));
+  ok(d.e instanceof Timeout && d.ms >= 450, "uploads get time per megabyte: " + d.ms + " ms");
+  clearInterval(alive);
+}
 
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

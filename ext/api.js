@@ -16,6 +16,21 @@ export class ApiError extends Error {
   constructor(msg, detail) { super(msg); this.name = "ApiError"; this.detail = detail; }
 }
 
+// Every request has a deadline, so a stalled connection ends in an error instead of waiting
+// forever. Uploads get extra time per megabyte sent.
+export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000 };
+export class Timeout extends Error {
+  constructor(what, ms) { super(`Yahoo did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
+}
+// fetch plus reading the body, both inside the deadline. read(resp) returns the body.
+async function timed(what, url, init, ms, read) {
+  const signal = AbortSignal.timeout(ms);
+  try {
+    const resp = await fetch(url, { ...init, signal });
+    return { resp, body: await read(resp) };
+  } catch (e) { throw signal.aborted && e.name === "TimeoutError" ? new Timeout(what, ms) : e; }
+}
+
 let session = null;
 async function forgetSession() { session = null; await chrome.storage.session.remove("ymSession"); }
 
@@ -56,8 +71,8 @@ export async function bootstrap(force = false) {
     const stored = (await chrome.storage.session.get("ymSession")).ymSession;
     if (stored && Date.now() - stored.at < 6 * 3600e3) return (session = stored);
   }
-  const resp = await fetch(ORIGIN + "/", { credentials: "include", cache: "no-store" });
-  const values = parseBootstrap(await resp.text());
+  const { body } = await timed("sign-in page", ORIGIN + "/", { credentials: "include", cache: "no-store" }, TIMEOUTS.page, r => r.text());
+  const values = parseBootstrap(body);
   if (!values) throw new NotSignedIn();
   session = { ...values, at: Date.now() };
   await chrome.storage.session.set({ ymSession: session });
@@ -80,14 +95,15 @@ async function attempt(name, requests, files, headers, tries) {
   for (const f of files || []) fd.append(encodeURIComponent(f.name), f, f.name);
   const qs = new URLSearchParams({ name, appId: s.appId, wssid: s.wssid, ymreqid: uuid(), nonblocking: "true" });
   const t0 = performance.now();
-  const resp = await fetch(`${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include", headers });
+  const bytes = (files || []).reduce((n, f) => n + (f.size || 0), 0);
+  const { resp, body: text } = await timed(name, `${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include", headers },
+    TIMEOUTS.batch + Math.ceil(bytes / 1048576) * TIMEOUTS.perMB, r => r.text());
   const ms = Math.round(performance.now() - t0);
   if ((resp.status === 401 || resp.status === 403) && tries.auth) {
     await forgetSession();
     await bootstrap(true);
     return attempt(name, requests, files, headers, { ...tries, auth: false });
   }
-  const text = await resp.text();
   let doc;
   try { doc = JSON.parse(text); } catch { throw new ApiError(`${name}: HTTP ${resp.status}, non-JSON response`, text.slice(0, 300)); }
   if (doc.error) {
@@ -175,14 +191,15 @@ export async function rawMessage(msgId, retry = true) {
   checkIds([msgId]);
   const s = await bootstrap();
   const qs = new URLSearchParams({ appId: s.appId, wssid: s.wssid, ymreqid: uuid() });
-  const resp = await fetch(`${JWS}/ws/v3/mailboxes/@.id==${s.mailboxId}/messages/@.id==${msgId}/content/rawplaintext?${qs}`, { credentials: "include" });
+  const { resp, body } = await timed("message source", `${JWS}/ws/v3/mailboxes/@.id==${s.mailboxId}/messages/@.id==${msgId}/content/rawplaintext?${qs}`,
+    { credentials: "include" }, TIMEOUTS.raw, r => r.arrayBuffer());
   if ((resp.status === 401 || resp.status === 403) && retry) {
     await forgetSession();
     await bootstrap(true);
     return rawMessage(msgId, false);
   }
-  if (!resp.ok) throw new ApiError(`rawMessage: HTTP ${resp.status}`, (await resp.text()).slice(0, 300));
-  return new Uint8Array(await resp.arrayBuffer());
+  if (!resp.ok) throw new ApiError(`rawMessage: HTTP ${resp.status}`, new TextDecoder().decode(new Uint8Array(body).slice(0, 300)));
+  return new Uint8Array(body);
 }
 
 // Yahoo's document converter, for formats with no renderer here. PDF pages come back as JPEG
@@ -329,7 +346,9 @@ export async function send(d, sentFolderId) {
     { id: "GetSimpleBody", method: "GET", uri: "/ws/v3/mailboxes/@.id==<mb>/messages/@.id==$(messageId)/content/simplebody/full" },
     sendReq,
   ];
-  const r = await batch("messages.saveAndSend", [req], true, allFiles(d));
+  let r;
+  try { r = await batch("messages.saveAndSend", [req], true, allFiles(d)); }
+  catch (e) { if (e instanceof Timeout) e.message += "; it may still have been sent, so check Sent before sending it again"; throw e; }
   const { message } = saveResult(r);
   const sent = r.find(x => x.id === "SendMessage");
   const code = sent?.httpCode ?? 0;
