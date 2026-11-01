@@ -39,6 +39,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   let failSaves = 0;   // draft saves to answer with a server error
   let failMoves = 0;   // moves to answer with a server error
   let listDelay = 0;   // ms to hold message list answers, for actions during a slow load
+  let failSends = 0;   // sends to answer with a server error
   let hiddenFetched = false;
   // GitHub's release API, asked once a day for the newest version
   const ghCalls = [];
@@ -61,6 +62,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     const top = envelope?.requests?.[0] || {};
     const uri = top.uri || "";
     if (name === "messageGroups.getList" && listDelay) await new Promise(r => setTimeout(r, listDelay));
+    if (name === "messages.saveAndSend" && failSends > 0) {
+      failSends--;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "EC-5003", message: "Internal error" } }) });
+    }
     if (name === "messages.move" && failMoves > 0) {
       failMoves--;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "EC-5003", message: "Internal error" } }) });
@@ -558,6 +563,41 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.readerBack = await page.locator("#reader").isVisible();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "runtime.png") }).catch(() => {});
 
+  // two sends inside the undo window keep their own timers and z takes back only the newest; a
+  // send that fails while another message is open saves that one before reopening; leaving the
+  // tab with a send pending asks first
+  const setUndoSend = async secs => {
+    await page.locator("#list").focus(); await page.keyboard.press(",");
+    await page.locator("#undosend").fill(String(secs)); await page.locator("#undosend").dispatchEvent("change");
+    await page.click("#settings-close");
+  };
+  const sendOne = async subject => {
+    await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+    await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
+    await page.fill("#c-subject", subject);
+    await page.locator("#c-editor").click(); await page.keyboard.type(`${subject} text`);
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(s => document.getElementById("st-undo").textContent.includes(s), subject, { timeout: 5000 }).catch(() => {});
+  };
+  const subjectsSent = () => calls.filter(c => c.name === "messages.saveAndSend").map(c => c.envelope.requests[0].payloadParts[0].payload.message.headers.subject);
+  const subjectsSaved = () => calls.filter(c => c.name === "messages.saveV3").map(c => c.envelope.requests[0].payloadParts[0].payload.message.headers.subject);
+  await setUndoSend(6);
+  await sendOne("Queue A"); await sendOne("Queue B");
+  const queue = { pending: await page.locator("#st-undo").textContent() };
+  queue.leaveAsks = await page.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+  await page.locator("#list").focus(); await page.keyboard.press("z");
+  await page.waitForSelector("#compose:not(.hidden)");
+  queue.reopened = await page.inputValue("#c-subject");
+  queue.stillPending = await page.locator("#st-undo").textContent();
+  failSends = 1;
+  await page.waitForFunction(() => document.getElementById("c-subject").value === "Queue A", null, { timeout: 10000 }).catch(() => {});
+  queue.afterFail = { subject: await page.inputValue("#c-subject"), notice: await notice(), savedB: subjectsSaved().includes("Queue B"), sentB: subjectsSent().includes("Queue B") };
+  page.once("dialog", d => d.accept());
+  await page.click("#c-discard"); await page.waitForTimeout(300);
+  queue.leaveQuiet = await page.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return !e.defaultPrevented; });
+  results.sendQueue = queue;
+  await setUndoSend(2);
+
   // address book: one summary line in Settings, the list on its own page
   await page.locator("#list").focus(); await page.keyboard.press(",");
   await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent), null, { timeout: 5000 });
@@ -714,6 +754,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
+  const sq = results.sendQueue;
+  expect(/Queue B.*1 more message waiting/.test(sq.pending) && sq.leaveAsks, "two pending sends both wait, and leaving asks first: " + JSON.stringify(sq));
+  expect(sq.reopened === "Queue B" && /Queue A/.test(sq.stillPending), "z reopens only the newest send: " + JSON.stringify(sq));
+  expect(sq.afterFail.subject === "Queue A" && sq.afterFail.savedB && !sq.afterFail.sentB && /not sent/.test(sq.afterFail.notice), "a failed send saves the open message before reopening: " + JSON.stringify(sq.afterFail));
+  expect(sq.leaveQuiet, "nothing pending, leaving does not ask: " + JSON.stringify(sq));
   const fm = results.failedMove;
   expect(fm.text.startsWith("Could not archive the messages.") && /EC-5003/.test(fm.tech) && fm.copy && fm.rowsKept && fm.dismissed, "failed archive shows a notice in words with a report: " + JSON.stringify(fm));
   const k = results.keepUnsaved;

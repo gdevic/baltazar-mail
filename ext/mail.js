@@ -904,32 +904,42 @@ async function editDraft(i) {
 }
 
 // Undo-send: the message is held client-side for settings.undoSendSec, then sent.
-let pendingSend = null;
+// Sends wait undoSendSec before going out, each on its own timer; z cancels the newest.
+const pendingSends = [];
+let sendTicker = null;
 function scheduleSend(job) {
   const secs = settings.undoSendSec;
+  const entry = { job, until: Date.now() + secs * 1000 };
   const fire = async () => {
-    pendingSend = null; showUndo();
+    const i = pendingSends.indexOf(entry); if (i >= 0) pendingSends.splice(i, 1);
+    showUndo();
     status(`sending…`);
     try { const r = await job.run(); status(`sent: ${job.label.replace(/^send /, "")}`, r.ms); await loadFolders(true).catch(() => {}); }
-    catch (e) { handleError(e, "send"); await job.restore(); hideReaderForCompose(true); }
+    catch (e) { handleError(e, "send"); await job.restore(); hideReaderForCompose(compose.isOpen()); }
   };
   if (!secs) { fire(); return; }
-  pendingSend = { job, timer: setTimeout(fire, secs * 1000), until: Date.now() + secs * 1000 };
+  entry.timer = setTimeout(fire, secs * 1000);
+  pendingSends.push(entry);
   showUndo();
-  const tick = () => { if (!pendingSend) return; showUndo(); setTimeout(tick, 1000); };
-  tick();
+  if (!sendTicker) sendTicker = setInterval(() => { showUndo(); if (!pendingSends.length) { clearInterval(sendTicker); sendTicker = null; } }, 1000);
 }
 
 async function cancelSend() {
-  if (!pendingSend) return false;
-  clearTimeout(pendingSend.timer);
-  const job = pendingSend.job; pendingSend = null;
+  const entry = pendingSends.pop();
+  if (!entry) return false;
+  clearTimeout(entry.timer);
   showUndo();
   status("send cancelled; message reopened");
-  hideReaderForCompose(true);
-  await job.restore();
+  await entry.job.restore();
+  hideReaderForCompose(compose.isOpen());
   return true;
 }
+
+// Closing or reloading the tab would drop messages still waiting to be sent and composer changes
+// not yet in Drafts; the browser asks first.
+window.addEventListener("beforeunload", e => {
+  if (pendingSends.length || compose.hasUnsaved()) { e.preventDefault(); e.returnValue = ""; }
+});
 
 // ---------- print ----------
 // Opens print.html in a new tab with the messages' sanitised HTML; several selected messages print as one document.
@@ -1025,9 +1035,11 @@ function pushUndo(entry) {
 
 function showUndo() {
   const el = $("st-undo");
+  const pendingSend = pendingSends[pendingSends.length - 1];
   if (pendingSend) {
     const left = Math.max(0, Math.ceil((pendingSend.until - Date.now()) / 1000));
-    el.textContent = `Sending in ${left} s: ${pendingSend.job.label} — press z to cancel`;
+    const more = pendingSends.length > 1 ? ` (and ${plural(pendingSends.length - 1, "more message")} waiting)` : "";
+    el.textContent = `Sending in ${left} s: ${pendingSend.job.label}${more}; press z to cancel`;
     el.classList.add("pending");
   } else {
     el.classList.remove("pending");
@@ -1175,7 +1187,7 @@ function runAction(act) {
     case "read": return run(() => doSetRead(ids, first ? !first.flags?.read : true));
     case "star": return run(() => doSetStarred(ids, first ? !first.flags?.flagged : true));
     case "spam": return run(() => doSpam(ids));
-    case "undo": if (pendingSend) return cancelSend(); return run(undo);
+    case "undo": if (pendingSends.length) return cancelSend(); return run(undo);
     case "redo": return run(redo);
   }
 }

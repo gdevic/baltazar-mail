@@ -154,6 +154,8 @@ export function init(h) {
 export function addRecipient(a) { fields.to?.add(a); }
 
 export function isOpen() { return !$("compose").classList.contains("hidden"); }
+// Changes not yet in Drafts, which closing the tab would lose.
+export function hasUnsaved() { return isOpen() && dirty && hasContent(); }
 
 async function loadAccounts() {
   if (accounts.length) return accounts;
@@ -530,7 +532,7 @@ async function send() {
   if (!d.subject && !confirm("Send without a subject?")) return;
   const sentId = hooks.folderByType("SENT")?.id;
   if (!sentId || !d.draftFolderId) { warn("Not sent: the Sent or Drafts folder was not found."); return; }
-  const snapshot = { ...draft, d, editorHtml: draft.html ? $("c-editor").innerHTML : null };
+  const snapshot = { ...draft, d, editorHtml: draft.html ? $("c-editor").innerHTML : null, ownText: draft.html ? null : $("c-text").value };
   clearInterval(autosaveTimer);
   $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null; dirty = false;
   hooks.clearNotice("compose");
@@ -542,7 +544,16 @@ async function send() {
   });
 }
 
+// Puts an unsent message (send cancelled or failed) back in the composer. A message already open
+// there is saved first; if it cannot be, the unsent one goes to Drafts instead, so neither is lost.
 async function reopenFrom(snap) {
+  if (!(await close(true))) {
+    try {
+      await api.saveDraft(snap.d);
+      warn(`"${snap.d.subject || "(no subject)"}" was not sent; it was saved to Drafts because another message is open.`);
+    } catch (e) { warn(`"${snap.d.subject || "(no subject)"}" was not sent and could not be saved: ${e.message}`, e); }
+    return;
+  }
   await loadAccounts();
   draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html };
   $("c-title").textContent = "Message not sent";
@@ -553,10 +564,11 @@ async function reopenFrom(snap) {
   setMode(snap.html);
   applyDefaultFont();
   if (snap.html) $("c-editor").innerHTML = editorSafe(snap.editorHtml || "");
-  else $("c-text").value = snap.d.text.replace(/\n\n[\s\S]*$/, m => snap.quoteText && m.trim() === snap.quoteText.trim() ? "" : m);
+  else $("c-text").value = snap.ownText ?? "";
   renderQuote(false); renderFiles();
   $("compose").classList.remove("hidden");
   dirty = true;
+  clearInterval(autosaveTimer);
   autosaveTimer = setInterval(() => { if (dirty && hasContent()) saveNow(true); }, 30000);
   focusEditor();
 }
