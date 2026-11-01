@@ -1065,11 +1065,13 @@ function removeLocal(ids) {
   if (keep.length === state.messages.length) return;
   const cur = state.messages[state.selected];
   const curRemoved = cur && set.has(cur.id);
+  // A removed cursor moves to the first remaining row after it, else the last one before it.
+  const after = curRemoved ? state.messages.slice(state.selected + 1).find(m => !set.has(m.id)) : null;
   state.messages = keep;
   state.elsewhere = state.elsewhere.filter(m => !set.has(m.id));
   for (const id of ids) state.marked.delete(id);
   const openGone = state.openId && set.has(state.openId);
-  state.selected = curRemoved ? Math.min(state.selected, keep.length - 1) : keep.findIndex(m => m.id === cur?.id);
+  state.selected = !curRemoved ? keep.findIndex(m => m.id === cur?.id) : after ? keep.indexOf(after) : keep.length - 1;
   state.anchor = state.selected;
   renderList();
   if (curRemoved && state.selected >= 0) select(state.selected);

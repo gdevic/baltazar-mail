@@ -68,6 +68,22 @@ scenario("folders failing after sign-in can be retried, and polling starts", asy
   expect(syncs() > before, "polling runs after a retried start: " + JSON.stringify({ before, after: syncs() }));
 }, { mock: { handler: async ({ name }) => name === "mailbox.sync" ? { error: { code: "EC-5003", message: "Internal error" } } : undefined }, noWait: true, settings: { pollSec: 5 }, allow: /start|EC-5003/ });
 
+// ---------- list ----------
+const subjects = page => page.locator("#rows .row .sb").allTextContents();
+const selSubject = async page => (await page.locator("#rows .row.sel .sb").count()) ? page.locator("#rows .row.sel .sb").textContent() : "";
+
+scenario("removing a selection moves to the row after it", async ({ page }, expect) => {
+  const before = await subjects(page);
+  await page.locator("#rows .row").nth(0).click();
+  await page.locator("#rows .row").nth(4).click({ modifiers: ["Shift"] });
+  await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("e");
+  await page.waitForFunction(n => document.querySelectorAll("#rows .row").length === n - 5, before.length, { timeout: 4000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  const sel = await selSubject(page), reader = await page.locator("#r-subject").textContent();
+  expect(sel === before[5] && reader === before[5], "the cursor lands on the first row after the removed ones: " + JSON.stringify({ sel, reader, want: before[5] }));
+});
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
