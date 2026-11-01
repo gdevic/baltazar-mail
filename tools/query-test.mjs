@@ -67,6 +67,12 @@ check("two from (OR in parens)", await ids("(from:alex OR from:sam) picture"), [
 check("starred", await ids("alex is:starred"), ["m2"]);
 check("unread", await ids("is:unread"), ["m3"]);
 check("NOT (a OR b)", await ids("picture NOT (spam OR oslo)"), ["m3"]);
+check("minus before group", describe(parse("picture -(spam OR oslo)")), "picture AND NOT (spam OR oslo)");
+check("minus before group ids", await ids("picture -(spam OR oslo)"), ["m3"]);
+check("field before group", describe(parse("from:(alex OR sam)")), "from:alex OR from:sam");
+check("field before group ids", await ids("from:(alex OR sam) picture"), ["m1", "m3"]);
+check("negated field group", await ids("picture -from:(alex OR bob)"), ["m3"]);
+check("field group keeps inner fields", describe(parse("from:(alex OR subject:x)")), "from:alex OR subject:x");
 calls.length = 0;
 await ids("alex picture oslo");
 check("no negated keyword sent", calls.some(c => /-keyword|-from|-subject/.test(c)), false);

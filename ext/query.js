@@ -25,6 +25,12 @@ function tokenize(s) {
     let field = null, value = "", phrase = false;
     const m = s.slice(i).match(/^([a-z]+):(?=\S)/i);
     if (m && FIELDS.has(m[1].toLowerCase())) { field = m[1].toLowerCase(); i += m[0].length; }
+    if (s[i] === "(") {          // -( ... ) negates a group, field:( ... ) applies to its terms
+      if (neg) out.push({ k: "NOT" });
+      out.push({ k: "(", field });
+      i++;
+      continue;
+    }
     if (s[i] === '"') {
       const end = s.indexOf('"', i + 1);
       value = s.slice(i + 1, end < 0 ? s.length : end);
@@ -42,6 +48,14 @@ function tokenize(s) {
     out.push({ k: "term", node: neg ? { t: "not", kid: term } : term });
   }
   return out;
+}
+
+// Gives every term without its own field the group's field.
+function withField(n, field) {
+  if (!n) return;
+  if (n.t === "term") { if (!n.field) n.field = field; return; }
+  if (n.t === "not") return withField(n.kid, field);
+  for (const k of n.kids) withField(k, field);
 }
 
 export function parse(input) {
@@ -67,9 +81,10 @@ export function parse(input) {
   function unary() {
     if (peek() === "NOT") { p++; const u = unary(); return u ? { t: "not", kid: u } : null; }
     if (peek() === "(") {
-      p++;
+      const field = toks[p++].field;
       const e = orExpr();
       if (peek() === ")") p++;
+      if (field) withField(e, field);
       return e;
     }
     if (peek() === "term") return toks[p++].node;
