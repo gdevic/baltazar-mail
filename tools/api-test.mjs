@@ -1,5 +1,5 @@
 // Session values and folder records as Yahoo may send them. node tools/api-test.mjs
-import { parseBootstrap, normalizeFolders, isMessageId, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage } from "../ext/api.js";
+import { parseBootstrap, normalizeFolders, isMessageId, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage, bootstrap, NotSignedIn } from "../ext/api.js";
 
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
@@ -58,5 +58,27 @@ ok(throws({ ...base, refs: [{ messageId: "a/b", partId: "2" }] }), "bad attachme
   clearInterval(alive);
 }
 
+// parallel sign-ins share one page fetch; a session Yahoo calls stale (EC-4008) gets one fresh sign-in
+{
+  Object.assign(TIMEOUTS, { page: 30000, batch: 30000, perMB: 1000, raw: 30000 });
+  const store = {};
+  globalThis.chrome = { storage: { session: { get: async k => ({ [k]: store[k] }), set: async o => Object.assign(store, o), remove: async k => { delete store[k]; } } }, runtime: { sendMessage: async () => {} } };
+  const boot = '<script>window.AppBootstrapData={"appId":"A","mailWssid":"W","primaryMailbox":{"id":"M","email":"e@x"}}</script>';
+  let pages = 0, stale = 1;
+  const ok200 = JSON.stringify({ result: { responses: [{ id: "GetFolders", httpCode: 200, response: { result: { folders: [], accounts: [] } } }] }, error: null });
+  globalThis.fetch = async url => {
+    if (String(url) === "https://mail.yahoo.com/") { pages++; await new Promise(r => setTimeout(r, 20)); return new Response(boot); }
+    if (stale-- > 0) return new Response(JSON.stringify({ error: { code: "EC-4008" } }));
+    return new Response(ok200);
+  };
+  await Promise.all([bootstrap(true), bootstrap(true), bootstrap(true)]);
+  ok(pages === 1, "parallel sign-ins fetch the page once: " + pages);
+  pages = 0;
+  const r = await folders().then(() => "ok", e => e.name);
+  ok(r === "ok" && pages === 1, "EC-4008 gets one fresh sign-in, then succeeds: " + JSON.stringify({ r, pages }));
+  stale = 5;
+  const r2 = await folders().then(() => "ok", e => e instanceof NotSignedIn ? "signin" : e.message);
+  ok(r2 === "signin", "a second EC-4008 means signed out: " + r2);
+}
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

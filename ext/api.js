@@ -65,8 +65,18 @@ export function parseBootstrap(html) {
   return { wssid, appId, mailboxId, email: typeof email === "string" ? email : "" };
 }
 
+// Callers that ask at the same time share one fetch of the page (about 1.5 MB).
+// A forced sign-in shares only a forced one, which reads no stored session.
+let signingIn = null, signingInForced = false;
 export async function bootstrap(force = false) {
   if (!force && session) return session;
+  if (signingIn && (signingInForced || !force)) return signingIn;
+  if (signingIn) await signingIn.catch(() => {});
+  const p = signIn(force).finally(() => { if (signingIn === p) signingIn = null; });
+  signingIn = p; signingInForced = force;
+  return p;
+}
+async function signIn(force) {
   if (!force) {
     const stored = (await chrome.storage.session.get("ymSession")).ymSession;
     if (stored && Date.now() - stored.at < 6 * 3600e3) return (session = stored);
@@ -113,7 +123,12 @@ async function attempt(name, requests, files, headers, tries) {
       await chrome.runtime.sendMessage({ type: "ensureRules" }).catch(() => {});
       return attempt(name, requests, files, headers, { ...tries, rules: false });
     }
-    if (code === "EC-4008") { await forgetSession(); throw new NotSignedIn(); }
+    if (code === "EC-4008") {
+      // The session went stale; one fresh sign-in, and only a second refusal means signed out.
+      await forgetSession();
+      if (tries.auth) { await bootstrap(true); return attempt(name, requests, files, headers, { ...tries, auth: false }); }
+      throw new NotSignedIn();
+    }
     throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}`, doc.error);
   }
   const responses = doc.result?.responses || [];
