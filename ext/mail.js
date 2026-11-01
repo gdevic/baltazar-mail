@@ -856,9 +856,14 @@ function toggleReaderColours() {
   if (currentBody && state.openId) showBody();
 }
 
-async function open(i) {
+// how: "user" (a click or Enter) or "auto" (the reader following the cursor or restoring a folder).
+// Only what the user opens, or sees opened, is marked read: never a message they marked unread in
+// this session that the reader reopened by itself.
+const keptUnread = new Set();
+async function open(i, how = "user") {
   const m = state.messages[i];
   if (!m) return;
+  if (how === "user") keptUnread.delete(m.id);
   if (!(await compose.close(true))) return;
   state.openId = m.id;
   clearTimeout(markReadTimer);
@@ -866,7 +871,7 @@ async function open(i) {
   let r;
   try { r = await api.body(m.id); } catch (e) { showReaderError(e, "fetching the message"); return; }
   if (state.openId !== m.id) return;
-  try { await renderMessage(m, r); } catch (e) { showReaderError(e, "rendering the message"); }
+  try { await renderMessage(m, r, how); } catch (e) { showReaderError(e, "rendering the message"); }
 }
 
 function showReaderError(e, what) {
@@ -908,7 +913,7 @@ function setFrame(doc) {
   old.replaceWith(f);
 }
 
-async function renderMessage(m, r) {
+async function renderMessage(m, r, how = "user") {
   r.html = cleanHtml(r.html);
   currentBody = r;
   const h = r.message.headers || {};
@@ -929,14 +934,19 @@ async function renderMessage(m, r) {
   if (auto) { const inlined = await inlineYahooParts(r.html, r.message); if (state.openId !== m.id) return; r.html = inlined; }
   showBody(auto);
   status(plainSubject(h.subject).slice(0, 60), r.ms);
-  if (settings.markReadSec != null && !m.flags?.read) {
-    markReadTimer = setTimeout(() => {
+  clearTimeout(markReadTimer);
+  if (settings.markReadSec != null && !m.flags?.read && !(how === "auto" && keptUnread.has(m.id))) {
+    // In a hidden tab nobody has read it yet: the timer starts again once the tab is seen.
+    const fire = () => {
       if (state.openId !== m.id || m.flags?.read) return;
+      if (document.hidden) { document.addEventListener("visibilitychange", function again() { if (document.hidden) return; document.removeEventListener("visibilitychange", again); if (state.openId === m.id) arm(); }); return; }
       run(async () => {
         try { const r2 = await api.setRead([m.id], true); applyFlags(r2.ok, { read: true }); }
         catch (e) { handleError(e, "mark read"); }
       });
-    }, settings.markReadSec * 1000);
+    };
+    const arm = () => { clearTimeout(markReadTimer); markReadTimer = setTimeout(fire, settings.markReadSec * 1000); };
+    arm();
   }
 }
 
@@ -1133,7 +1143,7 @@ function removeLocal(ids) {
 // The open message left the list: the reader moves on to the cursor row and empties only when
 // the list does. While composing, opening would close the draft, so the reader just clears.
 function followCursor() {
-  if (state.selected >= 0 && !compose.isOpen()) open(state.selected); else clearReader();
+  if (state.selected >= 0 && !compose.isOpen()) open(state.selected, "auto"); else clearReader();
 }
 
 function bumpFolder(id, dTotal, dUnread) {
@@ -1230,6 +1240,7 @@ async function doSetRead(ids, read) {
   try {
     const r = await api.setRead(ids, read);
     applyFlags(r.ok, { read });
+    for (const id of r.ok) if (read) keptUnread.delete(id); else keptUnread.add(id);
     status(`marked ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`, r.ms); partial(r, "mark");
     const okSet = new Set(r.ok);
     pushUndo({ label: `mark ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`, count: r.ok.length,
@@ -1424,7 +1435,7 @@ function restoreView() {
   renderList();
   $("rows").scrollTop = mem.scrollTop;
   // While composing, opening would close the draft (as in followCursor)
-  if (mem.openId && ids.has(mem.openId) && !compose.isOpen()) open(at(mem.openId)); else clearReader();
+  if (mem.openId && ids.has(mem.openId) && !compose.isOpen()) open(at(mem.openId), "auto"); else clearReader();
 }
 
 // After a view loads, the list takes the keyboard only if focus is still where it was when the

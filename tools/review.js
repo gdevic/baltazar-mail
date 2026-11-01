@@ -322,6 +322,32 @@ scenario("an action during a refresh does not lose new mail", async ({ page, cal
   expect(s.includes("Brand new"), "new mail shows after the action: " + JSON.stringify(s.slice(0, 2)) );
 }, { settings: { pollSec: 5 } });
 
+const readCalls = calls => calls.filter(c => c.name === "messages.readFlagUpdate" && c.envelope.requests.some(q => q.payload?.message?.flags?.read === true));
+scenario("returning to a message you marked unread keeps it unread", async ({ page, calls }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  await page.locator("#list").focus(); await page.keyboard.press("u"); await page.waitForTimeout(500);
+  const n0 = readCalls(calls).length;
+  await folder(page, "Sent"); await folder(page, "Inbox");
+  await page.waitForTimeout(2000);
+  const shown = await page.locator("#r-subject").textContent();
+  expect(shown === "Subject 1-2" && readCalls(calls).length === n0, "the reopened message stays unread: " + JSON.stringify({ shown, marks: readCalls(calls).length - n0 }));
+}, { settings: { markReadSec: 1 } });
+
+scenario("a message opened in a hidden tab is marked read only once seen", async ({ page, calls, goneElsewhere }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  const n0 = readCalls(calls).length;
+  goneElsewhere.add("MSG1_2");
+  await page.evaluate(() => Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }) || Object.defineProperty(document, "hidden", { value: true, configurable: true }));
+  await page.evaluate(() => Object.defineProperty(document, "hidden", { value: true, configurable: true }));
+  await page.locator("#list").focus(); await page.keyboard.press("R");
+  await page.waitForTimeout(2500);
+  const shown = await page.locator("#r-subject").textContent(), hidden = readCalls(calls).length - n0;
+  await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); Object.defineProperty(document, "hidden", { value: false, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+  await page.waitForTimeout(2000);
+  const seen = readCalls(calls).length - n0;
+  expect(shown === "Subject 1-3" && hidden === 0 && seen === 1, "marked read after the tab is seen, not before: " + JSON.stringify({ shown, hidden, seen }));
+}, { settings: { markReadSec: 1 } });
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };

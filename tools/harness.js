@@ -47,7 +47,7 @@ async function launch(opts = {}) {
   // Knobs a test turns to provoke server behaviour. patchRaw(source) edits message sources. offline refuses every Yahoo request. patchBody(id, message, simpleBody) edits a
   // message body before it is answered. handler({ name, envelope, top, uri, post, req })
   // may answer a batch call itself: return { responses } or { error }, or nothing to fall through.
-  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, patchRaw: null, offline: false, probes: [], images: [], parts: [], ...opts.mock };
+  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, patchRaw: null, offline: false, probes: [], images: [], parts: [], flags: new Map(), ...opts.mock };
   const folders = structuredClone(FOLDERS);
   const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
   // GitHub's release API, asked once a day for the newest version
@@ -152,8 +152,14 @@ async function launch(opts = {}) {
       responses = [{ id: "SaveMessage", httpCode: 200, response: { result: { message: saved, simpleBody: {} } } }];
       for (const r of top.requests || []) responses.push({ id: r.id, httpCode: 200, response: { result: { message: saved } } });
     }
-    else if (/"method":"(POST|DELETE)"/.test(post)) responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 }));
-    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)), query: {} } } }]; }
+    else if (/"method":"(POST|DELETE)"/.test(post)) {
+      // flag changes are remembered, as the server would, and show in later lists
+      for (const q of envelope?.requests || []) {
+        const id = decodeURIComponent(q.uri || "").match(/id:\(([^)]+)\)/)?.[1], f = q.payload?.message?.flags;
+        if (id && f) mock.flags.set(id, { ...mock.flags.get(id), ...f });
+      }
+      responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 })); }
+    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)).map(m => mock.flags.has(m.id) ? { ...m, flags: { ...m.flags, ...mock.flags.get(m.id) } } : m), query: {} } } }]; }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 
