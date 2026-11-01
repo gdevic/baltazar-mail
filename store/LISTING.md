@@ -25,7 +25,7 @@ Single purpose description:
 
 Permission justifications:
 
-- `storage`: Keeps the user's settings (layout, theme, fonts, intervals) on this computer, and, for the browser session only, the Yahoo session values that Yahoo's own web page uses, so the extension does not reload Yahoo's page for every request.
+- `storage`: Keeps the user's settings (layout, theme and contrast, sizes, fonts, intervals) and address book on this computer, and, for the browser session only, the Yahoo session values that Yahoo's own web page uses, so the extension does not reload Yahoo's page for every request, and a message being printed, until the print page has read it.
 - `declarativeNetRequest`: Yahoo's mail servers accept requests only when they come from mail.yahoo.com. One rule, registered by the extension at start-up and shipped in its code, sets the Origin and Referer headers to https://mail.yahoo.com on the extension's own requests to Yahoo's mail hosts. The rule is limited to requests the extension itself initiates (initiatorDomains is the extension's own ID), to XHR/fetch requests only, and to mail.yahoo.com and its subdomains. It changes nothing on any web page the user visits.
 - Host permission `https://mail.yahoo.com/*`: All mailbox operations (folders, message lists, search, reading, moving, deleting, drafts and sending) go to Yahoo's mail API on this host, with the user's existing Yahoo sign-in.
 - Host permission `https://*.mail.yahoo.com/*`: Yahoo serves message source (used to show attachments), attachment thumbnails and images embedded in messages from subdomains of mail.yahoo.com (apis.mail.yahoo.com, cloud-apis.mail.yahoo.com).
@@ -54,15 +54,15 @@ Description:
 
 > Baltazar Mail is a fast, clean, ad-free way to read and write your Yahoo Mail. It opens in its own tab and uses the Yahoo sign-in you already have in the browser, so there is nothing to set up: sign in to mail.yahoo.com once, then click the Baltazar Mail button.
 >
-> Reading: a three-column or stacked layout with resizable panes, sixteen light and dark palettes in different hues with a contrast slider, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their colours and images. A Starred view collects flagged mail from every folder.
+> Reading: a three-column or stacked layout with resizable panes, sixteen light and dark palettes in different hues with a contrast slider, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their hues and leaving images untouched. A Starred view collects flagged mail from every folder.
 >
 > Mailbox: mark messages read or unread, star, archive, move, delete or report them as spam, one at a time or as a selection, with multi-level undo and redo.
 >
 > Search: limited to the open folder and its subfolders, with matches elsewhere listed below, and simple operators to narrow it down.
 >
-> Writing: new messages, replies and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own Inbox and Sent, with automated senders left out.
+> Writing: new messages, replies, and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own Inbox and Sent, with automated senders left out.
 >
-> Attachments open in place: documents, spreadsheets, presentations, images and media are previewed without downloading, inside an isolated sandbox with no access to your session.
+> Attachments open in place: documents, spreadsheets, presentations, images and media are previewed without downloading; documents are read inside an isolated sandbox with no access to your session.
 >
 > Privacy: no server, no analytics, no ads. Your mail goes only between your browser and Yahoo. The source code is public at github.com/gdevic/baltazar-mail.
 >

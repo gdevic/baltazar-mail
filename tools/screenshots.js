@@ -375,7 +375,7 @@ function listFor(q) {
           <div style="display:flex;align-items:center;gap:22px"><img src="${icon}" width="104" height="104">
             <div style="font-size:60px;font-weight:700;color:#efe9da;letter-spacing:-1px;line-height:1.05">Baltazar<br>Mail</div></div>
           <div style="font-size:27px;color:#d9a441;margin:26px 0 22px">Fast, ad-free Yahoo Mail client</div>
-          ${["Dark reading pane that keeps colours", "Attachments open in place", "No server, no ads, no tracking"].map(t =>
+          ${["Dark mode that darkens messages too", "Attachments open in place", "No server, no ads, no tracking"].map(t =>
             `<div style="font-size:21px;color:#c9c4b7;margin:6px 0;display:flex;align-items:center;gap:14px"><span style="width:9px;height:9px;border-radius:50%;background:#d9a441"></span>${t}</div>`).join("")}
         </div>
         <img src="${shot}" style="position:absolute;left:720px;top:70px;width:900px;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);border:1px solid #3a424c">`],

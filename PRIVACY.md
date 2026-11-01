@@ -22,9 +22,9 @@ The extension's Content Security Policy (in `ext/manifest.json`) makes the brows
 
 | Data | Where | Why |
 |---|---|---|
-| Settings (layout, theme, fonts, intervals, pane sizes) | the extension's local storage | so your choices persist |
-| The latest release number and when it was checked | the extension's local storage | to ask GitHub at most once a day |
-| Address book: names, addresses, how many messages you sent to or received from each, last date | the extension's IndexedDB | address suggestions while writing; built from the headers of your own Inbox and Sent |
+| Settings (layout, theme and contrast, sizes, fonts, intervals, pane sizes, expanded folders) | the extension's local storage | so your choices persist |
+| The latest release number and when it was checked | the extension's local storage | to ask GitHub once a day, or an hour later after a failed check |
+| Address book: names, addresses, how many messages you sent to or received from each, last date, and whether you hid it from suggestions | the extension's IndexedDB | address suggestions while writing; built from the headers of your own Inbox and Sent |
 | Yahoo session values and the mailbox id | the extension's session storage, cleared when the browser closes | to call Yahoo without reloading its page |
 | A message being printed | session storage, removed as soon as the print page reads it | to hand it to the print page |
 
@@ -35,7 +35,7 @@ Message contents are not stored; they are fetched from Yahoo when you open a mes
 | Permission | Why |
 |---|---|
 | Access to `mail.yahoo.com` and `*.mail.yahoo.com` | to call Yahoo Mail with your existing sign-in |
-| `storage` | settings, the session values and print hand-off described above |
+| `storage` | settings, the release check, the session values and print hand-off described above |
 | `declarativeNetRequest` | Yahoo's servers only accept requests that come from `mail.yahoo.com`; one rule sets the `Origin` and `Referer` headers on the extension's own requests to Yahoo |
 
 ## Contact

@@ -73,7 +73,7 @@ Folder sets: `folderId:(a OR b OR c)` selects several folders (verified with 217
 
 `q=folderId:<id> -folderType:(SYNC)-folderType:(INVISIBLE) count:100 offset:0 -sort:date`
 
-`-sort:date` is descending. Paging is by `offset`. Free-text search uses the same endpoint with `keyword:<term>` and no `folderId` (`count:20 offset:0 -sort:date keyword:Z80`, response `query.type` is `S` instead of `L`); a `folderId:` can be added to scope it. Tokens for from:, subject:, hasAttachment and date ranges still to be confirmed. The response carries `query.token` and `query.nextModSeq`, which allow incremental refresh of an already-loaded list instead of re-fetching it.
+`-sort:date` is descending. Paging is by `offset`. Free-text search uses the same endpoint with `keyword:<term>` and no `folderId` (`count:20 offset:0 -sort:date keyword:Z80`, response `query.type` is `S` instead of `L`); a `folderId:` can be added to scope it. The response carries `query.token` and `query.nextModSeq`, which allow incremental refresh of an already-loaded list instead of re-fetching it.
 
 ## Data model
 
@@ -97,8 +97,6 @@ Folder list 161 ms, inbox list of 100 messages 227 ms, full body 150 ms, whole-m
 
 ## Open items
 
-- Search query tokens beyond `keyword:`.
-- Attachment upload flow (`uploadCount`, `totalAttachments` and the upload endpoint).
 - Incremental list refresh using `query.token` / `nextModSeq`.
 
 ## Compose, drafts and send (verified live 2026-10-30, from the client bundle)
@@ -137,7 +135,7 @@ Send chains two more requests under the save, using the batch's filter/placehold
 ]
 ```
 
-The `UpdateMessages` child is only added for replies and forwards. Measured: 829 ms without attachment, 812 ms with a 22-byte one. Search syntax for header fields: `subject:"ymail-lite test"`.
+The `UpdateMessages` child is only added for replies and forwards. Measured: 829 ms without attachment, 812 ms with a 22-byte one. Search syntax for header fields: `subject:"test message"`.
 
 ## Spam, forwarded attachments, person search (verified 2026-10-30)
 
