@@ -201,10 +201,19 @@ const folders = [
   const expectTheme = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expectTheme(level7.contrast === 7 && level7.field === "7" && level7.shown === "7" && level7.line === roles("sky", 7).line && level7.line !== roles("sky", 0).line, "contrast 7 persists: " + JSON.stringify(level7));
   expectTheme(stale.bg === roles("light").bg && stale.line === roles("light").line && stale.choice === "light", "missing palette falls back to Paper: " + JSON.stringify(stale));
+  // Windows Contrast themes: the cursor row, a marked row and the active folder stay visible
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.locator("#list").focus(); await page.keyboard.press("j"); await page.keyboard.press("x"); await page.keyboard.press("j");
+  const outline = sel => page.locator(sel).first().evaluate(e => { const c = getComputedStyle(e); return `${c.outlineStyle} ${parseFloat(c.outlineWidth)}`; });
+  const forced = { sel: await outline("#rows .row.sel"), marked: await outline("#rows .row.marked:not(.sel)"), folder: await outline("#folder-list .folder.active"),
+    hit: await page.locator("#rows .row .sb mark").first().evaluate(e => { const c = getComputedStyle(e); return c.color !== c.backgroundColor && !/rgba\([^)]*,\s*0\)$/.test(c.backgroundColor); }) };
+  await page.keyboard.press("k"); await page.keyboard.press("x");
+  await page.emulateMedia({ forcedColors: "none" });
   const expectEnd = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
     "layout, palette and pane sizes survive a reload: " + JSON.stringify(persisted));
   expectEnd(ghAfterZip === 1 && ghAfterStore === 1, "a ZIP install asks GitHub once, a store install never: " + JSON.stringify({ ghAfterZip, ghAfterStore }));
+  expectEnd(forced.sel === "solid 2" && forced.marked === "dashed 1" && forced.folder === "solid 2" && forced.hit, "selection, marks, the active folder and search hits show in forced colours: " + JSON.stringify(forced));
   expectEnd(!unexpected.size, "no request left for the real network: " + [...unexpected].join(", "));
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();

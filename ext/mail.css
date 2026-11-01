@@ -349,3 +349,14 @@ body.dragging iframe { pointer-events: none; }
 .contrast-row input { flex: 1; max-width: 220px; accent-color: var(--sel-line); }
 .contrast-row output { width: 2ch; text-align: right; font-variant-numeric: tabular-nums; }
 .theme-note { color: var(--fg3); font-size: calc(11 * var(--fu)); }
+
+/* Windows Contrast themes (forced colours) drop backgrounds and shadows, which is how the cursor,
+   marks and the active folder are drawn; there they are outlines in the system's highlight colour. */
+@media (forced-colors: active) {
+  .row.marked, .folder.drop, #ctx div:hover, #move-list div.kb, #move-list div:hover,
+  #c-suggest div.kb, #c-suggest div:hover, .ab-seg button.on { outline: 1px dashed Highlight; outline-offset: -2px; }
+  .row.sel, .folder.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .row:hover:not(.sel), .folder:hover:not(.active) { outline: 1px dotted CanvasText; outline-offset: -2px; }
+  #notice { border: 2px solid CanvasText; }
+  .row .sb mark { background: Mark; color: MarkText; }
+}
