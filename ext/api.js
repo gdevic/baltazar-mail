@@ -207,8 +207,9 @@ export async function docPages(documentId, start, end, retryCount = 0) {
 // Returns the ids that succeeded and those that failed; throws only if nothing succeeded.
 // Message ids end up inside Yahoo query strings and URIs; anything but Yahoo's id alphabet is refused.
 const MSG_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const isMessageId = id => (typeof id === "string" || typeof id === "number") && MSG_ID.test(String(id));
 function checkIds(ids) {
-  const bad = ids.find(id => !MSG_ID.test(String(id)));
+  const bad = ids.find(id => !isMessageId(id));
   if (bad !== undefined) throw new ApiError(`refusing malformed message id ${JSON.stringify(String(bad).slice(0, 40))}`);
 }
 
@@ -273,7 +274,8 @@ export async function accounts() {
 // Build the SaveMessage inner request. draft: { csid, from, replyTo, to, cc, bcc, subject, html, text,
 // inReplyTo: { id, replied, forwarded } | null, files: File[], draftFolderId }.
 // d.files: File[] (plain attachments) and d.inline: [{ file, contentId }] for images referenced as cid: in the HTML.
-function saveRequest(d) {
+export function saveRequest(d) {
+  checkIds([...(d.inReplyTo ? [d.inReplyTo.id] : []), ...(d.refs || []).map(r => r.messageId)]);
   const inline = d.inline || [];
   const files = (d.files || []).concat(inline.map(i => i.file));
   // d.refs: attachments of another message, copied server-side: [{ messageId, partId, contentId }]

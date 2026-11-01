@@ -99,6 +99,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
         { partId: "8", filename: "deck.pptx", size: 90000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.presentationml.presentation", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pptx", documentId: "DOC8" },
       ];
       if (id.startsWith("MSG32_")) message.attachments[2].filename = `inv${RLO}fdp.exe`;
+      // a draft whose reply reference is not a message id: it must not reach a query
+      if (id.startsWith("MSG3_")) message.inReplyTo = { messageReference: { id: "X) OR id:(Y" }, replied: true };
       // One inline image in Yahoo's real part-thumbnail shape, which must be inlined, and one address
       // hidden in an alt attribute, which must never be requested.
       // Part 5 is one Yahoo cannot render (EP-5001); it is cut out of the message source instead.
@@ -763,7 +765,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     await page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 8000 }).catch(() => {});
     const saveCall = calls.slice(callsBefore).find(c => c.name === "messages.saveV3");
     const html = saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.simpleBody?.html || "";
-    results.draftEdit = { chips: chipsNow.length, names: chipsNow.join(" "), imgSrcs, uploaded: (saveCall?.fileParts || []).map(p => p[1]),
+    results.draftEdit = { inReplyTo: saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.message?.inReplyTo ?? null, chips: chipsNow.length, names: chipsNow.join(" "), imgSrcs, uploaded: (saveCall?.fileParts || []).map(p => p[1]),
       partLinks: /cloud-apis\.mail\.yahoo\.com/.test(html), closed: await page.locator("#compose").isHidden(), overlay };
     await folder("Projects");
   }
@@ -897,6 +899,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const de = results.draftEdit;
   expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 3 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&
     ["report.pdf", "data.csv", "cv.docx", "deck.pptx"].every(n => de.uploaded.includes(n)) && !de.partLinks && de.closed, "editing a draft keeps its attachments and images: " + JSON.stringify(de));
+  expect(de.inReplyTo === null, "a reopened draft drops a reply reference that is not a message id: " + JSON.stringify(de.inReplyTo));
   expect(de.overlay.present && de.overlay.position !== "fixed" && !de.overlay.coversApp, "a quoted box cannot cover the app: " + JSON.stringify(de.overlay));
   expect(de.uploaded.filter(n => n.startsWith("inline-")).every(n => /\.(png|jpg|gif|webp|bmp)$/.test(n)) && de.uploaded.filter(n => n.startsWith("inline-")).length === 3, "only real images become inline parts, bad ones do not stop the save: " + JSON.stringify(de.uploaded));
   expect(results.afterSend.refreshed, "a folder change seen right after a send refreshes the list: " + JSON.stringify(results.afterSend));

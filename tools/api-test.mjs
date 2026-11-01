@@ -1,5 +1,5 @@
 // Session values and folder records as Yahoo may send them. node tools/api-test.mjs
-import { parseBootstrap, normalizeFolders } from "../ext/api.js";
+import { parseBootstrap, normalizeFolders, isMessageId, saveRequest } from "../ext/api.js";
 
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
@@ -25,6 +25,14 @@ ok(f[0].id === "1" && f[0].types[0] === "INBOX", "ids are strings");
 ok(f[1].name === "Folder 88" && Array.isArray(f[1].types) && !f[1].types.length, "missing name and types filled in");
 ok(f[2].name === "Folder 9" && f[2].types.length === 0, "bad types and empty name");
 ok(normalizeFolders(undefined).length === 0, "no list at all");
+
+// Message ids go into Yahoo queries; a save refuses any that is not in Yahoo's id alphabet.
+ok(isMessageId("AJk9_x-1") && !isMessageId("X) OR id:(Y") && !isMessageId("") && !isMessageId(undefined) && !isMessageId("a".repeat(65)), "message id alphabet");
+const base = { csid: "1", subject: "s", from: { email: "me@x" }, draftFolderId: "3" };
+ok(saveRequest({ ...base, inReplyTo: { id: "AJk9", replied: true }, refs: [{ messageId: "B1", partId: "2" }] }).payloadParts[0].payload.message.inReplyTo.messageReference.id === "AJk9", "good ids pass");
+const throws = d => { try { saveRequest(d); return false; } catch { return true; } };
+ok(throws({ ...base, inReplyTo: { id: "X) OR id:(Y", replied: true } }), "bad reply id refused");
+ok(throws({ ...base, refs: [{ messageId: "a/b", partId: "2" }] }), "bad attachment message id refused");
 
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

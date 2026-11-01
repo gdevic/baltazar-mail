@@ -212,7 +212,7 @@ export async function open(opts) {
       draft.files = withFiles([], opts.files || []);
       to = h.to || []; cc = h.cc || []; subject = h.subject || "";
       bodyHtml = opts.body.html || "";
-      if (m.inReplyTo?.messageReference?.id) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };
+      if (api.isMessageId(m.inReplyTo?.messageReference?.id)) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };
       break;
     }
   }
