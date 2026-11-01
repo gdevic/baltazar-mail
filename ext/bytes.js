@@ -23,3 +23,12 @@ export function hexDump(bytes) {
   }
   return lines.join("\n");
 }
+
+// The image format of bytes, from their signature, or null when they are not an image of a kind
+// mail clients show inline.
+const IMAGE_MAGIC = [["image/png", "89504e47"], ["image/jpeg", "ffd8ff"], ["image/gif", "47494638"], ["image/bmp", "424d"]];
+export function sniffImage(b) {
+  const hex = [...b.slice(0, 12)].map(x => x.toString(16).padStart(2, "0")).join("");
+  if (hex.startsWith("52494646") && hex.slice(16, 24) === "57454250") return "image/webp";
+  return IMAGE_MAGIC.find(([, sig]) => hex.startsWith(sig))?.[0] || null;
+}

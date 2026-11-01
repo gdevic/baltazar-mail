@@ -99,7 +99,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
         `<img id="spacer" style="min-width:640px;min-height:1px" width="640" height="1" src="data:image/png;base64,${thumbPng.toString("base64")}">`;
       // a white card with dark text, which the dark reader turns into a dark card with light text
       const card = `<div id="paper" style="background-color:#ffffff;color:#333333">Card</div>`;
-      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}` } } } }];
+      // Drafts also carry a quote a hostile sender could plant: a box over the whole window, a
+      // data: URL that is not an image, and one that does not decode.
+      const hostile = id.startsWith("MSG3_") ? `<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:#f00">Session expired</div>` +
+        `<img src="data:text/html;base64,PGgxPmhpPC9oMT4=">` + `<img src="data:image/png;base64,@@not base64@@">` : "";
+      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}${hostile}` } } } }];
     }
     else if (uri === "/ws/docpreview/v2/fetch") {
       // Yahoo's converter: first ask is still queued, then pages arrive entity-encoded.
@@ -660,6 +664,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     await page.locator("#rows .row").first().click();
     await page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 }).catch(() => {});
     const chipsNow = await page.locator("#c-filelist .c-file").allTextContents();
+    const overlay = await page.evaluate(() => {
+      const box = [...document.querySelectorAll("#c-editor div")].find(d => d.textContent === "Session expired");
+      const top = document.elementFromPoint(innerWidth / 2, 20);
+      return { present: !!box, position: box ? getComputedStyle(box).position : "", coversApp: !!box && !!top && box.contains(top) };
+    });
     const imgSrcs = await page.locator("#c-editor img").evaluateAll(els => els.map(e => (e.getAttribute("src") || "").slice(0, 30)));
     await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.type("edited ");
     const callsBefore = calls.length;
@@ -668,7 +677,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     const saveCall = calls.slice(callsBefore).find(c => c.name === "messages.saveV3");
     const html = saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.simpleBody?.html || "";
     results.draftEdit = { chips: chipsNow.length, names: chipsNow.join(" "), imgSrcs, uploaded: (saveCall?.fileParts || []).map(p => p[1]),
-      partLinks: /cloud-apis\.mail\.yahoo\.com/.test(html), closed: await page.locator("#compose").isHidden() };
+      partLinks: /cloud-apis\.mail\.yahoo\.com/.test(html), closed: await page.locator("#compose").isHidden(), overlay };
     await folder("Projects");
   }
 
@@ -773,6 +782,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const de = results.draftEdit;
   expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 3 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&
     ["report.pdf", "data.csv", "cv.docx", "deck.pptx"].every(n => de.uploaded.includes(n)) && !de.partLinks && de.closed, "editing a draft keeps its attachments and images: " + JSON.stringify(de));
+  expect(de.overlay.present && de.overlay.position !== "fixed" && !de.overlay.coversApp, "a quoted box cannot cover the app: " + JSON.stringify(de.overlay));
+  expect(de.uploaded.filter(n => n.startsWith("inline-")).every(n => /\.(png|jpg|gif|webp|bmp)$/.test(n)) && de.uploaded.filter(n => n.startsWith("inline-")).length === 3, "only real images become inline parts, bad ones do not stop the save: " + JSON.stringify(de.uploaded));
   const sq = results.sendQueue;
   expect(/Queue B.*1 more message waiting/.test(sq.pending) && sq.leaveAsks, "two pending sends both wait, and leaving asks first: " + JSON.stringify(sq));
   expect(sq.reopened === "Queue B" && /Queue A/.test(sq.stillPending), "z reopens only the newest send: " + JSON.stringify(sq));

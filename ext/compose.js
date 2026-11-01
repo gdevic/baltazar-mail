@@ -1,4 +1,5 @@
 import * as api from "./api.js";
+import { sniffImage } from "./bytes.js";
 import * as contacts from "./contacts.js";
 
 // Compose panel: new message, reply, reply all, forward, or editing a draft.
@@ -386,16 +387,26 @@ async function insertImages(files) {
 }
 
 // Returns { html, inline } with data: images replaced by cid: references and their bytes as Files.
+// A data: URL's bytes and their image format, or null. Only real images, typed by their bytes,
+// travel as inline parts: a quoted message can carry data: URLs of any type, which would go out
+// as attachments of the sender's choosing, and ones that do not decode.
+function dataImage(src) {
+  try {
+    const m = src.match(/^data:([^;,]*)(;base64)?,(.*)$/s); if (!m) return null;
+    const bytes = m[2] ? Uint8Array.from(atob(m[3].replace(/\s/g, "")), c => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
+    const mime = sniffImage(bytes);
+    return mime ? { bytes, mime } : null;
+  } catch { return null; }
+}
+
 function extractInline(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const inline = [];
   let n = 0;
   for (const img of doc.querySelectorAll("img[src^='data:']")) {
-    const m = img.getAttribute("src").match(/^data:([^;,]+)(;base64)?,(.*)$/s);
-    if (!m) { img.remove(); continue; }
-    const mime = m[1] || "image/png";
-    const bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
-    const ext = (mime.split("/")[1] || "png").replace("jpeg", "jpg");
+    const { bytes, mime } = dataImage(img.getAttribute("src")) || {};
+    if (!mime) { img.remove(); continue; }
+    const ext = mime.split("/")[1].replace("jpeg", "jpg");
     const name = `inline-${++n}.${ext}`;
     const contentId = `${Date.now()}-${n}@baltazar-mail`;
     inline.push({ file: new File([bytes], name, { type: mime }), contentId });
@@ -416,6 +427,14 @@ function editorSafe(html) {
   for (const el of frag.querySelectorAll("[class]")) {
     const keep = [...el.classList].filter(c => KEEP_CLASSES.has(c));
     if (keep.length) el.className = keep.join(" "); else el.removeAttribute("class");
+  }
+  // data: images that are not real images are dropped here, so the editor shows what is sent.
+  for (const img of frag.querySelectorAll("img[src^='data:']")) if (!dataImage(img.getAttribute("src"))) img.remove();
+  // Inline styles stay, but nothing may be lifted out of the editor over the app (a sender's box
+  // positioned over the whole window, in a quote saved with a reply draft).
+  for (const el of frag.querySelectorAll("[style]")) {
+    for (const p of ["position", "z-index", "inset", "top", "right", "bottom", "left"]) el.style.removeProperty(p);
+    if (!el.getAttribute("style")?.trim()) el.removeAttribute("style");
   }
   const box = document.createElement("div");
   box.appendChild(frag);

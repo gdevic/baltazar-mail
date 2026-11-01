@@ -1,5 +1,6 @@
-// Golden values for the text-or-binary check and the hex dump in ext/bytes.js. node tools/bytes-test.mjs
-import { asText, hexDump } from "../ext/bytes.js";
+// Golden values for the text-or-binary check, the hex dump and the image sniffing in ext/bytes.js.
+// node tools/bytes-test.mjs
+import { asText, hexDump, sniffImage } from "../ext/bytes.js";
 
 const enc = s => new TextEncoder().encode(s);
 let fail = 0;
@@ -18,5 +19,9 @@ ok(asText(enc("\x1b[31mred\x1b[0m")) !== null, "ANSI escapes are text");
 ok(hexDump(enc("ABCDEFGHIJKLMNOPQ\n")) ===
   "00000000  41 42 43 44 45 46 47 48  49 4a 4b 4c 4d 4e 4f 50  ABCDEFGHIJKLMNOP\n" +
   "00000010  51 0a                                             Q.", "hex dump layout");
+const b = hex => Uint8Array.from(hex.match(/../g), h => parseInt(h, 16));
+ok(sniffImage(b("89504e470d0a1a0a0000")) === "image/png" && sniffImage(b("ffd8ffe000104a464946")) === "image/jpeg" && sniffImage(b("474946383961")) === "image/gif", "png, jpeg, gif");
+ok(sniffImage(b("524946460000000057454250")) === "image/webp" && sniffImage(b("424d00")) === "image/bmp", "webp, bmp");
+ok(sniffImage(enc("<h1>hi</h1>")) === null && sniffImage(enc("<svg xmlns=")) === null && sniffImage(new Uint8Array(0)) === null, "html, svg and nothing are not images");
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);
