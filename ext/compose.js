@@ -182,16 +182,13 @@ export async function open(opts) {
   draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true, images: opts.images !== false };
   let to = [], cc = [], bcc = [], subject = "", bodyHtml = "";
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
-  const notMe = l => (l || []).filter(a => !mine.has((a.email || "").toLowerCase()));
   // A message without a usable date is quoted without one, not as "Invalid Date".
   const sent = new Date(Number(h.date) * 1000), when = h.date && !isNaN(sent) ? sent.toLocaleString() : "";
   const quoteHeader = () => `${when ? `On ${when}, ` : ""}${esc(fmt((h.from || [])[0]))} wrote:`;
   switch (opts.mode) {
     case "reply":
     case "replyAll": {
-      const replyTo = h.replyTo?.length ? h.replyTo : h.from;
-      to = replyTo || [];
-      if (opts.mode === "replyAll") { to = to.concat(notMe(h.to)); cc = notMe(h.cc); }
+      ({ to, cc } = replyRecipients(opts.mode, h, mine));
       subject = /^re:/i.test(h.subject || "") ? h.subject : `Re: ${h.subject || ""}`;
       draft.inReplyTo = { id: m.id, replied: true };
       // The sender's style sheets stay out of the reply: they would apply to the whole outgoing
@@ -530,16 +527,46 @@ function renderFiles() {
 }
 
 // ---------- addresses ----------
+// Commas and semicolons separate addresses except inside a quoted name or <...>. A mailto: link
+// gives its address.
+const ADDR = /^[^\s@<>()",;:\\]+@[^\s@<>()",;:\\]+\.[^\s@<>()",;:\\]+$/;
+function splitAddrs(s) {
+  const out = []; let cur = "", q = false, angle = false;
+  for (const ch of s) {
+    if (ch === '"' && !angle) q = !q;
+    else if (ch === "<" && !q) angle = true;
+    else if (ch === ">" && !q) angle = false;
+    if ((ch === "," || ch === ";") && !q && !angle) { out.push(cur); cur = ""; } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
 export function parseAddrs(s) {
   const out = [];
-  for (const part of String(s || "").split(/[,;]+/)) {
+  for (const part of splitAddrs(String(s || ""))) {
     const p = part.trim(); if (!p) continue;
-    const m = p.match(/^(?:"?([^"<]*)"?\s*)?<([^>]+)>$/);
-    const email = (m ? m[2] : p).trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error(`Not an address: ${p}`);
-    out.push(m && m[1]?.trim() ? { name: m[1].trim(), email } : { email });
+    const m = p.match(/^(?:"([^"]*)"|([^"<]*?))\s*<([^>]+)>$/);
+    const email = (m ? m[3] : p).trim().replace(/^mailto:/i, "");
+    if (!ADDR.test(email)) throw new Error(`Not an address: ${p}`);
+    const name = (m?.[1] ?? m?.[2] ?? "").trim();
+    out.push(name ? { name, email } : { email });
   }
   return out;
+}
+
+// To and Cc for a reply. A reply to one's own sent message goes to its recipients; each address
+// appears once, and one's own addresses are left out of reply all.
+export function replyRecipients(mode, h, mine) {
+  const key = a => (a?.email || "").toLowerCase();
+  const isMine = a => mine.has(key(a));
+  const notMe = l => (l || []).filter(a => !isMine(a));
+  const fromMe = !!h.from?.length && h.from.every(isMine);
+  let to = fromMe ? (h.to || []) : (h.replyTo?.length ? h.replyTo : h.from || []), cc = [];
+  if (mode === "replyAll") { if (fromMe) cc = notMe(h.cc); else { to = to.concat(notMe(h.to)); cc = notMe(h.cc); } }
+  const seen = new Set();
+  const once = l => l.filter(a => key(a) && !seen.has(key(a)) && seen.add(key(a)));
+  to = once(to); cc = once(cc);
+  return { to, cc };
 }
 
 function hasContent() {
