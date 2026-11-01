@@ -45,6 +45,18 @@ A copy installed this way says in Settings when a newer release is out. To updat
 
 Moving from a ZIP install to the Edge Add-ons copy: the store copy is a separate extension, so set your preferences again once; its address book rebuilds itself from your mail. Then remove the ZIP copy so only one toolbar button remains.
 
+**Microsoft Edge: keep the tab awake.** Edge puts background tabs to sleep, pinned ones included, and a sleeping tab cannot check for new mail until you click it. To keep Baltazar Mail checking (and the new-mail dot working), add it to Edge's exception list once:
+
+1. Open `edge://settings/system` and find **Always keep these sites active** (older versions: "Never put these sites to sleep"). Click **Add site**.
+2. Enter `chrome-extension://<ID>/`, with the `chrome-` prefix and the trailing slash, where `<ID>` is your copy's 32-letter extension ID:
+   - Installed from Microsoft Edge Add-ons: `fmfafokapbejponlbknighiecagfcnai`, the same everywhere.
+   - Installed from a release ZIP: an ID Edge derives from the folder you loaded, different on each computer or folder (it stays the same when you unzip updates over the same folder).
+
+   Either way, the ID is in the address bar of the Baltazar Mail tab, after `chrome-extension://`, and on `edge://extensions` with Developer mode turned on.
+3. To confirm, open `edge://discards`: the Baltazar Mail tab should show that it cannot sleep.
+
+Extensions cannot change this setting themselves.
+
 To publish a release, set `version` in `ext/manifest.json`, commit, and run the Release workflow from the Actions tab with a matching tag (for example `v0.16.0`). It runs every test suite, then builds the install ZIP and the store ZIP (`-store.zip`, with `manifest.json` at the top level) and creates the release.
 
 Baltazar Mail relies on an undocumented Yahoo API that can change at any time; what is known about it is in `docs/yahoo-v3.md`. 
