@@ -176,7 +176,7 @@ export async function open(opts) {
   const m = opts.message, h = m?.headers || {};
   // images: whether the quoted message's remote images may load, as decided in the reader
   draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true, images: opts.images !== false };
-  let to = [], cc = [], subject = "", bodyHtml = "";
+  let to = [], cc = [], bcc = [], subject = "", bodyHtml = "";
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
   const notMe = l => (l || []).filter(a => !mine.has((a.email || "").toLowerCase()));
   // A message without a usable date is quoted without one, not as "Invalid Date".
@@ -210,7 +210,7 @@ export async function open(opts) {
       draft.csid = m.csid || draft.csid;
       draft.savedId = m.id;
       draft.files = withFiles([], opts.files || []);
-      to = h.to || []; cc = h.cc || []; subject = h.subject || "";
+      to = h.to || []; cc = h.cc || []; bcc = h.bcc || []; subject = h.subject || "";
       bodyHtml = opts.body.html || "";
       if (api.isMessageId(m.inReplyTo?.messageReference?.id)) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };
       break;
@@ -220,8 +220,10 @@ export async function open(opts) {
   $("c-title").textContent = { new: "New message", reply: "Reply", replyAll: "Reply all", forward: "Forward", draft: "Draft" }[opts.mode];
   const fromAcct = accounts.find(a => (h.from?.[0]?.email || "").toLowerCase() === a.email.toLowerCase() && opts.mode === "draft") || primary;
   $("c-from").value = fromAcct.email;
-  fields.to.set(to); fields.cc.set(cc); fields.bcc.set([]);
-  $("c-cc-row").classList.toggle("hidden", !cc.length); $("c-bcc-row").classList.add("hidden");
+  fields.to.set(to); fields.cc.set(cc); fields.bcc.set(bcc);
+  // Cc and Bcc show and hide together, as their toggle does
+  const copies = cc.length || bcc.length;
+  $("c-cc-row").classList.toggle("hidden", !copies); $("c-bcc-row").classList.toggle("hidden", !copies);
   $("c-subject").value = subject;
   const sig = fromAcct.signatureActive && fromAcct.signature ? `<div><br></div><div><br></div><div class="ymsig">${fromAcct.signature}</div>` : "<div><br></div>";
   setMode(hooks.settings().composeHtml !== false);
@@ -606,7 +608,8 @@ async function reopenFrom(snap) {
   $("c-title").textContent = "Message not sent";
   $("c-from").value = snap.d.from.email;
   fields.to.set(snap.d.to); fields.cc.set(snap.d.cc); fields.bcc.set(snap.d.bcc);
-  $("c-cc-row").classList.toggle("hidden", !snap.d.cc.length); $("c-bcc-row").classList.toggle("hidden", !snap.d.bcc.length);
+  const copies = snap.d.cc.length || snap.d.bcc.length;
+  $("c-cc-row").classList.toggle("hidden", !copies); $("c-bcc-row").classList.toggle("hidden", !copies);
   $("c-subject").value = snap.d.subject;
   setMode(snap.html);
   applyDefaultFont();

