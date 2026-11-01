@@ -348,6 +348,25 @@ scenario("a message opened in a hidden tab is marked read only once seen", async
   expect(shown === "Subject 1-3" && hidden === 0 && seen === 1, "marked read after the tab is seen, not before: " + JSON.stringify({ shown, hidden, seen }));
 }, { settings: { markReadSec: 1 } });
 
+scenario("reply answers the open message wherever the cursor is", async ({ page }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  await page.locator("#list").focus(); await page.keyboard.press("j"); await page.keyboard.press("j");
+  await page.keyboard.press("r"); await page.waitForTimeout(600);
+  const open = await page.locator("#compose").isVisible(), subject = open ? await page.inputValue("#c-subject") : "";
+  expect(open && subject === "Re: Subject 1-2", "the reply is to the message in the reader: " + JSON.stringify({ open, subject }));
+});
+
+scenario("opening another draft quickly edits the last one clicked", async ({ page, mock }, expect) => {
+  mock.handler = async ({ name, uri }) => { if (name === "messages.getBody" && uri.includes("MSG3_1/")) await sleep(900); };
+  await folder(page, "Draft");
+  await page.locator("#rows .row").nth(0).click();
+  await page.waitForTimeout(100);
+  await page.locator("#rows .row").nth(1).click();
+  await page.waitForTimeout(2500);
+  const subject = await page.inputValue("#c-subject");
+  expect(subject === "Subject 3-2", "the composer holds the draft clicked last: " + subject);
+});
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };

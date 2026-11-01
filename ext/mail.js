@@ -165,7 +165,7 @@ const FAILED = {
   "fetching the message": "Could not open the message.", "rendering the message": "Could not show the message.",
   "mark read": "Could not mark the message as read.", draft: "Could not open the draft.",
   send: "The message was not sent; it is back in the composer.", print: "Could not print the message.",
-  undo: "Could not undo the last action.", redo: "Could not redo the action.",
+  undo: "Could not undo the last action.", redo: "Could not redo the action.", compose: "Could not open the composer.",
   mark: "Could not change whether the messages are read.", star: "Could not change the stars.",
   move: "Could not move the messages.", archive: "Could not archive the messages.", delete: "Could not delete the messages.",
   spam: "Could not mark the messages as spam.", notspam: "Could not mark the messages as not spam.",
@@ -971,25 +971,36 @@ function hideReaderForCompose(hide) {
   for (const id of ["reader"]) $(id).classList.toggle("hidden", hide);
 }
 
+// Reply, reply all and forward answer the message in the reader, wherever the cursor is. The body
+// is taken once, so opening another message meanwhile cannot change what is answered. A failure
+// brings the reader back.
+let composeSeq = 0;
 async function startCompose(mode) {
+  const seq = ++composeSeq;
   if (!(await compose.close(true))) return;
   const me = $("account").textContent;
-  if (mode === "new") { hideReaderForCompose(true); await compose.open({ mode, myEmail: me }); return; }
-  const m = state.messages[state.selected];
-  if (!m || !currentBody || currentBody.message.id !== m.id) { status("open a message first"); return; }
+  const body = currentBody, images = bodyImages;
+  if (mode !== "new" && (!body || !state.openId || body.message.id !== state.openId)) { status("open a message first"); return; }
   hideReaderForCompose(true);
-  status("preparing…");
-  currentBody.html = await inlineYahooParts(currentBody.html, currentBody.message);
-  await compose.open({ mode, message: currentBody.message, body: currentBody, images: bodyImages, myEmail: me });
-  status("");
+  try {
+    if (mode === "new") { await compose.open({ mode, myEmail: me }); return; }
+    status("preparing…");
+    const html = await inlineYahooParts(body.html, body.message);
+    if (seq !== composeSeq) return;
+    body.html = html;
+    await compose.open({ mode, message: body.message, body, images, myEmail: me });
+    status("");
+  } catch (e) { if (!compose.isOpen()) hideReaderForCompose(false); handleError(e, "compose"); }
 }
 
 async function editDraft(i) {
   const m = state.messages[i]; if (!m) return;
+  const seq = ++composeSeq;              // a later click on another draft wins
   if (!(await compose.close(true))) return;
   status("loading draft…");
   let r;
   try { r = await api.body(m.id); } catch (e) { handleError(e, "draft"); return; }
+  if (seq !== composeSeq) return;
   // Each save replaces the draft, so its inline images and attachments must travel again with
   // it: images as embedded data, attachments as files cut out of its source. If they cannot be
   // loaded the draft stays closed, so a save cannot strip them.
@@ -1006,6 +1017,7 @@ async function editDraft(i) {
       });
     } catch (e) { notify("Could not load the draft's attachments, so it was not opened (it is unchanged).", { detail: e.message, err: e, what: "draft" }); return; }
   }
+  if (seq !== composeSeq) return;
   hideReaderForCompose(true);
   await compose.open({ mode: "draft", message: r.message, body: r, files, partIds: atts.map(a => a.partId), myEmail: $("account").textContent });
   status("");
