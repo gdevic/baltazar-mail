@@ -8,6 +8,7 @@ import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { extract } from "./mime.js";
 import { sniffImage } from "./bytes.js";
+import { remember, failure, freshFailure, recent, RETRY_FAILED } from "./cache.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -617,7 +618,9 @@ function cleanHtml(html) {
 // are fetched here and handed to the frame as data: URLs. Only real <img> sources with exactly that
 // address shape in the user's own mailbox are fetched, and only image responses are kept, so a
 // message cannot make the extension request any other Yahoo address with the user's session.
-const partCache = new Map();
+// Image caches keep the newest entries up to a limit, so a long session does not hold every image
+// it ever showed, and a failure is remembered for a minute, then tried again.
+const partCache = new Map();       // url -> data: URL, or failure()
 const PART_PATH = /^\/ws\/v3\/mailboxes\/@\.id==([A-Za-z0-9_-]+)\/messages\/@\.id==[A-Za-z0-9_-]+\/content\/parts\/@\.id==[0-9.]+\/thumbnail(?:&[A-Za-z0-9_.~%=-]+)*$/;
 function isPartUrl(u, mailboxId) {
   try {
@@ -636,31 +639,32 @@ async function inlineYahooParts(html) {
   if (!imgs.length) return html;
   const urls = [...new Set(imgs.map(img => img.getAttribute("src")))].slice(0, 60);
   await Promise.all(urls.map(async u => {
-    if (partCache.has(u)) return;
+    const c = partCache.get(u);
+    if (typeof c === "string" || freshFailure(c)) return;
     try {
       const resp = await fetch(u, { credentials: "include" });
       if (!resp.ok) throw new Error(resp.status);
       const blob = await resp.blob();
       if (!/^image\/(png|jpeg|gif|webp|bmp|avif)$/i.test(blob.type)) throw new Error(blob.type || "untyped");
       const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(blob); });
-      partCache.set(u, dataUrl);
-    } catch { partCache.set(u, null); }
+      remember(partCache, u, dataUrl);
+    } catch { remember(partCache, u, failure()); }
   }));
-  const failed = urls.filter(u => partCache.get(u) === null && !fromSource.has(u));
+  const failed = urls.filter(u => partCache.get(u)?.failed && !recent(fromSource.get(u)));
   if (failed.length) await partsFromSource(failed);
-  for (const img of imgs) { const d = partCache.get(img.getAttribute("src")); if (d) img.setAttribute("src", d); }
+  for (const img of imgs) { const d = partCache.get(img.getAttribute("src")); if (typeof d === "string") img.setAttribute("src", d); }
   return tpl.innerHTML;
 }
 
 // Yahoo cannot render some inline parts (a malformed type such as "image/jpeg;base64" gives
 // EP-5001), so those are cut out of the message's own source, as attachments are. The format
 // comes from the bytes, not from the sender's header; anything that is not an image is dropped.
-const fromSource = new Set();
+const fromSource = new Map();      // url -> time it was last tried from the source
 const RAW_FALLBACK_MAX = 10 << 20;
 async function partsFromSource(urls) {
   const byMsg = new Map();
   for (const u of urls) {
-    fromSource.add(u);
+    remember(fromSource, u, Date.now());
     const m = new URL(u).pathname.match(/\/messages\/@\.id==([A-Za-z0-9_-]+)\/content\/parts\/@\.id==([0-9.]+)\//);
     if (m) (byMsg.get(m[1]) || byMsg.set(m[1], []).get(m[1])).push([u, m[2]]);
   }
@@ -673,7 +677,7 @@ async function partsFromSource(urls) {
         try {
           const { bytes } = extract(parsed, pid), type = sniffImage(bytes);
           if (!type) continue;
-          partCache.set(u, await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(new Blob([bytes], { type })); }));
+          remember(partCache, u, await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(new Blob([bytes], { type })); }));
         } catch { /* part missing or undecodable: stays broken */ }
       }
     } catch { /* source unavailable */ }
@@ -766,7 +770,8 @@ async function thumbFor(a) {
       return await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(blob); });
     } catch { return null; }
   })();
-  thumbCache.set(key, p);
+  remember(thumbCache, key, p);
+  p.then(v => { if (v === null) setTimeout(() => { if (thumbCache.get(key) === p) thumbCache.delete(key); }, RETRY_FAILED); });
   return p;
 }
 
