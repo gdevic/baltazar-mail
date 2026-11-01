@@ -597,13 +597,16 @@ let currentBody = null;
 let markReadTimer = null;
 
 // Yahoo's HTML is server-sanitised; DOMPurify (vendor/purify.min.js) removes anything that could
-// still run, navigate or submit. Links open in a new tab, since the reader frame cannot navigate.
+// still run, navigate or submit. Links (HTML and SVG <a>, image-map <area>) open in a new tab,
+// since the reader frame cannot navigate.
 // The reader shrinks wide images with height:auto, which would otherwise follow the picture's own
 // shape; an image's width and height attributes set its proportions instead, as mail clients
 // honour them (a 640x1 spacer built from a 1x1 PNG stays one pixel tall, not a 640px square).
 const purify = globalThis.DOMPurify;
 purify.addHook("afterSanitizeAttributes", node => {
-  if (node.tagName === "A" && node.hasAttribute("href")) { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+  if ((node.localName === "a" || node.localName === "area") && (node.hasAttribute("href") || node.hasAttribute("xlink:href"))) {
+    node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer");
+  }
   if (node.tagName === "IMG" && !node.style.aspectRatio) {
     const w = Number(node.getAttribute("width")), h = Number(node.getAttribute("height"));
     if (w > 0 && h > 0) node.style.aspectRatio = `${w} / ${h}`;

