@@ -1016,7 +1016,9 @@ async function printMessages() {
     messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html });
   }
   const key = `print:${Date.now()}`;
-  await chrome.storage.session.set({ [key]: { messages, auto: true } });
+  // The hand-off goes through session storage, whose quota a large selection with images can pass.
+  try { await chrome.storage.session.set({ [key]: { messages, auto: true } }); }
+  catch (e) { notify(`Could not print ${plural(messages.length, "message")}: too much to hand to the print page at once. Try fewer.`, { detail: e.message, err: e, what: "print" }); return; }
   await chrome.tabs.create({ url: chrome.runtime.getURL(`print.html?job=${encodeURIComponent(key)}`) });
   status(`print: ${plural(messages.length, "message")}`);
 }

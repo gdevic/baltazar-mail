@@ -487,6 +487,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await printPage.close();
   await page.bringToFront();
 
+  // printing more than session storage holds says so instead of hanging at "preparing…"
+  await page.evaluate(() => { const s = chrome.storage.session; s.realSet = s.set; s.set = async () => { throw new Error("QUOTA_BYTES quota exceeded"); }; });
+  await page.locator("#list").focus(); await page.keyboard.press("p");
+  await page.waitForSelector("#notice:not(.hidden)", { timeout: 4000 }).catch(() => {});
+  results.printQuota = await page.locator("#notice-text").textContent().catch(() => "");
+  await page.evaluate(() => { const s = chrome.storage.session; s.set = s.realSet; delete s.realSet; });
+  await page.locator("#notice-close").click().catch(() => {});
+
   // a message in Spam: printing and replying leave its remote images out, as the reader does
   {
     const back = (await page.locator("#folder-list .folder.active .nm").textContent()).trim();
@@ -853,6 +861,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.print.header.visible && results.print.header.onTop && results.print.remote.length > 0, "a message's styles cannot hide or cover the printed header: " + JSON.stringify(results.print));
+  expect(/^Could not print 1 message: too much.*QUOTA_BYTES/.test(results.printQuota), "a print too large for the hand-off says so: " + results.printQuota);
   const si = results.spamImages;
   expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteCsp.trim() === "img-src data:", "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
   expect(results.colorScheme === "dark" && results.keepTab === false, "dark palettes set a dark color-scheme; the tab is not discarded: " + JSON.stringify({ cs: results.colorScheme, keep: results.keepTab }));
