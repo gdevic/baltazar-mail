@@ -539,6 +539,20 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   ab.closed = await page.locator("#settings").isHidden();
   results.ab = ab;
 
+  // each folder keeps its selection and open message for the session; an unvisited folder starts empty
+  {
+    const folder = name => page.locator("#folder-list .folder", { hasText: name }).first().click().then(() => page.waitForTimeout(700));
+    const snap = async () => ({ sel: await page.locator("#rows .row.sel .sb").count() ? await page.locator("#rows .row.sel .sb").textContent() : "",
+      reader: await page.locator("#reader-empty").isVisible() ? "" : await page.locator("#r-subject").textContent() });
+    await folder("Projects");
+    await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(700);
+    const before = await snap();
+    await folder("Draft");
+    const away = await snap();
+    await folder("Projects");
+    results.folderMemory = { before, away, back: await snap() };
+  }
+
   // new mail while the tab is in the background: a green dot on the tab icon, gone when looked at
   await page.evaluate(() => Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }));
   folders[0].unread = 4; folders[0].highestModSeq++;
@@ -615,6 +629,11 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.tabIcon.title === "(3) Baltazar Mail" && results.tabIcon.href === "icons/32.png", "plain tab icon for mail already there: " + JSON.stringify(results.tabIcon));
   expect(results.newMail.title === "(4) Baltazar Mail" && results.newMail.dotted === "data:image/png;base64," && results.newMail.cleared === "icons/32.png", "new-mail dot: " + JSON.stringify(results.newMail));
   expect(results.wake.title === "(5) Baltazar Mail" && results.wake.ms < 2000, "checks for mail on waking: " + JSON.stringify(results.wake));
+  {
+    const f = results.folderMemory;
+    expect(f.before.sel && f.before.reader && f.before.sel.startsWith(f.before.reader) && f.away.sel === "" && f.away.reader === "" &&
+      f.back.sel === f.before.sel && f.back.reader === f.before.reader, "per-folder selection and reader: " + JSON.stringify(f));
+  }
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&

@@ -665,6 +665,7 @@ async function openCard(anchor, email, name) {
 
 const personQuery = email => `(from:("${email.replace(/"/g, "")}") OR to:("${email.replace(/"/g, "")}"))`;
 async function searchPerson(email) {
+  leaveView();
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term: email, raw: personQuery(email) };
   $("search").value = email;
@@ -1177,13 +1178,38 @@ function wireMovePicker() {
 }
 
 // ---------- navigation ----------
+// Each folder (and Starred) remembers, for this session, the highlighted message, the selection,
+// the message open in the reader and the list's scroll position; returning to it restores them.
+// A folder not visited yet opens with nothing selected and an empty reader. Searches are one-offs.
+const viewMemory = new Map();
+const viewKey = v => v.kind === "folder" ? `f:${v.folderId}` : v.starred ? "starred" : null;
+function leaveView() {
+  const key = viewKey(state.view); if (!key) return;
+  viewMemory.set(key, { cursorId: state.messages[state.selected]?.id ?? null, marked: [...state.marked],
+    openId: state.openId, scrollTop: $("rows").scrollTop });
+}
+function restoreView() {
+  const key = viewKey(state.view), mem = key && viewMemory.get(key);
+  const at = id => state.messages.findIndex(m => m.id === id);
+  if (!mem) { clearReader(); return; }
+  const ids = new Set(state.messages.map(m => m.id));
+  state.marked = new Set(mem.marked.filter(id => ids.has(id)));
+  state.selected = state.anchor = mem.cursorId ? at(mem.cursorId) : -1;
+  renderList();
+  $("rows").scrollTop = mem.scrollTop;
+  if (mem.openId && ids.has(mem.openId)) open(at(mem.openId)); else clearReader();
+}
+
 async function openFolder(id) {
+  leaveView();
   state.prevView = state.view;
   state.view = { kind: "folder", folderId: id, term: "" };
   $("search").value = "";
   scopeOff = false; updateScopeChip();
   renderFolders();
+  const v = state.view;
   await loadList("fresh");
+  if (state.view === v) restoreView();
   $("list").focus();
 }
 
@@ -1202,12 +1228,15 @@ function refreshStarredCount() {
     .finally(() => { const again = starredCounting.again; starredCounting = null; if (again) refreshStarredCount(); });
 }
 async function openStarred() {
+  leaveView();
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term: "Starred", raw: STARRED_Q, starred: true };
   $("search").value = "";
   scopeOff = false; updateScopeChip();
   renderFolders();
+  const v = state.view;
   await loadList("fresh");
+  if (state.view === v) restoreView();
   $("list").focus();
 }
 
@@ -1242,6 +1271,7 @@ async function doSearch(term, everywhere = false) {
   if (!parse(term)) { status("nothing to search for"); return; }
   const scope = everywhere || scopeOff ? null : scopeOfView();
   const back = state.view.kind === "search" ? state.view.back : state.view;
+  leaveView();
   state.prevView = state.view;
   state.view = { kind: "search", folderId: null, term, scope, back };
   $("search").value = term;
