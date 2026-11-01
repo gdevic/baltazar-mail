@@ -47,7 +47,7 @@ async function launch(opts = {}) {
   // Knobs a test turns to provoke server behaviour. patchRaw(source) edits message sources. offline refuses every Yahoo request. patchBody(id, message, simpleBody) edits a
   // message body before it is answered. handler({ name, envelope, top, uri, post, req })
   // may answer a batch call itself: return { responses } or { error }, or nothing to fall through.
-  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, patchRaw: null, offline: false, probes: [], images: [], ...opts.mock };
+  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, patchRaw: null, offline: false, probes: [], images: [], parts: [], ...opts.mock };
   const folders = structuredClone(FOLDERS);
   const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
   // GitHub's release API, asked once a day for the newest version
@@ -181,6 +181,7 @@ async function launch(opts = {}) {
   const zipBytes = Buffer.from("UEsDBBQAAAAAAI8CX12Tpho8uAEAALgBAAAKAAAAc3JjL21haW4uY2ludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KaW50IG1haW4oKXtyZXR1cm4gMDt9CmludCBtYWluKCl7cmV0dXJuIDA7fQppbnQgbWFpbigpe3JldHVybiAwO30KUEsDBBQAAAAAAI8CX10gMDo2BgAAAAYAAAAJAAAAUkVBRE1FLm1kaGVsbG8KUEsBAhQDFAAAAAAAjwJfXZOmGjy4AQAAuAEAAAoAAAAAAAAAAAAAAIABAAAAAHNyYy9tYWluLmNQSwECFAMUAAAAAACPAl9dIDA6NgYAAAAGAAAACQAAAAAAAAAAAAAAgAHgAQAAUkVBRE1FLm1kUEsFBgAAAAACAAIAbwAAAA0CAAAAAA==", "base64");
   await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => {
     const u = route.request().url();
+    if (u.includes("/content/parts/")) mock.parts.push(u);
     if (u.includes("/probe-")) { mock.probes.push({ url: u, from: route.request().frame()?.url() || "", cookie: !!route.request().headers().cookie }); return route.fulfill({ status: 404, body: "" }); }
     // Yahoo's download links cannot be fetched (redirect the page cannot follow), as in production.
     if (u.includes("/dl/")) return route.abort("failed");

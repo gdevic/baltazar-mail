@@ -14,6 +14,11 @@ ok(name(`attachment;\r\n filename*0*=utf-8''Quarterly%20; filename*1*=r%C3%A9por
 ok(name(`attachment; filename="plain \\"quoted\\".pdf"`) === 'plain "quoted".pdf', "plain quoted name with escapes");
 ok(name(`attachment; filename="=?UTF-8?B?w6l0w6kucGRm?="`) === "été.pdf", "RFC 2047 encoded word: " + name(`attachment; filename="=?UTF-8?B?w6l0w6kucGRm?="`));
 ok(name(`attachment`) === "", "no name");
+// a huge RFC 2231 parameter decodes instead of overflowing the stack
+{
+  let got; try { got = name(`attachment; filename*=utf-8''${"a".repeat(300000)}.pdf`); } catch (e) { got = e.name; }
+  ok(got?.length === 300004, "huge RFC 2231 parameter: " + String(got).slice(0, 40));
+}
 
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

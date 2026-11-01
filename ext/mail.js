@@ -657,21 +657,23 @@ function cleanHtml(html) {
 // Image caches keep the newest entries up to a limit, so a long session does not hold every image
 // it ever showed, and a failure is remembered for a minute, then tried again.
 const partCache = new Map();       // url -> data: URL, or failure()
-const PART_PATH = /^\/ws\/v3\/mailboxes\/@\.id==([A-Za-z0-9_-]+)\/messages\/@\.id==[A-Za-z0-9_-]+\/content\/parts\/@\.id==[0-9.]+\/thumbnail(?:&[A-Za-z0-9_.~%=-]+)*$/;
-function isPartUrl(u, mailboxId) {
+const PART_PATH = /^\/ws\/v3\/mailboxes\/@\.id==([A-Za-z0-9_-]+)\/messages\/@\.id==([A-Za-z0-9_-]+)\/content\/parts\/@\.id==[0-9.]+\/thumbnail(?:&[A-Za-z0-9_.~%=-]+)*$/;
+function isPartUrl(u, mailboxId, ids) {
   try {
     const url = new URL(u);
     const m = url.pathname.match(PART_PATH);
     return url.protocol === "https:" && url.host === "cloud-apis.mail.yahoo.com" && !url.username && !url.password &&
-      m && m[1] === mailboxId && /^(\?[A-Za-z0-9_.~%=&-]*)?$/.test(url.search) && !url.hash;
+      m && m[1] === mailboxId && (!ids || ids.includes(m[2])) && /^(\?[A-Za-z0-9_.~%=&-]*)?$/.test(url.search) && !url.hash;
   } catch { return false; }
 }
 
-async function inlineYahooParts(html) {
+// message: the one the HTML belongs to; only its own parts are fetched (by id or immutable id).
+async function inlineYahooParts(html, message) {
+  const ids = [message?.id, message?.immutableid].filter(Boolean).map(String);
   const tpl = document.createElement("template");      // inert: nothing in it loads
   tpl.innerHTML = html;
   const mailboxId = (await api.bootstrap()).mailboxId;
-  const imgs = [...tpl.content.querySelectorAll("img[src]")].filter(img => isPartUrl(img.getAttribute("src"), mailboxId));
+  const imgs = [...tpl.content.querySelectorAll("img[src]")].filter(img => isPartUrl(img.getAttribute("src"), mailboxId, ids));
   if (!imgs.length) return html;
   const urls = [...new Set(imgs.map(img => img.getAttribute("src")))].slice(0, 60);
   await Promise.all(urls.map(async u => {
@@ -773,7 +775,8 @@ async function openCard(anchor, email, name) {
   recent.onclick = () => { closeCard(); searchPerson(email); };
 }
 
-const personQuery = email => `(from:("${email.replace(/"/g, "")}") OR to:("${email.replace(/"/g, "")}"))`;
+// Only address characters reach the query: quotes, parentheses and backslashes would end the term.
+const personQuery = email => { const e = String(email).replace(/["()\\\s]/g, ""); return `(from:("${e}") OR to:("${e}"))`; };
 async function searchPerson(email) {
   leaveView();
   state.prevView = state.view;
@@ -916,7 +919,7 @@ async function renderMessage(m, r) {
   const hasImg = /<img\b/i.test(r.html);
   $("r-images").classList.toggle("hidden", !hasImg || auto);
   viewer.renderStrip(r.message, r.attachments, id => state.openId === id);
-  if (auto) { const inlined = await inlineYahooParts(r.html); if (state.openId !== m.id) return; r.html = inlined; }
+  if (auto) { const inlined = await inlineYahooParts(r.html, r.message); if (state.openId !== m.id) return; r.html = inlined; }
   showBody(auto);
   status(plainSubject(h.subject).slice(0, 60), r.ms);
   if (settings.markReadSec != null && !m.flags?.read) {
@@ -933,7 +936,7 @@ async function renderMessage(m, r) {
 async function loadImages() {
   if (!currentBody) return;
   const id = state.openId;
-  currentBody.html = await inlineYahooParts(currentBody.html);
+  currentBody.html = await inlineYahooParts(currentBody.html, currentBody.message);
   if (state.openId === id) showBody(true);
 }
 
@@ -959,7 +962,7 @@ async function startCompose(mode) {
   if (!m || !currentBody || currentBody.message.id !== m.id) { status("open a message first"); return; }
   hideReaderForCompose(true);
   status("preparing…");
-  currentBody.html = await inlineYahooParts(currentBody.html);
+  currentBody.html = await inlineYahooParts(currentBody.html, currentBody.message);
   await compose.open({ mode, message: currentBody.message, body: currentBody, images: bodyImages, myEmail: me });
   status("");
 }
@@ -973,7 +976,7 @@ async function editDraft(i) {
   // Each save replaces the draft, so its inline images and attachments must travel again with
   // it: images as embedded data, attachments as files cut out of its source. If they cannot be
   // loaded the draft stays closed, so a save cannot strip them.
-  r.html = await inlineYahooParts(r.html);
+  r.html = await inlineYahooParts(r.html, r.message);
   const atts = r.attachments.filter(a => a.disposition !== "inline" && a.partId);
   let files = [];
   if (atts.length) {
@@ -1073,7 +1076,7 @@ async function printMessages() {
     if (currentBody && currentBody.message.id === id) r = currentBody;
     else { try { r = await api.body(id); r.html = cleanHtml(r.html); } catch (e) { handleError(e, "print"); return; } }
     const images = imagesFor(r.message);
-    messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html: printableImages(await inlineYahooParts(r.html), images), images });
+    messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html: printableImages(await inlineYahooParts(r.html, r.message), images), images });
   }
   const key = `print:${Date.now()}`;
   // The hand-off goes through session storage, whose quota a large selection with images can pass.

@@ -51,13 +51,15 @@ function parseParams(v) {
   }
   for (const [k, list] of Object.entries(pieces)) {
     list.sort((x, y) => x.n - y.n);
-    let charset = null, bytes = [];
+    let charset = null;
+    const bytes = [];
+    const add = t => { for (let j = 0; j < t.length; j++) bytes.push(t.charCodeAt(j) & 255); };   // no spread: a value can be huge
     for (const [i, p] of list.entries()) {
       let val = p.val;
       if (p.enc) {
         if (i === 0) { const m = val.match(/^([^']*)'[^']*'(.*)$/); if (m) { charset = m[1] || "utf-8"; val = m[2]; } }
-        bytes.push(...unescape(val).split("").map(c => c.charCodeAt(0) & 255));
-      } else bytes.push(...[...val].map(c => c.charCodeAt(0) & 255));
+        add(unescape(val));
+      } else add(val);
     }
     out.params[k] = charset ? decodeBytes(new Uint8Array(bytes), charset) : list.map(p => p.val).join("");
   }

@@ -65,6 +65,13 @@ async function printOpen(h) {
   return p;
 }
 
+scenario("a message fetches only its own inline parts", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html += '<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==MSG1_7/content/parts/@.id==3/thumbnail&amp;appid=x">'; };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(900);
+  const own = mock.parts.filter(u => u.includes("@.id==MSG1_2/")).length, other = mock.parts.filter(u => u.includes("@.id==MSG1_7/"));
+  expect(own > 0 && !other.length, "only the open message's parts are fetched: " + JSON.stringify({ own, other }));
+});
+
 scenario("printing loads no Yahoo-host image", async (h, expect) => {
   h.mock.patchBody = leakyIn("MSG1_");
   await h.page.locator("#rows .row").nth(1).click(); await h.page.waitForTimeout(600);
