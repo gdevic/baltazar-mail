@@ -7,8 +7,9 @@ const when = d => { const t = new Date(Number(d) * 1000); return d && !isNaN(t) 
 const BODY_CSS = ":host{display:block}img{max-width:100%;height:auto}blockquote{border-left:2px solid #bbb;margin:6px 0;padding-left:10px;color:#444}pre{white-space:pre-wrap}";
 
 (async () => {
-  const key = new URLSearchParams(location.search).get("job");
-  const job = (await chrome.storage.session.get(key))[key];
+  // Only a print job's own key: any other would read, and then remove, someone else's entry.
+  const key = new URLSearchParams(location.search).get("job") || "";
+  const job = /^print:\d+$/.test(key) ? (await chrome.storage.session.get(key))[key] : null;
   if (!job) { document.getElementById("info").textContent = "Nothing to print (the job has expired)."; return; }
   chrome.storage.session.remove(key);
   // The reader's image policy, before any message is added: images from Yahoo's image proxy only

@@ -629,8 +629,15 @@ let markReadTimer = null;
 // shape; an image's width and height attributes set its proportions instead, as mail clients
 // honour them (a 640x1 spacer built from a 1x1 PNG stays one pixel tall, not a 640px square).
 const purify = globalThis.DOMPurify;
+// A link's target resolves against the app's page, so only absolute web, mail and phone links keep
+// theirs: a relative one would open an extension page. An in-message anchor scrolls the message
+// (see setFrame).
+const LINK_OK = /^(https?:\/\/|mailto:|tel:)/i;
 purify.addHook("afterSanitizeAttributes", node => {
   if ((node.localName === "a" || node.localName === "area") && (node.hasAttribute("href") || node.hasAttribute("xlink:href"))) {
+    const href = (node.getAttribute("href") ?? node.getAttribute("xlink:href") ?? "").trim();
+    if (/^#[^#]*$/.test(href) && node.localName === "a") { node.removeAttribute("target"); return; }
+    if (!LINK_OK.test(href)) { node.removeAttribute("href"); node.removeAttribute("xlink:href"); node.removeAttribute("target"); return; }
     node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer");
   }
   if (node.tagName === "IMG" && !node.style.aspectRatio) {
@@ -876,7 +883,16 @@ function setFrame(doc) {
   f.setAttribute("sandbox", READER_SANDBOX);
   f.setAttribute("referrerpolicy", "no-referrer");
   f.addEventListener("load", () => {
-    f.contentDocument?.addEventListener("keydown", e => { if (!SCROLL_KEYS.has(e.key) || e.ctrlKey || e.metaKey) onKey(e); });
+    const doc = f.contentDocument;
+    doc?.addEventListener("keydown", e => { if (!SCROLL_KEYS.has(e.key) || e.ctrlKey || e.metaKey) onKey(e); });
+    // An in-message anchor (#section) would resolve against the app's URL and load it into the
+    // frame; the app scrolls to the target instead.
+    doc?.addEventListener("click", e => {
+      const a = e.target.closest?.('a[href^="#"]'); if (!a) return;
+      e.preventDefault();
+      let id = a.getAttribute("href").slice(1); try { id = decodeURIComponent(id); } catch { /* as written */ }
+      (id && (doc.getElementById(id) || doc.getElementsByName(id)[0]))?.scrollIntoView();
+    });
   });
   f.srcdoc = doc;
   old.replaceWith(f);

@@ -100,6 +100,27 @@ scenario("a reopened draft loads no Yahoo-host image", async (h, expect) => {
   expect(!h.mock.probes.length, "the draft editor requests no Yahoo host: " + JSON.stringify(h.mock.probes));
 }, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
 
+// ---------- links ----------
+scenario("relative links cannot open extension pages", async (h, expect) => {
+  const { page } = h;
+  h.mock.patchBody = (id, m, body) => { if (id.startsWith("MSG1_")) body.html += '<a id="l-rel" href="print.html?job=ymSession">rel</a> <a id="l-proto" href="//evil.example/x">proto</a>' +
+    ' <a id="l-anc" href="#sec">anchor</a> <a id="l-web" href="https://example.com/">web</a> <a id="l-mail" href="mailto:a@b.c">mail</a><div style="height:3000px"></div><h2 id="sec">Section</h2>'; };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(700);
+  const links = await page.frameLocator("#r-body").locator("a[id^=l-]").evaluateAll(as => Object.fromEntries(as.map(a => [a.id, { href: a.getAttribute("href"), target: a.getAttribute("target") }])));
+  expect(links["l-rel"]?.href == null && links["l-proto"]?.href == null, "relative and scheme-relative links lose their target: " + JSON.stringify(links));
+  expect(links["l-web"]?.target === "_blank" && links["l-mail"]?.href === "mailto:a@b.c", "web and mail links stay: " + JSON.stringify(links));
+  const pages = h.ctx.pages().length;
+  await page.frameLocator("#r-body").locator("#l-anc").evaluate(a => a.click()); await page.waitForTimeout(500);   // the harness overlay covers it
+  const scrolled = await page.frameLocator("#r-body").locator("#sec").evaluate(e => ({ hash: e.ownerDocument.location.hash, top: Math.round(e.getBoundingClientRect().top), sy: e.ownerDocument.defaultView.scrollY }));
+  expect(h.ctx.pages().length === pages && scrolled.sy > 1000, "an anchor link scrolls the message, no new tab: " + JSON.stringify({ tabs: h.ctx.pages().length - pages, scrolled }));
+  // the print page ignores a job name that is not a print job
+  const had = await page.evaluate(async () => !!(await chrome.storage.session.get("ymSession")).ymSession);
+  const p = await h.ctx.newPage(); await p.goto(`chrome-extension://${h.extId}/print.html?job=ymSession`); await p.waitForTimeout(500);
+  const still = await page.evaluate(async () => !!(await chrome.storage.session.get("ymSession")).ymSession);
+  expect(had && still, "print.html?job=ymSession leaves the session alone: " + JSON.stringify({ had, still }));
+  await p.close();
+}, { allow: /Blocked script execution in 'about:srcdoc'/ });   // Playwright's own click in the frame
+
 // ---------- dark reader ----------
 scenario("darkenHtml golden values, and crafted styles stay fast", async ({ page }, expect) => {
   const r = await page.evaluate(async () => {
