@@ -132,7 +132,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       const enc = s => s.replace(/[<>"&=#;:/ ]/g, c => `&#${c.charCodeAt(0)};`);
       const pages = {};
       if (top.payload.retryCount > 0 && !convFail) for (let n = top.payload.start_page; n <= Math.min(5, top.payload.end_page); n++)
-        pages["page" + n] = { html: enc(`<div class="aps-page"><p class="t">Slide ${n === 1 ? "one" : n}</p><script>bad()</script><a href="javascript:bad()">x</a></div>`), css: ".aps-page .t { font-size: 20pt; }", statuscode: 700, pdfEmbed: false };
+        pages["page" + n] = { html: enc(`<div class="aps-page"><p class="t">Slide ${n === 1 ? "one" : n}</p><script>bad()</script><a href="javascript:bad()">x</a></div>`), css: `.aps-page .t { font-size: 20pt; } </sty</style>le><img id="css-escape" src="data:,">`, statuscode: 700, pdfEmbed: false };
       responses = [{ id: top.id, httpCode: 200, response: Object.keys(pages).length ? { code: 800, statuscode: 600, info: { num_pages: 5, dimension: { w: 900, h: 1400 } }, pages } : { code: convFail ? 813 : 814, statuscode: 600, pages: {} } }];
     }
     else if (top.id === "SaveMessage") {
@@ -404,8 +404,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await f.waitForFunction(() => document.querySelectorAll(".page").length >= 3, null, { timeout: 8000 });
   await f.evaluate(() => document.querySelector(".more")?.scrollIntoView());
   await f.waitForFunction(() => document.querySelectorAll(".page").length === 5, null, { timeout: 8000 }).catch(() => {});
-  const ppt = await f.evaluate(() => { const pages = [...document.querySelectorAll(".page")]; return { n: pages.length, html: pages.map(h => h.shadowRoot.innerHTML).join(""), text: pages.map(h => h.shadowRoot.textContent).join("|") }; });
-  results.vSlides = { pages: ppt.n, text: ppt.text, clean: !/<script|javascript:/i.test(ppt.html), retried: docCalls.some(c => c.retryCount > 0), docId: docCalls[0]?.docId };
+  const ppt = await f.evaluate(() => { const pages = [...document.querySelectorAll(".page")]; return { n: pages.length, html: pages.map(h => h.shadowRoot.innerHTML).join(""), text: pages.map(h => h.shadowRoot.querySelector(".aps-page")?.textContent).join("|"),
+    escaped: pages.some(h => h.shadowRoot.querySelector("#css-escape")), styled: getComputedStyle(pages[0].shadowRoot.querySelector(".t")).fontSize }; });
+  results.vSlides = { pages: ppt.n, text: ppt.text, escaped: ppt.escaped, styled: ppt.styled, clean: !/<script|javascript:/i.test(ppt.html), retried: docCalls.some(c => c.retryCount > 0), docId: docCalls[0]?.docId };
   await page.screenshot({ path: path.join(__dirname, "..", "out", "viewer-pptx.png") }).catch(() => {});
   // each message's source is fetched once, shared by its attachments and inline images
   const rawIds = rawCalls.filter(c => c.url.includes("rawplaintext")).map(c => c.url.match(/messages\/@\.id==([^/]+)/)[1]);
@@ -834,7 +835,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));
-  expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8" && results.vKeyForward, "converter: " + JSON.stringify(results.vSlides));
+  expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8" && results.vKeyForward &&
+    !results.vSlides.escaped && results.vSlides.styled === "26.6667px", "converter: " + JSON.stringify(results.vSlides));
   {
     // img-src 'none' (reader) and img-src data: (reply quote) are a message's images blocked on
     // purpose: Spam, Trash, or the setting

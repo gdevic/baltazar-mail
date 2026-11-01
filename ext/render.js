@@ -142,9 +142,11 @@
       const host = document.createElement("div");
       host.className = "page";
       const shadow = host.attachShadow({ mode: "open" });
+      // The page's CSS goes in as a style element's text, so nothing in it is parsed as markup.
       const css = decodeEntities(p.css || "").replace(/<\/?style[^>]*>/gi, "");
-      const html = DOMPurify.sanitize(decodeEntities(p.html || ""), { FORBID_TAGS: ["form", "input", "button", "textarea", "select"] });
-      shadow.innerHTML = `<style>:host{display:block} .aps-page{position:relative;overflow:auto} img{max-width:100%;height:auto}</style><style>${css}</style>${html}`;
+      shadow.innerHTML = DOMPurify.sanitize(decodeEntities(p.html || ""), { FORBID_TAGS: ["form", "input", "button", "textarea", "select"] });
+      const sheet = text => Object.assign(document.createElement("style"), { textContent: text });
+      shadow.prepend(sheet(":host{display:block} .aps-page{position:relative;overflow:auto} img{max-width:100%;height:auto}"), sheet(css));
       pageState.list.appendChild(host);
     }
   }
