@@ -159,6 +159,24 @@ scenario("a slow folder load does not take focus from the search box", async ({ 
   expect(focus === "search" && value === "budget", "typing continues in the search box: " + JSON.stringify({ focus, value }));
 });
 
+scenario("the message list speaks to screen readers", async ({ page }, expect) => {
+  await page.locator("#list").focus(); await page.keyboard.press("j"); await page.waitForTimeout(200);
+  const a = await page.evaluate(() => {
+    const rows = document.getElementById("rows"), list = document.getElementById("list");
+    const opts = [...rows.querySelectorAll(".row")];
+    const active = document.getElementById(list.getAttribute("aria-activedescendant") || "-");
+    return { role: rows.getAttribute("role"), multi: rows.getAttribute("aria-multiselectable"), label: rows.getAttribute("aria-label"),
+      optRoles: [...new Set(opts.map(o => o.getAttribute("role")))], selected: opts.filter(o => o.getAttribute("aria-selected") === "true").length,
+      activeIsSel: !!active && active.classList.contains("sel"), name: active?.getAttribute("aria-label") || "", dayHidden: [...rows.querySelectorAll(".day")].every(d => d.getAttribute("aria-hidden") === "true") };
+  });
+  expect(a.role === "listbox" && a.multi === "true" && a.label && a.optRoles.join() === "option" && a.selected === 1 && a.activeIsSel && a.dayHidden,
+    "listbox, options, one selected, active row named: " + JSON.stringify(a));
+  expect(/^(Unread, )?Sender \d+, Subject 1-\d+, /.test(a.name), "a row's name says who, what and when: " + a.name);
+  await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
+  const marked = await page.locator('#rows .row[aria-selected="true"]').count();
+  expect(marked === 2, "selected rows are marked selected: " + marked);
+});
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };

@@ -37,7 +37,7 @@
   </div>
   <nav id="folders" tabindex="-1"><input id="folder-filter" placeholder="filter folders" autocomplete="off"><div id="folder-list"></div></nav>
   <div id="split1" class="split"></div>
-  <section id="list" tabindex="0">
+  <section id="list" tabindex="0" role="group" aria-label="Message list">
     <div id="list-head"><span id="list-title"></span><span id="list-count"></span></div>
     <div id="toolbar">
       <button data-act="archive" title="Archive (e)">Archive</button>
@@ -50,7 +50,7 @@
       <button data-act="undo" title="Undo (z)" disabled>Undo</button>
       <button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button>
     </div>
-    <div id="rows"></div>
+    <div id="rows" role="listbox" aria-multiselectable="true"></div>
     <div id="more" class="hidden"><button id="more-btn">Load more</button></div>
   </section>
   <div id="split2" class="split"></div>

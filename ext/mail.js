@@ -474,16 +474,20 @@ function renderList() {
       const v = state.view, n = state.elsewhere.length, scopedN = i;
       const d = document.createElement("div");
       d.className = "elsewhere";
+      d.setAttribute("role", "presentation");
       d.innerHTML = `<span>${scopedN ? "" : `Nothing in ${esc(v.scope?.name || "this folder")}. `}${n >= ELSEWHERE_MAX ? `${ELSEWHERE_MAX}+ matches` : `${n} match${n === 1 ? "" : "es"}`} in other folders</span>` +
         `<a href="#" title="Search all mail, with paging (Shift+Enter in the search box)">Search all mail</a>`;
       d.querySelector("a").onclick = e => { e.preventDefault(); doSearch(v.term, true); };
       frag.appendChild(d);
     }
     const day = dayLabel(h.date);
-    if (day !== lastDay) { const d = document.createElement("div"); d.className = "day"; d.textContent = day; frag.appendChild(d); lastDay = day; }
+    // each row's name carries its date, so screen readers skip the day headings
+    if (day !== lastDay) { const d = document.createElement("div"); d.className = "day"; d.setAttribute("aria-hidden", "true"); d.textContent = day; frag.appendChild(d); lastDay = day; }
     const el = document.createElement("div");
     el.className = "row" + (m.flags?.read ? "" : " unread") + (m.elsewhere ? " else" : "") + (i === state.selected ? " sel" : "") + (state.marked.has(m.id) ? " marked" : "");
     el.dataset.i = i;
+    el.id = `row-${i}`;
+    el.setAttribute("role", "option");
     el.draggable = true;
     const who = outgoing ? h.to?.[0] : h.from?.[0];
     el.innerHTML = `<span class="st" title="Star / unstar (s)"></span><span class="fl"></span><span class="fr" data-email="${esc(who?.email || "")}" data-name="${esc(who?.name || "")}">${esc(who?.name || who?.email || "")}</span>` +
@@ -527,6 +531,26 @@ function paintFlags(el, m) {
   st.textContent = m.flags?.flagged ? "★" : "☆";
   st.classList.toggle("on", !!m.flags?.flagged);
   el.querySelector(".fl").innerHTML = fileCount(m) ? CLIP : "";
+  el.setAttribute("aria-label", rowLabel(m));
+}
+// What a screen reader says for a row: its state, then who, what and when.
+function rowLabel(m) {
+  const h = m.headers || {};
+  const who = (["SENT", "DRAFT"].includes(folderType(state.byId.get(state.view.folderId))) ? h.to?.[0] : h.from?.[0]) || {};
+  return [m.flags?.read ? "" : "Unread", noBidi(who.name || who.email || ""), plainSubject(h.subject) || "(no subject)", toDate(h.date)?.toLocaleString() || "",
+    m.flags?.flagged ? "starred" : "", fileCount(m) ? "has attachments" : "", m.elsewhere ? `in ${noBidi(m.folder?.name || "another folder")}` : ""].filter(Boolean).join(", ");
+}
+// The list is a multi-select listbox: the selection is what is selected, or the cursor row when
+// nothing is; the focused list names the cursor row as its active descendant.
+function syncAria() {
+  const rows = $("rows");
+  rows.querySelectorAll(".row").forEach(el => {
+    const m = state.messages[Number(el.dataset.i)];
+    el.setAttribute("aria-selected", String(state.marked.size ? state.marked.has(m?.id) : Number(el.dataset.i) === state.selected));
+  });
+  if (state.selected >= 0 && rowEl(state.selected)) $("list").setAttribute("aria-activedescendant", `row-${state.selected}`);
+  else $("list").removeAttribute("aria-activedescendant");
+  rows.setAttribute("aria-label", $("list-title").textContent || "Messages");
 }
 // Files a message carries, as the attachment strip counts them: images built into the body
 // (disposition inline) are not files. Older list entries without the part list fall back to the count.
@@ -591,6 +615,7 @@ function updateToolbar() {
   $("toolbar").querySelector('[data-act="spam"]').textContent = spamLabel();
   const elseN = state.messages.filter(x => x.elsewhere).length;
   $("list-count").textContent = `${state.messages.length - elseN}${state.more ? "+" : ""}${elseN ? ` (+${elseN} elsewhere)` : ""}` + (state.marked.size ? ` · ${state.marked.size} selected` : "");
+  syncAria();
 }
 
 // ---------- reader ----------
