@@ -204,7 +204,8 @@ export async function open(opts) {
       subject = /^fwd?:/i.test(h.subject || "") ? h.subject : `Fwd: ${h.subject || ""}`;
       draft.inReplyTo = { id: m.id, forwarded: true };
       const hdr = `---------- Forwarded message ----------<br>From: ${esc(fmtList(h.from))}${when ? `<br>Date: ${when}` : ""}<br>Subject: ${esc(h.subject || "")}<br>To: ${esc(fmtList(h.to))}${h.cc?.length ? `<br>Cc: ${esc(fmtList(h.cc))}` : ""}<br><br>`;
-      draft.quoteHtml = `<div class="ymq">${hdr}${opts.body.html}</div>`;
+      // as in a reply, the sender's style sheets stay out of the outgoing message
+      draft.quoteHtml = `<div class="ymq">${hdr}${withoutStyleSheets(opts.body.html)}</div>`;
       draft.quoteText = hdr.replace(/<br>/g, "\n").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") + toText(opts.body.html);
       draft.refs = (opts.body.attachments || []).filter(a => a.disposition !== "inline" && a.partId)
         .map(a => ({ messageId: m.id, partId: a.partId, contentId: a.contentId, filename: a.filename || "Untitled", size: a.size || 0 }));
@@ -416,6 +417,12 @@ function extractInline(html, taken = new Set()) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const inline = [];
   let n = 0;
+  // A Yahoo part address that could not be inlined would show recipients the mailbox id, and
+  // could not load for them anyway.
+  for (const img of doc.querySelectorAll("img[src]")) {
+    let host = ""; try { host = new URL(img.getAttribute("src")).hostname; } catch { /* relative or data: */ }
+    if (/(^|\.)mail\.yahoo\.com$/i.test(host)) img.remove();
+  }
   for (const img of doc.querySelectorAll("img[src^='data:']")) {
     const { bytes, mime } = dataImage(img.getAttribute("src")) || {};
     if (!mime) { img.remove(); continue; }

@@ -283,6 +283,23 @@ scenario("discard while the first save is running", async ({ page, calls, mock }
   expect(!/could not/.test(await notice(page)), "no error notice: " + await notice(page));
 });
 
+scenario("outgoing mail carries no sender style sheet and no Yahoo address", async ({ page, calls, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id.startsWith("MSG1_")) body.html += '<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==X/content/parts/@.id==9/other">'; };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  const out = [];
+  for (const key of ["f", "r"]) {
+    await page.locator("#list").focus(); await page.keyboard.press(key); await page.waitForSelector("#compose:not(.hidden)");
+    await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(n => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
+    out.push({ key, style: /<style/i.test(html), yahoo: /(src|href|srcset)="[^"]*mail\.yahoo\.com/i.test(html) });
+    await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  }
+  expect(out.every(o => !o.style && !o.yahoo), "forward and reply carry neither: " + JSON.stringify(out));
+});
+
 scenario("saving again does not upload attachments again", async ({ page, calls, mock }, expect) => {
   let partial = 0;
   mock.handler = async ({ name, top }) => {
