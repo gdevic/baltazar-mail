@@ -36,6 +36,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
   const calls = [], docCalls = [];
+  let failSaves = 0;   // draft saves to answer with a server error
+  let failMoves = 0;   // moves to answer with a server error
   let hiddenFetched = false;
   // GitHub's release API, asked once a day for the newest version
   const ghCalls = [];
@@ -57,6 +59,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     calls.push({ name, origin: headers.origin, envelope, fileParts });
     const top = envelope?.requests?.[0] || {};
     const uri = top.uri || "";
+    if (name === "messages.move" && failMoves > 0) {
+      failMoves--;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "EC-5003", message: "Internal error" } }) });
+    }
+    if (name === "messages.saveV3" && failSaves > 0) {
+      failSaves--;
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "ES-5000", message: "save failed" } }) });
+    }
     let responses;
     if (uri.endsWith("/folders")) responses = [{ id: top.id, httpCode: 200, response: { result: { folders, accounts: [] } } }];
     else if (uri.endsWith("/accounts")) responses = [{ id: top.id, httpCode: 200, response: { result: { accounts } } }];
@@ -149,7 +159,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     // The inline part Yahoo cannot render answers 501, as in production; the browser logs it.
     if (/\/parts\/@\.id==5\/thumbnail/.test(m.location()?.url || "") && /status of 501/.test(t)) return;
     if (/Content Security Policy|violates the following/.test(t)) cspViolations.push(t.slice(0, 220));
-    else if (m.type() === "error" && !t.includes("net::ERR_FAILED")) errors.push("console: " + t.slice(0, 200));
+    // EC-5003 is the error the failed-archive step provokes on purpose; the app logs it
+    else if (m.type() === "error" && !t.includes("net::ERR_FAILED") && !t.includes('"code":"EC-5003"')) errors.push("console: " + t.slice(0, 200));
   };
   page.on("console", onConsole);
   await page.goto(`chrome-extension://${extId}/mail.html`);
@@ -394,6 +405,15 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   // undo brings the spammed message back into the reader
   await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, spamWas, { timeout: 4000 }).catch(() => {});
   results.spam.undone = { subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
+  // a failed action says so in a notice, in words first, with a report to copy; × dismisses it
+  const rowsBefore = await page.locator("#rows .row").count();
+  failMoves = 1;
+  await page.locator("#list").focus(); await page.keyboard.press("e");
+  await page.waitForSelector("#notice:not(.hidden)", { timeout: 4000 }).catch(() => {});
+  results.failedMove = { text: await page.locator("#notice-text").textContent(), tech: await page.locator("#notice-text .tech").textContent().catch(() => ""),
+    copy: await page.locator("#notice-copy").isVisible(), rowsKept: (await page.locator("#rows .row").count()) === rowsBefore };
+  await page.locator("#notice-close").click();
+  results.failedMove.dismissed = await page.locator("#notice").isHidden();
   // another device deletes the open message: the next refresh shows its neighbour
   goneElsewhere.add(spamWas.replace(/^Subject (\d+)-(\d+)$/, "MSG$1_$2"));
   await page.locator("#list").focus(); await page.keyboard.press("R");
@@ -433,9 +453,39 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.waitForTimeout(600);
   results.clickAway = { composerHidden: await page.locator("#compose").isHidden(), readerText: (await frameText()).slice(0, 20), draftSaved: calls.some(c => c.name === "messages.saveV3") };
 
+
   // new message with attachment, send with 2 s hold, cancel, then send again
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("address book:"), null, { timeout: 15000 }).catch(() => {});
   results.addressBook = await page.locator("#st-msg").textContent();
+
+  // a message that cannot be saved is never thrown away: Escape and clicking another message
+  // leave the composer open with the reason in a notice, until the save succeeds
+  const saves = () => calls.filter(c => c.name === "messages.saveV3").length;
+  const composerOpen = () => page.locator("#compose").isVisible();
+  const stMsg = () => page.locator("#st-msg").textContent();
+  const notice = async () => (await page.locator("#notice").isVisible()) ? await page.locator("#notice-text").textContent() : "";
+  await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.locator("#c-to input").type("john");
+  await page.fill("#c-subject", "Keep me");
+  await page.locator("#c-editor").click(); await page.keyboard.type("do not lose this");
+  const savesBefore = saves();
+  await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+  const badAddress = { open: await composerOpen(), notice: await notice(), saved: saves() > savesBefore };
+  await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(400);
+  const clickAwayBad = { open: await composerOpen(), notice: await notice() };
+  // the rest needs the composer; with it already gone the assertions below report the loss
+  let serverError = {};
+  if (clickAwayBad.open) {
+    await page.locator("#c-to input").fill("keep@example.com"); await page.locator("#c-to input").press("Enter");
+    failSaves = 1;
+    await page.locator("#c-editor").click(); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+    serverError = { open: await composerOpen(), notice: await notice(), copy: await page.locator("#notice-copy").isVisible(), body: await page.locator("#c-editor").innerText() };
+    await page.locator("#c-editor").click(); await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 5000 }).catch(() => {});
+  }
+  const lastSave = calls.filter(c => c.name === "messages.saveV3").pop();
+  const savedMsg = lastSave?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.message;
+  results.keepUnsaved = { badAddress, clickAwayBad, serverError, closed: !(await composerOpen()), status: await stMsg(), noticeAfter: await notice(), savedSubject: savedMsg?.headers?.subject };
   await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
   results.noListOnOpen = await page.locator("#c-suggest").isHidden();
   await page.locator("#c-to input").click();
@@ -650,6 +700,13 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
+  const fm = results.failedMove;
+  expect(fm.text.startsWith("Could not archive the messages.") && /EC-5003/.test(fm.tech) && fm.copy && fm.rowsKept && fm.dismissed, "failed archive shows a notice in words with a report: " + JSON.stringify(fm));
+  const k = results.keepUnsaved;
+  expect(k.badAddress.open && !k.badAddress.saved && /could not be saved: Not an address: john/.test(k.badAddress.notice), "unsaveable address keeps composer open, with a notice: " + JSON.stringify(k.badAddress));
+  expect(k.clickAwayBad.open && /could not be saved/.test(k.clickAwayBad.notice), "clicking another message keeps unsaveable composer open: " + JSON.stringify(k.clickAwayBad));
+  expect(k.serverError.open && /could not be saved: draft save failed/.test(k.serverError.notice) && k.serverError.copy && k.serverError.body.includes("do not lose this"), "failed save keeps composer and text, with a report to copy: " + JSON.stringify(k.serverError));
+  expect(k.closed && k.status === "message saved to Drafts" && k.noticeAfter === "" && k.savedSubject === "Keep me", "successful save closes composer and clears the notice: " + JSON.stringify(k));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }
   console.log("PASS");

@@ -123,11 +123,59 @@ function dayLabel(epoch) {
 const subjectHtml = s => esc(s || "(no subject)").replace(/\^_(.*?)\^_/g, "<mark>$1</mark>");
 const plainSubject = s => (s || "(no subject)").replace(/\^_/g, "");
 
-// Errors that mean "no session": show the sign-in panel instead of a status line.
-function handleError(e, what) {
+// What the user must not miss (something failed or did not happen) appears in a notice above the
+// status bar until dismissed; routine progress stays in the status line. A notice given a key is
+// also cleared by clearNotice(key) once its cause is resolved. Errors offer a copyable report.
+let noticeKey = null, noticeReport = "";
+function notify(text, { info = false, key = null, err = null, what = "", detail = "" } = {}) {
+  status(detail ? `${text} ${detail}` : text);
+  const tech = document.createElement("span");
+  tech.className = "tech"; tech.textContent = detail;
+  $("notice-text").replaceChildren(text, ...(detail ? [" ", tech] : []));
+  $("notice").classList.toggle("info", info);
+  noticeKey = key;
+  noticeReport = err ? errorReport(what, err) : "";
+  $("notice-copy").classList.toggle("hidden", !noticeReport);
+  $("notice").classList.remove("hidden");
+}
+function clearNotice(key) { if (key === noticeKey) $("notice").classList.add("hidden"); }
+function errorReport(what, e) {
+  const detail = e.detail === undefined ? "" : (typeof e.detail === "string" ? e.detail : JSON.stringify(e.detail)).slice(0, 1500);
+  return [`Baltazar Mail ${chrome.runtime.getManifest().version}`, navigator.userAgent, `${what}: ${e.name}: ${e.message}`,
+    detail, (e.stack || "").split("\n").slice(1, 6).join("\n")].filter(Boolean).join("\n");
+}
+$("notice-close").onclick = () => $("notice").classList.add("hidden");
+$("notice-copy").onclick = async () => {
+  let text = noticeReport;
+  try { text = text.replace(/^(Baltazar Mail \S+)/, `$1 (${(await chrome.management.getSelf()).installType})`); } catch { /* version alone */ }
+  try {
+    await navigator.clipboard.writeText(text);
+    $("notice-copy").textContent = "Copied";
+    setTimeout(() => { $("notice-copy").textContent = "Copy details"; }, 1500);
+  } catch { status("could not copy to the clipboard"); }
+};
+
+// What failed, in words, for each action that reports errors; the technical cause follows it.
+const FAILED = {
+  start: "Could not load your mailbox.", list: "Could not load the message list.",
+  "fetching the message": "Could not open the message.", "rendering the message": "Could not show the message.",
+  "mark read": "Could not mark the message as read.", draft: "Could not open the draft.",
+  send: "The message was not sent; it is back in the composer.", print: "Could not print the message.",
+  undo: "Could not undo the last action.", redo: "Could not redo the action.",
+  mark: "Could not change whether the messages are read.", star: "Could not change the stars.",
+  move: "Could not move the messages.", archive: "Could not archive the messages.", delete: "Could not delete the messages.",
+  spam: "Could not mark the messages as spam.", notspam: "Could not mark the messages as not spam.",
+};
+// A request that never reached Yahoo fails with the browser's bare "Failed to fetch".
+const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? "Yahoo could not be reached; check the connection." : e.message;
+
+// Errors that mean "no session" show the sign-in panel; others a notice, or with quiet (a
+// background check that simply runs again) only the status line.
+function handleError(e, what, { quiet = false } = {}) {
   if (e instanceof api.NotSignedIn) { showSignIn(); return; }
-  status(`${what}: ${e.message}`);
   console.error(what, e);
+  if (quiet) status(`${what}: ${cause(e)}`);
+  else notify(FAILED[what] || `Something went wrong (${what}).`, { detail: cause(e), err: e, what });
 }
 
 // ---------- folders ----------
@@ -742,7 +790,7 @@ function toggleReaderColours() {
 async function open(i) {
   const m = state.messages[i];
   if (!m) return;
-  if (compose.isOpen()) await compose.close(true);
+  if (!(await compose.close(true))) return;
   state.openId = m.id;
   clearTimeout(markReadTimer);
   status("fetching body…");
@@ -828,7 +876,7 @@ function hideReaderForCompose(hide) {
 }
 
 async function startCompose(mode) {
-  if (compose.isOpen()) await compose.close(true);
+  if (!(await compose.close(true))) return;
   const me = $("account").textContent;
   if (mode === "new") { hideReaderForCompose(true); await compose.open({ mode, myEmail: me }); return; }
   const m = state.messages[state.selected];
@@ -842,7 +890,7 @@ async function startCompose(mode) {
 
 async function editDraft(i) {
   const m = state.messages[i]; if (!m) return;
-  if (compose.isOpen()) await compose.close(true);
+  if (!(await compose.close(true))) return;
   status("loading draft…");
   let r;
   try { r = await api.body(m.id); } catch (e) { handleError(e, "draft"); return; }
@@ -1002,7 +1050,14 @@ async function redo() {
 // ---------- actions ----------
 const byIds = ids => { const set = new Set(ids); return state.messages.filter(m => set.has(m.id)); };
 const groupBy = (pairs) => { const g = new Map(); for (const [k, v] of pairs) { if (!g.has(k)) g.set(k, []); g.get(k).push(v); } return g; };
-const partial = (r, what) => { if (r.failed.length) status(`${what}: ${r.failed.length} of ${r.ok.length + r.failed.length} failed; the rest done`); };
+// Some messages of a batch failed: say how many, and that the rest went through.
+const DONE = { mark: "changed", star: "changed", move: "moved", archive: "archived", delete: "deleted", spam: "marked as spam", notspam: "marked not spam" };
+const partial = (r, what) => {
+  if (!r.failed.length) return;
+  const n = r.failed.length, total = n + r.ok.length;
+  const err = Object.assign(new Error(`${n} of ${total} failed`), { detail: { failed: r.failed } });
+  notify(`${n} of ${plural(total, "message")} could not be ${DONE[what] || "changed"}; the rest were.`, { err, what });
+};
 
 async function doSetRead(ids, read) {
   if (!ids.length) return;
@@ -1061,7 +1116,7 @@ async function doMove(ids, folderId, verb = "move") {
     pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null,
       undo: async () => {
         for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) await api.move(g, from);
-        if (known.length < done.length) status(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`);
+        if (known.length < done.length) notify(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`, { info: true });
       },
       redo: () => api.move(done.map(o => o.id), dest.id) });
   } catch (e) { handleError(e, verb); }
@@ -1550,7 +1605,7 @@ async function poll() {
     const v = state.view;
     if (v.kind === "folder" && changed.includes(v.folderId) && !busy) await loadList("refresh");
     if (changed.includes(inboxId()) || changed.includes(folderByType("SENT")?.id)) syncContacts();
-  } catch (e) { handleError(e, "poll"); }
+  } catch (e) { handleError(e, "poll", { quiet: true }); }
   finally { polling = false; }
   checkUpdate().catch(() => {});  // network at most once a day; otherwise a storage read
 }
@@ -1634,7 +1689,7 @@ $("r-dark").onclick = toggleReaderColours;
 $("compose-btn").onclick = () => startCompose("new");
 for (const b of document.querySelectorAll("[data-reply]")) b.onclick = () => startCompose(b.dataset.reply);
 compose.init({
-  status, folderByType, settings: () => settings,
+  status, notify, clearNotice, folderByType, settings: () => settings,
   saveSetting: (k, v) => { settings[k] = v; saveSettings(); },
   onClose: () => { hideReaderForCompose(false); $("list").focus(); if (folderType(state.byId.get(state.view.folderId)) === "DRAFT") loadList("refresh"); },
   scheduleSend,

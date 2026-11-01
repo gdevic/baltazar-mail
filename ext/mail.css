@@ -17,10 +17,10 @@ button { font: inherit; color: var(--fg); background: var(--bg3); border: 1px so
 button:hover { border-color: var(--fg3); }
 a { color: var(--link); }
 
-#app { display: grid; height: 100%; grid-template-rows: 32px 1fr 20px; grid-template-columns: var(--folder-w) 5px var(--list-w) 5px 1fr;
-  grid-template-areas: "top top top top top" "folders s1 list s2 reader" "status status status status status"; }
-#app.horizontal { grid-template-rows: 32px var(--list-h) 5px 1fr 20px; grid-template-columns: var(--folder-w) 5px 1fr;
-  grid-template-areas: "top top top" "folders s1 list" "folders s1 s2" "folders s1 reader" "status status status"; }
+#app { display: grid; height: 100%; grid-template-rows: 32px auto 1fr 20px; grid-template-columns: var(--folder-w) 5px var(--list-w) 5px 1fr;
+  grid-template-areas: "top top top top top" "notice notice notice notice notice" "folders s1 list s2 reader" "status status status status status"; }
+#app.horizontal { grid-template-rows: 32px auto var(--list-h) 5px 1fr 20px; grid-template-columns: var(--folder-w) 5px 1fr;
+  grid-template-areas: "top top top" "notice notice notice" "folders s1 list" "folders s1 s2" "folders s1 reader" "status status status"; }
 .split { background: var(--bg2); }
 #split1 { grid-area: s1; cursor: col-resize; border-right: 1px solid var(--line); }
 #split2 { grid-area: s2; cursor: col-resize; border-right: 1px solid var(--line); }
@@ -144,6 +144,15 @@ body.dragging iframe { pointer-events: none; }
 #r-body { flex: 1; border: 0; background: #fff; }
 :root[data-theme="dark"] #r-body { background: #fff; }
 
+/* Notices: what the user must not miss, in a full-width bar under the top bar that moves the
+   panes down rather than covering any of them */
+#notice { grid-area: notice; display: flex; align-items: center; gap: 10px; padding: 7px 10px 7px 12px; color: var(--fg); background: color-mix(in srgb, #d93025 12%, var(--bg2)); border-bottom: 1px solid var(--line); border-left: 4px solid #d93025; font-size: calc(13 * var(--fu)); line-height: 1.4; }
+#notice.info { background: color-mix(in srgb, var(--accent) 12%, var(--bg2)); border-left-color: var(--accent); }
+#notice-text { flex: 1; overflow-wrap: anywhere; }
+#notice-text .tech { color: var(--fg2); font-size: calc(12 * var(--fu)); }
+#notice-copy { flex: none; }
+#notice-close { flex: none; border: 0; background: none; color: var(--fg2); font-size: calc(16 * var(--fu)); line-height: 1; padding: 0 4px; }
+#notice-close:hover { color: var(--fg); }
 #status { grid-area: status; display: flex; justify-content: space-between; padding: 0 10px; font-size: calc(11 * var(--fu)); color: var(--fg3); background: var(--bg2); border-top: 1px solid var(--line); font-family: var(--mono); }
 
 #signin { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; }

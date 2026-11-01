@@ -9,7 +9,10 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const fmt = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
 const fmtList = l => (l || []).map(fmt).join(", ");
 
-let hooks = null;          // { status, folderByType, settings, onClose, onSent, scheduleSend }
+let hooks = null;          // { status, notify, clearNotice, folderByType, settings, onClose, onSent, scheduleSend }
+// Composer problems share one notice, cleared once the message saves, sends or closes.
+const warn = (text, err) => hooks.notify(text, { key: "compose", err, what: "compose" });
+let saveError = null;      // the error of the last failed draft save, for the notice's report
 
 // ---------- address field: chips plus autocomplete ----------
 class AddrField {
@@ -31,11 +34,11 @@ class AddrField {
   isEmpty() { return !this.list.length && !this.input.value.trim(); }
   focus() { this.input.focus(); }
   add(a) { if (!this.list.some(x => x.email.toLowerCase() === a.email.toLowerCase())) this.list.push(a); dirty = true; this.render(); }
-  addText(t) { let parts; try { parts = parseAddrs(t); } catch (e) { hooks.status(e.message); this.input.value = t; return; } for (const a of parts) this.add(a); this.input.value = ""; }
+  addText(t) { let parts; try { parts = parseAddrs(t); } catch (e) { warn(e.message); this.input.value = t; return; } for (const a of parts) this.add(a); this.input.value = ""; }
   commit(strict) {
     const v = this.input.value.trim(); if (!v) return true;
     try { for (const a of parseAddrs(v)) this.add(a); this.input.value = ""; return true; }
-    catch (e) { if (strict) hooks.status(e.message); return false; }
+    catch (e) { if (strict) warn(e.message); return false; }
   }
   render() {
     for (const ch of [...this.el.querySelectorAll(".chip")]) ch.remove();
@@ -155,7 +158,7 @@ export function isOpen() { return !$("compose").classList.contains("hidden"); }
 async function loadAccounts() {
   if (accounts.length) return accounts;
   try { accounts = (await api.accounts()).accounts.filter(a => a.isSending || a.isPrimary || a.type === "ALIAS"); }
-  catch (e) { hooks.status(`accounts: ${e.message}`); accounts = []; }
+  catch (e) { warn(`Could not load your sending addresses: ${e.message}`, e); accounts = []; }
   const sel = $("c-from");
   sel.innerHTML = accounts.map(a => `<option value="${esc(a.email)}">${esc(a.sendingName ? `${a.sendingName} <${a.email}>` : a.email)}</option>`).join("");
   return accounts;
@@ -237,15 +240,22 @@ function focusEditor() {
   sel.removeAllRanges(); sel.addRange(range);
 }
 
-// Closes the composer. With save, a message the user has changed goes to Drafts first;
-// an untouched reply or empty new message is simply dropped.
+// Closes the composer and returns true. With save, a message the user has changed goes to
+// Drafts first; an untouched reply or empty new message is simply dropped. If the save fails,
+// the composer stays open with the reason shown and close returns false, so nothing is lost.
 export async function close(save = true) {
-  if (!isOpen()) return;
+  if (!isOpen()) return true;
+  if (save && dirty && hasContent()) {
+    const why = await saveNow(true);
+    if (why) { warn(`The message was kept open because it could not be saved: ${why}. Discard closes it without saving.`, saveError); return false; }
+    hooks.status("message saved to Drafts");
+  }
   clearInterval(autosaveTimer);
   hideSuggest();
-  if (save && dirty && hasContent()) { await saveNow(true); hooks.status("message saved to Drafts"); }
   $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null;
+  hooks.clearNotice("compose");
   hooks.onClose();
+  return true;
 }
 
 // ---------- editor ----------
@@ -361,7 +371,7 @@ function placeCaretAt(x, y) {
 async function insertImages(files) {
   const ed = $("c-editor"); ed.focus();
   for (const f of files) {
-    if (f.size > 10 * 1024 * 1024) { hooks.status(`${f.name}: larger than 10 MB, attach it instead`); continue; }
+    if (f.size > 10 * 1024 * 1024) { warn(`${f.name} is larger than 10 MB to place in the text; attach it instead.`); continue; }
     const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(f); });
     const img = document.createElement("img");
     img.src = dataUrl; img.alt = f.name; img.dataset.name = f.name || `pasted-${Date.now()}.png`;
@@ -494,30 +504,36 @@ function collect() {
 }
 
 // ---------- save / send ----------
+// Saves the message to Drafts. Returns "" when saved, otherwise the reason it was not, which is
+// also shown, except an unfinished address during a silent save (autosave, closing).
 async function saveNow(silent = false) {
-  if (!draft) return;
+  if (!draft) return "no message";
+  saveError = null;
   let d;
-  try { d = collect(); } catch (e) { if (!silent) hooks.status(e.message); return; }
-  if (!d.draftFolderId) { hooks.status("no Drafts folder"); return; }
+  try { d = collect(); } catch (e) { if (!silent) warn(e.message); return e.message; }
+  if (!d.draftFolderId) { warn("There is no Drafts folder to save the message in."); return "no Drafts folder"; }
   try {
     const r = await api.saveDraft(d);
     draft.savedId = r.message?.id || draft.savedId;
     dirty = false;
-    hooks.status(`draft saved${silent ? "" : ""}`, r.ms);
-  } catch (e) { hooks.status(`draft save failed: ${e.message}`); }
+    hooks.clearNotice("compose");
+    hooks.status("draft saved", r.ms);
+    return "";
+  } catch (e) { saveError = e; warn(`The draft could not be saved: ${e.message}`, e); return `draft save failed: ${e.message}`; }
 }
 
 async function send() {
   if (!draft) return;
   let d;
-  try { d = collect(); } catch (e) { hooks.status(e.message); return; }
-  if (!d.to.length && !d.cc.length && !d.bcc.length) { hooks.status("no recipients"); fields.to.focus(); return; }
+  try { d = collect(); } catch (e) { warn(`Not sent: ${e.message}`); return; }
+  if (!d.to.length && !d.cc.length && !d.bcc.length) { warn("Not sent: the message has no recipients."); fields.to.focus(); return; }
   if (!d.subject && !confirm("Send without a subject?")) return;
   const sentId = hooks.folderByType("SENT")?.id;
-  if (!sentId || !d.draftFolderId) { hooks.status("Sent or Drafts folder not found"); return; }
+  if (!sentId || !d.draftFolderId) { warn("Not sent: the Sent or Drafts folder was not found."); return; }
   const snapshot = { ...draft, d, editorHtml: draft.html ? $("c-editor").innerHTML : null };
   clearInterval(autosaveTimer);
   $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null; dirty = false;
+  hooks.clearNotice("compose");
   hooks.onClose();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
@@ -550,5 +566,5 @@ async function discard() {
   if (hasContent() && !confirm("Discard this message?")) return;
   const id = draft.savedId;
   close(false);
-  if (id) { try { await api.deleteForever([id]); hooks.status("draft discarded"); } catch (e) { hooks.status(`could not delete draft: ${e.message}`); } }
+  if (id) { try { await api.deleteForever([id]); hooks.status("draft discarded"); } catch (e) { warn(`The saved draft could not be deleted: ${e.message}`, e); } }
 }
