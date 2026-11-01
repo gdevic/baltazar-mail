@@ -8,13 +8,12 @@ const tail = `
   await page.keyboard.press("j"); await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.getElementById("r-subject").textContent.length > 0);
   await page.setViewportSize({ width: 1100, height: 520 });
-  const { THEMES } = await import(\`http://localhost:\${port}/themes.js\`).catch(() => ({ THEMES: null }));
-  const ids = ["dark","solarizedDark","gruvboxDark","catppuccinMocha","nord","light","solarizedLight","gruvboxLight","catppuccinLatte","nordLight"];
-  for (const id of ids) {
-    await page.evaluate(async (id) => {
-      const m = await import("./themes.js"); m.applyTheme(id);
-    }, id);
-    await page.screenshot({ path: path.join(__dirname, "..", "out", "shots", id + ".png") });
+  const ids = await page.evaluate(async () => Object.keys((await import("./themes.js")).THEMES));
+  for (const level of [0, 5, 10]) for (const id of ids) {
+    await page.evaluate(async ([id, level]) => {
+      const m = await import("./themes.js"); m.applyTheme(id, level);
+    }, [id, level]);
+    await page.screenshot({ path: path.join(__dirname, "..", "out", "shots", id + (level ? "-" + level : "") + ".png") });
   }
   await browser.close(); server.close();
 })().catch(e => { console.error(e); process.exit(1); });

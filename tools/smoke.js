@@ -153,7 +153,8 @@ const folders = [
   await page.keyboard.press(",");
   await page.click('input[name=layout][value=horizontal]');
   await page.click('input[name=theme][value=light]');
-  await page.selectOption("#lightTheme", "solarizedLight");
+  await page.selectOption("#lightTheme", "sky");
+  await page.locator("#contrast").fill("7");
   await page.click("#settings-close");
   const box = await page.locator("#split2").boundingBox();
   await page.mouse.move(box.x + 10, box.y + 2); await page.mouse.down(); await page.mouse.move(box.x + 10, box.y + 150, { steps: 5 }); await page.mouse.up();
@@ -166,6 +167,18 @@ const folders = [
   const persisted = await page.evaluate(() => ({ layout: document.getElementById("app").className, theme: document.documentElement.dataset.theme, bg: getComputedStyle(document.documentElement).getPropertyValue("--bg"),
     folderW: getComputedStyle(document.documentElement).getPropertyValue("--folder-w"), listH: getComputedStyle(document.documentElement).getPropertyValue("--list-h") }));
   console.log("persisted", JSON.stringify(persisted));
+  // Contrast level and palette survive a reload; a palette id that no longer exists falls back to Paper.
+  const { roles } = await import(require("url").pathToFileURL(path.join(__dirname, "..", "ext", "themes.js")).href);
+  const cssVar = v => page.evaluate(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim(), v);
+  const level7 = { line: await cssVar("--line"), contrast: await page.evaluate(async () => (await chrome.storage.local.get("settings")).settings.contrast), field: await page.locator("#contrast").inputValue(), shown: await page.locator("#contrast-n").textContent() };
+  await page.evaluate(() => { const s = JSON.parse(localStorage.getItem("l:settings")); s.lightTheme = "gone"; s.contrast = 0; localStorage.setItem("l:settings", JSON.stringify(s)); });
+  await page.reload();
+  await page.waitForSelector("#rows .row");
+  const stale = { bg: await cssVar("--bg"), line: await cssVar("--line"), choice: await page.locator("#lightTheme").inputValue() };
+  console.log("contrast", JSON.stringify({ level7, stale }));
+  const expectTheme = (cond, what) => { if (!cond) errors.push("assert: " + what); };
+  expectTheme(level7.contrast === 7 && level7.field === "7" && level7.shown === "7" && level7.line === roles("sky", 7).line && level7.line !== roles("sky", 0).line, "contrast 7 persists: " + JSON.stringify(level7));
+  expectTheme(stale.bg === roles("light").bg && stale.line === roles("light").line && stale.choice === "light", "missing palette falls back to Paper: " + JSON.stringify(stale));
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();
   server.close();

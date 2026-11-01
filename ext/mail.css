@@ -1,13 +1,14 @@
+/* Graphite and Paper at contrast 0 (themes.js) until applyTheme has run */
 :root {
-  --bg: #15181c; --bg2: #1c2026; --bg3: #242a31; --fg: #d8d4c8; --fg2: #9a968c; --fg3: #6c6962;
-  --line: #2c333b; --sel: #2f3a48; --sel-line: #4f6a8a; --accent: #d9a441; --unread: #f0ece0; --link: #7fb3e0;
+  --bg: #15181c; --bg2: #202429; --bg3: #292f36; --fg: #d8d4c8; --fg2: #9a968c; --fg3: #706e67;
+  --line: #3b4148; --sel: #2f3a48; --sel-line: #56708f; --accent: #d9a441; --unread: #f0ece0; --link: #7fb3e0;
   --font: ui-sans-serif, "Segoe UI", system-ui, sans-serif; --mono: ui-monospace, Consolas, monospace;
   --row-h: 22px; --fs: 13px; --fu: calc(var(--fs) / 13);
   --folder-w: 230px; --list-w: 460px; --list-h: 40%;
 }
 :root[data-theme="light"] {
-  --bg: #f4f1ea; --bg2: #ebe7de; --bg3: #e1dcd1; --fg: #23211d; --fg2: #5c594f; --fg3: #8a877d;
-  --line: #d6d1c5; --sel: #d9e2ee; --sel-line: #7f9bbd; --accent: #a8691a; --unread: #000; --link: #1c5b9c;
+  --bg: #f4f1ea; --bg2: #e9e4d8; --bg3: #dbd5c7; --fg: #1c1a17; --fg2: #4f4c44; --fg3: #6f6b62;
+  --line: #c2bbac; --sel: #b8cbe3; --sel-line: #3f6b9e; --accent: #94570e; --unread: #000000; --link: #1c5b9c;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: var(--fs)/1.35 var(--font); }
@@ -333,4 +334,7 @@ body.dragging iframe { pointer-events: none; }
 .theme-row { display: flex; align-items: center; gap: 8px; }
 .theme-row label { flex: 1; }
 .theme-row select { min-width: 150px; }
+.contrast-row { display: flex; align-items: center; gap: 8px; }
+.contrast-row input { flex: 1; max-width: 220px; accent-color: var(--sel-line); }
+.contrast-row output { width: 2ch; text-align: right; font-variant-numeric: tabular-nums; }
 .theme-note { color: var(--fg3); font-size: calc(11 * var(--fu)); }

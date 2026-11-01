@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { THEMES, applyTheme } from "./themes.js";
+import { THEMES, applyTheme, clampContrast } from "./themes.js";
 import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
@@ -14,7 +14,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -23,6 +23,8 @@ async function loadSettings() {
   // Row height used to be pixels at the normal text size (22 px is 100%).
   if (stored.rowH && stored.rowPct == null) settings.rowPct = Math.min(150, Math.max(80, Math.round(stored.rowH / 22 * 20) * 5));
   delete settings.rowH;
+  // A palette that is gone (renamed or dropped in an update) falls back to the default.
+  for (const sel of ["darkTheme", "lightTheme"]) if (!THEMES[settings[sel]]) settings[sel] = DEFAULTS[sel];
   state.expanded = new Set(settings.expanded);
 }
 
@@ -39,7 +41,7 @@ const systemDark = matchMedia("(prefers-color-scheme: dark)");
 function applyLayout() {
   const mode = settings.theme === "system" ? (systemDark.matches ? "dark" : "light") : settings.theme;
   const wasDark = document.documentElement.dataset.theme === "dark";
-  applyTheme(mode === "dark" ? settings.darkTheme : settings.lightTheme);
+  applyTheme(mode === "dark" ? settings.darkTheme : settings.lightTheme, settings.contrast);
   syncDarkButton();
   if (wasDark !== darkApp() && currentBody && state.openId) showBody();
   $("app").classList.toggle("horizontal", settings.layout === "horizontal");
@@ -58,6 +60,8 @@ function applyLayout() {
 function syncSettingsForm() {
   $("darkTheme").value = settings.darkTheme;
   $("lightTheme").value = settings.lightTheme;
+  $("contrast").value = settings.contrast;
+  $("contrast-n").textContent = settings.contrast;
   for (const el of document.querySelectorAll("#settings input[type=radio]")) el.checked = settings[el.name] === el.value;
   $("poll").value = settings.pollSec;
   $("density").value = settings.rowPct;
@@ -1474,6 +1478,13 @@ function wireSettings() {
     el.innerHTML = Object.entries(THEMES).filter(([, t]) => t.dark === dark).map(([id, t]) => `<option value="${id}">${t.name}</option>`).join("");
     el.onchange = () => { settings[sel] = el.value; applySettings(); saveSettings(); };
   }
+  // The palette follows the slider while it moves; the setting is saved when it is let go.
+  $("contrast").oninput = () => {
+    settings.contrast = clampContrast($("contrast").value);
+    $("contrast-n").textContent = settings.contrast;
+    applyLayout();
+  };
+  $("contrast").onchange = () => { settings.contrast = clampContrast($("contrast").value); applySettings(); saveSettings(); };
   for (const el of document.querySelectorAll("#settings input[type=radio]"))
     el.onchange = () => { settings[el.name] = el.value; applySettings(); saveSettings(); };
   $("poll").onchange = () => { settings.pollSec = Math.max(5, Number($("poll").value) || 20); applySettings(); saveSettings(); };
