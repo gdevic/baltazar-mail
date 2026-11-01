@@ -203,6 +203,7 @@ export async function open(opts) {
     case "draft": {
       draft.csid = m.csid || draft.csid;
       draft.savedId = m.id;
+      draft.files = [...(opts.files || [])];
       to = h.to || []; cc = h.cc || []; subject = h.subject || "";
       bodyHtml = opts.body.html || "";
       if (m.inReplyTo?.messageReference?.id) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };

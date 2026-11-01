@@ -654,6 +654,22 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     const away = await snap();
     await folder("Projects");
     results.folderMemory = { before, away, back: await snap() };
+
+    // editing a draft keeps its attachments and inline images: saving it again uploads them
+    await folder("Draft");
+    await page.locator("#rows .row").first().click();
+    await page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 }).catch(() => {});
+    const chipsNow = await page.locator("#c-filelist .c-file").allTextContents();
+    const imgSrcs = await page.locator("#c-editor img").evaluateAll(els => els.map(e => (e.getAttribute("src") || "").slice(0, 30)));
+    await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.type("edited ");
+    const callsBefore = calls.length;
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 8000 }).catch(() => {});
+    const saveCall = calls.slice(callsBefore).find(c => c.name === "messages.saveV3");
+    const html = saveCall?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload?.simpleBody?.html || "";
+    results.draftEdit = { chips: chipsNow.length, names: chipsNow.join(" "), imgSrcs, uploaded: (saveCall?.fileParts || []).map(p => p[1]),
+      partLinks: /cloud-apis\.mail\.yahoo\.com/.test(html), closed: await page.locator("#compose").isHidden() };
+    await folder("Projects");
   }
 
   // new mail while the tab is in the background: a green dot on the tab icon, gone when looked at
@@ -754,6 +770,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
   expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
+  const de = results.draftEdit;
+  expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 3 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&
+    ["report.pdf", "data.csv", "cv.docx", "deck.pptx"].every(n => de.uploaded.includes(n)) && !de.partLinks && de.closed, "editing a draft keeps its attachments and images: " + JSON.stringify(de));
   const sq = results.sendQueue;
   expect(/Queue B.*1 more message waiting/.test(sq.pending) && sq.leaveAsks, "two pending sends both wait, and leaving asks first: " + JSON.stringify(sq));
   expect(sq.reopened === "Queue B" && /Queue A/.test(sq.stillPending), "z reopens only the newest send: " + JSON.stringify(sq));

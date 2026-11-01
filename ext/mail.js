@@ -899,8 +899,25 @@ async function editDraft(i) {
   status("loading draft…");
   let r;
   try { r = await api.body(m.id); } catch (e) { handleError(e, "draft"); return; }
+  // Each save replaces the draft, so its inline images and attachments must travel again with
+  // it: images as embedded data, attachments as files cut out of its source. If they cannot be
+  // loaded the draft stays closed, so a save cannot strip them.
+  r.html = await inlineYahooParts(r.html);
+  const atts = r.attachments.filter(a => a.disposition !== "inline" && a.partId);
+  let files = [];
+  if (atts.length) {
+    status(`loading the draft's ${plural(atts.length, "attachment")}…`);
+    try {
+      const parsed = await viewer.parsedMessage(m.id);
+      files = atts.map(a => {
+        const x = extract(parsed, a.partId, a.filename);
+        return new File([x.bytes], a.filename || x.filename || "attachment", { type: x.type || "application/octet-stream" });
+      });
+    } catch (e) { notify("Could not load the draft's attachments, so it was not opened (it is unchanged).", { detail: e.message, err: e, what: "draft" }); return; }
+  }
   hideReaderForCompose(true);
-  await compose.open({ mode: "draft", message: r.message, body: r, myEmail: $("account").textContent });
+  await compose.open({ mode: "draft", message: r.message, body: r, files, myEmail: $("account").textContent });
+  status("");
 }
 
 // Undo-send: the message is held client-side for settings.undoSendSec, then sent.
