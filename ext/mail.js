@@ -995,11 +995,17 @@ function bumpFolder(id, dTotal, dUnread) {
 
 // ---------- serialisation ----------
 // All mutations, undo and redo run one at a time; repeats while busy are dropped, not queued.
+// Each one makes list loads already in flight stale, so they cannot undo its changes; a folder's
+// first page among them is loaded again afterwards, or the folder would stay empty.
 let busy = false;
 async function run(fn) {
   if (busy) { status("busy, try again in a moment"); return; }
+  const firstPage = state.loading;
   busy = true; ++state.listToken; updateToolbar();
-  try { await fn(); } finally { busy = false; updateToolbar(); }
+  try { await fn(); } finally {
+    busy = false; updateToolbar();
+    if (firstPage && state.loading) loadList("fresh");
+  }
 }
 
 // ---------- undo ----------

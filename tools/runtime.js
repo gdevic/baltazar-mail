@@ -38,6 +38,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const calls = [], docCalls = [];
   let failSaves = 0;   // draft saves to answer with a server error
   let failMoves = 0;   // moves to answer with a server error
+  let listDelay = 0;   // ms to hold message list answers, for actions during a slow load
   let hiddenFetched = false;
   // GitHub's release API, asked once a day for the newest version
   const ghCalls = [];
@@ -59,6 +60,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     calls.push({ name, origin: headers.origin, envelope, fileParts });
     const top = envelope?.requests?.[0] || {};
     const uri = top.uri || "";
+    if (name === "messageGroups.getList" && listDelay) await new Promise(r => setTimeout(r, listDelay));
     if (name === "messages.move" && failMoves > 0) {
       failMoves--;
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ error: { code: "EC-5003", message: "Internal error" } }) });
@@ -175,6 +177,17 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const results = { rows: results0.rows };
   // unread mail already there is shown in the title only; the tab icon stays plain
   results.tabIcon = await page.evaluate(() => ({ title: document.title, href: document.querySelector('link[rel="icon"]').href.split("/").slice(-2).join("/") }));
+
+  // an action while a folder's first page is still loading must not leave that folder empty
+  // (Shift+Z with nothing to redo goes through the same action path and changes no mail)
+  listDelay = 1200;
+  await page.locator("#folder-list .folder", { hasText: "Sent" }).click(); await page.waitForTimeout(150);
+  await page.locator("#list").focus(); await page.keyboard.press("Shift+Z");
+  await page.waitForTimeout(3500);
+  listDelay = 0;
+  results.slowLoad = { rows: await page.locator("#rows .row").count(), title: await page.locator("#list-title").textContent().catch(() => "") };
+  await page.locator("#folder-list .folder", { hasText: "Inbox" }).click(); await page.waitForSelector("#rows .row");
+  await page.waitForTimeout(300);
 
   // reading across folders
   await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(600);
@@ -700,6 +713,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
+  expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
   const fm = results.failedMove;
   expect(fm.text.startsWith("Could not archive the messages.") && /EC-5003/.test(fm.tech) && fm.copy && fm.rowsKept && fm.dismissed, "failed archive shows a notice in words with a report: " + JSON.stringify(fm));
   const k = results.keepUnsaved;
