@@ -577,6 +577,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.fill("#c-subject", "Runtime test");
   await page.locator("#c-editor").click({ position: { x: 20, y: 12 } }); await page.keyboard.type("Hello from the runtime test.");
   await page.setInputFiles("#c-files", { name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("attached text") });
+  // a different file with the same name, and one named like an inline image part
+  await page.setInputFiles("#c-files", [{ name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("another, longer note") }, { name: "inline-1.png", mimeType: "image/png", buffer: Buffer.from("not really") }]);
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
   await page.locator("#c-editor").click({ position: { x: 200, y: 12 } });
   await page.setInputFiles("#c-imgfile", { name: "shot.png", mimeType: "image/png", buffer: png });
@@ -783,8 +785,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.suggestions.length >= 2 && results.suggestions[0].includes("Sender"), "autocomplete suggestions: " + results.suggestions.join(","));
   expect(!results.afterHide.some(s => s.includes("s2@x.com")) && results.afterHide.length >= results.suggestions.length - 1, "hidden address gone: " + results.afterHide.join(","));
   expect(/^<div style="font-family:[^"]+;font-size:13px">/.test(results.sent.html) && results.sent.html.replace(/<[^>]+>/g, "").startsWith("Hello from the runtime test.") && results.sent.html.includes("ymsig"), "default font wrapper, typed text above signature: " + results.sent.html);
-  expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.inlineFiles.length === 1 && results.sent.uri.includes("uploadCount=2&totalAttachments=2"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
+  expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.attachments.filter(a => a.disposition === "inline").length === 1 && results.sent.uri.includes("uploadCount=4&totalAttachments=4"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
+  const names = results.sent.fileParts.map(p => p[1]);
+  expect(names.includes("note (2).txt") && new Set(names).size === names.length, "attachments with the same name get unique names: " + JSON.stringify(names));
   expect(results.sent.chain.some(c => c[0] === "SendMessage"), "send chained");
   expect(results.starCol.call.split(",")[0] === "messages.starFlagUpdate" && !results.starCol.call.includes("getBody") && results.starCol.on === 1, "star column toggles: " + JSON.stringify(results.starCol));
   expect(results.starredView.q.includes("is:flagged") && results.starredView.q.includes("-folderType:(TRASH)") && results.starredView.title === "Starred" && results.starredView.count === "8" && results.starredView.countQuery && results.starredView.active.includes("Starred") && results.starredView.order === "Inbox,Starred,Draft", "starred view: " + JSON.stringify(results.starredView));

@@ -207,7 +207,7 @@ export async function open(opts) {
     case "draft": {
       draft.csid = m.csid || draft.csid;
       draft.savedId = m.id;
-      draft.files = [...(opts.files || [])];
+      draft.files = withFiles([], opts.files || []);
       to = h.to || []; cc = h.cc || []; subject = h.subject || "";
       bodyHtml = opts.body.html || "";
       if (m.inReplyTo?.messageReference?.id) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };
@@ -402,7 +402,7 @@ function dataImage(src) {
   } catch { return null; }
 }
 
-function extractInline(html) {
+function extractInline(html, taken = new Set()) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const inline = [];
   let n = 0;
@@ -410,7 +410,7 @@ function extractInline(html) {
     const { bytes, mime } = dataImage(img.getAttribute("src")) || {};
     if (!mime) { img.remove(); continue; }
     const ext = mime.split("/")[1].replace("jpeg", "jpg");
-    const name = `inline-${++n}.${ext}`;
+    let name; do name = `inline-${++n}.${ext}`; while (taken.has(name));
     const contentId = `${Date.now()}-${n}@baltazar-mail`;
     inline.push({ file: new File([bytes], name, { type: mime }), contentId });
     img.setAttribute("src", `cid:${contentId}`);
@@ -480,8 +480,23 @@ function toText(html) {
 function textToHtml(t) { return esc(t).replace(/\n/g, "<br>"); }
 
 // ---------- attachments ----------
+// Uploaded files travel as form fields named after them and the message refers to them by that
+// name, so each must be unique: a second "scan.pdf" becomes "scan (2).pdf".
+function uniqueName(name, taken) {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf("."), stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : "";
+  for (let n = 2; ; n++) if (!taken.has(`${stem} (${n})${ext}`)) return `${stem} (${n})${ext}`;
+}
+function withFiles(list, files) {
+  for (const f of files) {
+    if (list.some(x => x.name === f.name && x.size === f.size)) continue;   // the same file again
+    const name = uniqueName(f.name, new Set(list.map(x => x.name)));
+    list.push(name === f.name ? f : new File([f], name, { type: f.type, lastModified: f.lastModified }));
+  }
+  return list;
+}
 function addFiles(files) {
-  for (const f of files) if (!draft.files.some(x => x.name === f.name && x.size === f.size)) draft.files.push(f);
+  withFiles(draft.files, files);
   dirty = true; renderFiles();
 }
 function renderFiles() {
@@ -528,7 +543,7 @@ function collect() {
   if (draft.html) {
     // Images in the quoted original travel as new inline parts too, so recipients see them.
     const f = defaultFont();
-    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : ""));
+    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : ""), new Set(draft.files.map(x => x.name)));
     d.html = html;
     d.inline = inline;
   } else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");
