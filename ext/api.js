@@ -259,7 +259,7 @@ const q2 = s => `/ws/v3/mailboxes/@.id==<mb>/messages/@.select==q?q=${encodeURIC
 
 export function move(ids, folderId) { return update("messages.move", ids, { message: { folder: { id: String(folderId) } } }); }
 
-// Permanent removal; the client only calls this for messages already in Trash.
+// Permanent removal: messages already in Trash, and the saved copy of a draft being discarded.
 export function deleteForever(ids) {
   return perMessage("messages.delete", ids, (id, i) => ({ id: `UnifiedDeleteMessage_${i}`, method: "DELETE", uri: q(`id:(${id})`) }));
 }
