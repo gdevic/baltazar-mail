@@ -6,3 +6,4 @@ tools/session.json
 tools/sync.json
 *.har
 *.zip
+dist/

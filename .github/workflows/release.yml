@@ -1,8 +1,9 @@
 # Publishes a GitHub release whose asset is a ZIP of the extension: unzip it anywhere and load
 # the folder inside with "Load unpacked". Runs when a v* tag is pushed, or from the Actions tab
 # (Run workflow) with a tag name, which then tags the selected branch.
-# The tag must match the version in ext/manifest.json, e.g. v0.13.4. Nothing is published unless
-# every test suite passes first (tests.yml).
+# The tag must match the version in ext/manifest.json, e.g. v0.13.4. A manual run must start from
+# main, and a tag that already exists must point at the commit being built. Those checks come
+# first; nothing is published unless every test suite passes after them (tests.yml).
 name: Release
 
 on:
@@ -20,43 +21,46 @@ permissions:
   attestations: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0        # with tags, to see whether the release tag already exists
+
+      # Values from the tag reach the shell only through environment variables, never by
+      # expansion into the script text, and the tag must look like a version.
+      - name: Check version, branch and tag
+        id: ver
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: tools/release-check.sh
+
   tests:
+    needs: check
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
 
   release:
-    needs: tests
+    needs: [check, tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
-      # Values from the tag reach the shell only through environment variables, never by
-      # expansion into the script text, and the tag must look like a version.
-      - name: Check version
-        id: ver
-        env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          tag="$TAG"
-          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag must look like v1.2.3"
-            exit 1
-          fi
-          version=$(jq -er .version ext/manifest.json)
-          if [ "$tag" != "v$version" ]; then
-            echo "::error::Tag $tag does not match ext/manifest.json version $version"
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Check bundled libraries
         run: node tools/vendor-check.mjs --upstream --osv
 
       - name: Package
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           # The folder inside is always "baltazar-mail": the browser ties an unpacked extension (and
           # its settings and address book) to its folder path, so updates unzip over the same folder.
@@ -79,14 +83,14 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            dist/baltazar-mail-${{ steps.ver.outputs.version }}.zip
-            dist/baltazar-mail-${{ steps.ver.outputs.version }}-store.zip
+            dist/baltazar-mail-${{ needs.check.outputs.version }}.zip
+            dist/baltazar-mail-${{ needs.check.outputs.version }}-store.zip
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.ver.outputs.tag }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
           REPO: ${{ github.repository }}
         run: |
           tag="$TAG"
