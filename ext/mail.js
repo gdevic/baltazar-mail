@@ -1494,14 +1494,23 @@ function startPolling() {
   if (state.signedIn) state.polling = setInterval(poll, Math.max(5, settings.pollSec) * 1000);
 }
 
+// A background tab can be put to sleep (Edge's sleeping tabs) and then checks nothing. When it
+// wakes or comes into view, check at once instead of waiting for the next interval.
+let lastPoll = 0, polling = false;
+function pollNow() { if (state.signedIn && !polling && Date.now() - lastPoll > 3000) { poll(); startPolling(); } }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollNow(); });
+document.addEventListener("resume", pollNow);
+
 async function poll() {
-  if (busy) return;
+  if (busy || polling) return;
+  polling = true; lastPoll = Date.now();
   try {
     const changed = await loadFolders(true);
     const v = state.view;
     if (v.kind === "folder" && changed.includes(v.folderId) && !busy) await loadList("refresh");
     if (changed.includes(inboxId()) || changed.includes(folderByType("SENT")?.id)) syncContacts();
   } catch (e) { handleError(e, "poll"); }
+  finally { polling = false; }
   checkUpdate().catch(() => {});  // network at most once a day; otherwise a storage read
 }
 

@@ -549,6 +549,18 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
   await page.waitForTimeout(300);
   results.newMail = { title: await page.title(), dotted: dotted.slice(0, 22), cleared: (await iconNow()).split("/").slice(-2).join("/") };
+
+  // a tab that wakes or comes into view checks at once, not at the next interval (10 minutes here)
+  await page.locator("#list").focus(); await page.keyboard.press(",");
+  await page.locator("#poll").fill("600"); await page.locator("#poll").dispatchEvent("change");
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }));
+  folders[0].unread = 5; folders[0].highestModSeq++;
+  await page.waitForTimeout(3500);
+  const woke = Date.now();
+  await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+  await page.waitForFunction(() => document.title === "(5) Baltazar Mail", null, { timeout: 2000 }).catch(() => {});
+  results.wake = { title: await page.title(), ms: Date.now() - woke };
   results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
@@ -602,6 +614,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.textSize.folder === 16.25 && results.textSize.settings === 13 && results.textSize.folderBack === 13, "text size scales the app, not Settings: " + JSON.stringify(results.textSize));
   expect(results.tabIcon.title === "(3) Baltazar Mail" && results.tabIcon.href === "icons/32.png", "plain tab icon for mail already there: " + JSON.stringify(results.tabIcon));
   expect(results.newMail.title === "(4) Baltazar Mail" && results.newMail.dotted === "data:image/png;base64," && results.newMail.cleared === "icons/32.png", "new-mail dot: " + JSON.stringify(results.newMail));
+  expect(results.wake.title === "(5) Baltazar Mail" && results.wake.ms < 2000, "checks for mail on waking: " + JSON.stringify(results.wake));
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&
