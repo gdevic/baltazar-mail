@@ -40,13 +40,19 @@ const folders = [
   const browser = await chromium.launch();
   const page = await browser.newPage();
   const errors = [], mutations = [];
+  // Nothing may reach the real network: hosts without a mock are recorded and refused. The test
+  // message's remote image (https://x/y.png) is the one request the reader is meant to make.
+  const unexpected = new Set();
+  await page.route(/^https?:\/\//, r => { const h = new URL(r.request().url()).hostname; if (h === "127.0.0.1") return r.continue(); if (h !== "x") unexpected.add(h); return r.abort(); });
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
   page.on("console", m => { if (m.type() === "error") errors.push("console: " + m.text()); });
   await page.addInitScript(() => {
     const area = (ns) => ({
       get: async k => { const ks = Array.isArray(k) ? k : [k]; const o = {}; for (const x of ks) { const v = localStorage.getItem(ns + x); if (v !== null) o[x] = JSON.parse(v); } return o; },
       set: async o => { for (const [k, v] of Object.entries(o)) localStorage.setItem(ns + k, JSON.stringify(v)); } });
-    window.chrome = { storage: { session: area("s:"), local: area("l:") }, runtime: { getURL: p => p, getManifest: () => ({ version: "0.14.0" }) } };
+    // Installed from a release ZIP unless the test switches to a store install.
+    window.chrome = { storage: { session: area("s:"), local: area("l:") }, runtime: { getURL: p => p, getManifest: () => ({ version: "0.14.0" }) },
+      management: { getSelf: async () => ({ installType: localStorage.getItem("installType") || "development" }) } };
   });
   await page.route("https://mail.yahoo.com/**", async route => {
     const url = route.request().url();
@@ -75,7 +81,8 @@ const folders = [
     mutations.push(name + ":" + reqs);
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: { failedRequests: [], successRequests: [] } }, error: null }) });
   });
-  await page.route("https://api.github.com/**", r => r.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: "v0.1.0" }) }));
+  const ghCalls = [];
+  await page.route("https://api.github.com/**", r => { ghCalls.push(r.request().url()); return r.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: "v0.1.0" }) }); });
   await page.goto(`http://127.0.0.1:${port}/mail.html`);
   await page.waitForSelector("#rows .row");
   // the installed version heads Settings; the update note stays hidden when nothing newer exists
@@ -145,6 +152,9 @@ const folders = [
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expect(versionLine === "Baltazar Mail 0.14.0", "version line: " + versionLine);
+  expect(subject === "Hit Z80 here" && hit === "Z80", "search markers become highlights, not text: " + JSON.stringify({ subject, hit }));
+  expect(frameHtml.includes("Hello <b>body</b>"), "message body shown: " + frameHtml.slice(0, 80));
+  expect(sentRows === 8 && helpVisible, "Sent opens with g s, ? shows help: " + JSON.stringify({ sentRows, helpVisible }));
   expect(rows === 95 && foldersShown.some(f => f.startsWith("Folder 88")) && foldersShown.some(f => f.startsWith("Inbox (linked)")), "starts with odd folders, opening the primary Inbox: " + JSON.stringify({ rows, foldersShown }));
   expect(foldersShown.filter(f => f.startsWith("Starred")).length === 1 && foldersShown.slice(0, 3).join("|") === "Inbox3|Starred95|Inbox (linked)8" && !foldersShown.some(f => f.startsWith("Hidden")),
     "one Starred, after the primary Inbox; SYNC folders hidden: " + JSON.stringify(foldersShown));
@@ -169,8 +179,13 @@ const folders = [
   await page.mouse.move(b1.x + 2, b1.y + 100); await page.mouse.down(); await page.mouse.move(b1.x + 80, b1.y + 100, { steps: 5 }); await page.mouse.up();
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(__dirname, "..", "out", "smoke.png") });
+  // A store install never asks GitHub: switch to one and forget the last check before reloading.
+  const ghAfterZip = ghCalls.length;
+  await page.evaluate(() => { localStorage.setItem("installType", "normal"); localStorage.removeItem("l:updateCheck"); });
   await page.reload();
   await page.waitForSelector("#rows .row");
+  await page.waitForTimeout(500);
+  const ghAfterStore = ghCalls.length;
   const persisted = await page.evaluate(() => ({ layout: document.getElementById("app").className, theme: document.documentElement.dataset.theme, bg: getComputedStyle(document.documentElement).getPropertyValue("--bg"),
     folderW: getComputedStyle(document.documentElement).getPropertyValue("--folder-w"), listH: getComputedStyle(document.documentElement).getPropertyValue("--list-h") }));
   console.log("persisted", JSON.stringify(persisted));
@@ -186,6 +201,11 @@ const folders = [
   const expectTheme = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expectTheme(level7.contrast === 7 && level7.field === "7" && level7.shown === "7" && level7.line === roles("sky", 7).line && level7.line !== roles("sky", 0).line, "contrast 7 persists: " + JSON.stringify(level7));
   expectTheme(stale.bg === roles("light").bg && stale.line === roles("light").line && stale.choice === "light", "missing palette falls back to Paper: " + JSON.stringify(stale));
+  const expectEnd = (cond, what) => { if (!cond) errors.push("assert: " + what); };
+  expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
+    "layout, palette and pane sizes survive a reload: " + JSON.stringify(persisted));
+  expectEnd(ghAfterZip === 1 && ghAfterStore === 1, "a ZIP install asks GitHub once, a store install never: " + JSON.stringify({ ghAfterZip, ghAfterStore }));
+  expectEnd(!unexpected.size, "no request left for the real network: " + [...unexpected].join(", "));
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();
   server.close();

@@ -1,9 +1,12 @@
-# All test suites: the unit tests, then the extension itself in Playwright's Chromium against a
-# mocked Yahoo (smoke.js, runtime.js). Runs before every release, and from the Actions tab
-# (Run workflow) on any branch.
+# All test suites: the unit tests and the bundled-library hashes, then the extension itself in
+# Playwright's Chromium against a mocked Yahoo (smoke.js, runtime.js). Runs on every push to main
+# and every pull request, before every release, and from the Actions tab (Run workflow).
 name: Tests
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
@@ -19,14 +22,23 @@ jobs:
         with:
           persist-credentials: false
 
+      # The tests import ext/*.js as ES modules without a package.json, which needs Node's
+      # module-syntax detection (Node 22.7 and later).
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Unit tests
         run: |
           node --version
-          for t in query contacts bytes update darken themes api; do
+          for t in tools/*-test.mjs; do
             echo "::group::$t"
-            node "tools/$t-test.mjs"
+            node "$t"
             echo "::endgroup::"
           done
+
+      - name: Bundled libraries match their recorded hashes
+        run: node tools/vendor-check.mjs
 
       # The version every test has been run with; not saved to the repository.
       - name: Install Playwright and Chromium
