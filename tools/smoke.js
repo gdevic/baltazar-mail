@@ -42,7 +42,7 @@ const folders = [
 (async () => {
   await new Promise(r => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: ["--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
   const page = await browser.newPage();
   const errors = [], mutations = [];
   // Nothing may reach the real network: hosts without a mock are recorded and refused. The test

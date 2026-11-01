@@ -34,7 +34,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-profile-"));
   // No host outside the mocks resolves, so nothing can reach the real network.
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true,
-    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
+    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
   // Requests to hosts without a mock are recorded and refused (later routes take precedence).
@@ -191,6 +191,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.goto(`chrome-extension://${extId}/mail.html`);
   const results0 = {};
   // rowH is the old pixel row height: 18 px (compact) becomes 80%, still 18 px rows
+  // Let the first load's release check finish before reloading: cut off, it would count as failed
+  // and the next check would wait an hour.
+  await page.evaluate(async () => { for (let i = 0; i < 100 && !(await chrome.storage.local.get("updateCheck")).updateCheck; i++) await new Promise(r => setTimeout(r, 100)); });
   await page.evaluate(() => chrome.storage.local.set({ settings: { pollSec: 5, undoSendSec: 2, rowH: 18 } }));
   await page.reload();
   await page.waitForSelector("#rows .row", { timeout: 15000 });
@@ -626,13 +629,16 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
     await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
     await page.fill("#c-subject", subject);
-    await page.locator("#c-editor").click(); await page.keyboard.type(`${subject} text`);
+    // focus the editor itself and check the text arrived: a click right after the composer opens
+    // can land before the layout settles
+    await page.locator("#c-editor").focus(); await page.keyboard.type(`${subject} text`);
+    await page.waitForFunction(s => document.getElementById("c-editor").innerText.includes(s), `${subject} text`, { timeout: 3000 }).catch(() => {});
     await page.keyboard.press("Control+Enter");
     await page.waitForFunction(s => document.getElementById("st-undo").textContent.includes(s), subject, { timeout: 5000 }).catch(() => {});
   };
   const subjectsSent = () => calls.filter(c => c.name === "messages.saveAndSend").map(c => c.envelope.requests[0].payloadParts[0].payload.message.headers.subject);
   const subjectsSaved = () => calls.filter(c => c.name === "messages.saveV3").map(c => c.envelope.requests[0].payloadParts[0].payload.message.headers.subject);
-  await setUndoSend(6);
+  await setUndoSend(10);   // room to write the second message before the first goes out
   await sendOne("Queue A"); await sendOne("Queue B");
   const queue = { pending: await page.locator("#st-undo").textContent() };
   queue.leaveAsks = await page.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
@@ -641,7 +647,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   queue.reopened = await page.inputValue("#c-subject");
   queue.stillPending = await page.locator("#st-undo").textContent();
   failSends = 1;
-  await page.waitForFunction(() => document.getElementById("c-subject").value === "Queue A", null, { timeout: 10000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("c-subject").value === "Queue A", null, { timeout: 15000 }).catch(() => {});
   queue.afterFail = { subject: await page.inputValue("#c-subject"), notice: await notice(), savedB: subjectsSaved().includes("Queue B"), sentB: subjectsSent().includes("Queue B") };
   page.once("dialog", d => d.accept());
   await page.click("#c-discard"); await page.waitForTimeout(300);
