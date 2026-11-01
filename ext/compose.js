@@ -101,6 +101,7 @@ let accounts = [];
 let draft = null;          // current compose state
 let autosaveTimer = null;
 let dirty = false;
+let saving = null;         // the draft save in flight
 
 export function init(h) {
   hooks = h;
@@ -156,7 +157,7 @@ export function addRecipient(a) { fields.to?.add(a); }
 
 export function isOpen() { return !$("compose").classList.contains("hidden"); }
 // Changes not yet in Drafts, which closing the tab would lose.
-export function hasUnsaved() { return isOpen() && dirty && hasContent(); }
+export function hasUnsaved() { return isOpen() && (dirty || !!saving) && hasContent(); }
 
 async function loadAccounts() {
   if (accounts.length) return accounts;
@@ -256,6 +257,7 @@ function focusEditor() {
 // the composer stays open with the reason shown and close returns false, so nothing is lost.
 export async function close(save = true) {
   if (!isOpen()) return true;
+  if (save) await saved();   // a save in flight that fails marks the message changed again
   if (save && dirty && hasContent()) {
     const why = await saveNow(true);
     if (why) { warn(`The message was kept open because it could not be saved: ${why}. Discard closes it without saving.`, saveError); return false; }
@@ -557,21 +559,33 @@ function collect() {
 // ---------- save / send ----------
 // Saves the message to Drafts. Returns "" when saved, otherwise the reason it was not, which is
 // also shown, except an unfinished address during a silent save (autosave, closing).
+// Saves run one at a time, each for the message it started on: one that ends after the message
+// was sent, discarded or replaced by another touches only its own message's state.
 async function saveNow(silent = false) {
   if (!draft) return "no message";
+  const mine = draft;
+  if (saving) await saving.catch(() => {});
+  if (draft !== mine) return "";
   saveError = null;
   let d;
   try { d = collect(); } catch (e) { if (!silent) warn(e.message); return e.message; }
   if (!d.draftFolderId) { warn("There is no Drafts folder to save the message in."); return "no Drafts folder"; }
+  dirty = false;          // edits made while the save is in flight mark the message again
+  const p = api.saveDraft(d);
+  saving = p;
   try {
-    const r = await api.saveDraft(d);
-    draft.savedId = r.message?.id || draft.savedId;
-    dirty = false;
-    hooks.clearNotice("compose");
-    hooks.status("draft saved", r.ms);
+    const r = await p;
+    mine.savedId = r.message?.id || mine.savedId;
+    if (draft === mine) { hooks.clearNotice("compose"); hooks.status("draft saved", r.ms); }
     return "";
-  } catch (e) { saveError = e; warn(`The draft could not be saved: ${e.message}`, e); return `draft save failed: ${e.message}`; }
+  } catch (e) {
+    if (draft !== mine) return "";
+    dirty = true;
+    saveError = e; warn(`The draft could not be saved: ${e.message}`, e); return `draft save failed: ${e.message}`;
+  } finally { if (saving === p) saving = null; }
 }
+// Settles once no save is in flight.
+const saved = async () => { while (saving) await saving.catch(() => {}); };
 
 async function send() {
   if (!draft) return;
@@ -588,7 +602,7 @@ async function send() {
   hooks.onClose();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
-    run: async () => { const r = await api.send(d, sentId); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
+    run: async () => { await saved(); const r = await api.send(d, sentId); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
     restore: () => reopenFrom(snapshot),
   });
 }
@@ -626,7 +640,9 @@ async function reopenFrom(snap) {
 async function discard() {
   if (!draft) return;
   if (hasContent() && !confirm("Discard this message?")) return;
-  const id = draft.savedId;
+  const mine = draft;
   close(false);
+  await saved();
+  const id = mine.savedId;
   if (id) { try { await api.deleteForever([id]); hooks.status("draft discarded"); } catch (e) { warn(`The saved draft could not be deleted: ${e.message}`, e); } }
 }

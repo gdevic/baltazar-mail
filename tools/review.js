@@ -54,6 +54,60 @@ scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) =
   expect(bcc.some(a => a.email === "secret@x.com"), "saving the draft keeps its Bcc: " + JSON.stringify(bcc));
 });
 
+scenario("text typed during a save is saved", async ({ page, calls, mock }, expect) => {
+  mock.handler = async ({ name }) => { if (name === "messages.saveV3") await sleep(800); };
+  await newMessage(page, { text: "first" });
+  await page.keyboard.press("Control+s");
+  await page.waitForTimeout(100);
+  await page.keyboard.type(" second");
+  await page.waitForTimeout(1200);
+  await page.keyboard.press("Escape"); await composerHidden(page);
+  const html = msgOf(saves(calls).pop())?.simpleBody?.html || "";
+  expect(saves(calls).length === 2 && html.includes("first second"), "the text typed while saving reaches Drafts: " + JSON.stringify({ n: saves(calls).length, html }));
+});
+
+scenario("closing during a save that fails keeps the message", async ({ page, mock }, expect) => {
+  let fail = 1;
+  mock.handler = async ({ name }) => { if (name === "messages.saveV3") { await sleep(600); if (fail-- > 0) return { error: { code: "ES-5000", message: "save failed" } }; } };
+  await newMessage(page, { subject: "Fragile", text: "keep me" });
+  await page.keyboard.press("Control+s");
+  await page.waitForTimeout(100);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(1500);
+  // the failed save marks the message changed again, so closing saves it once more
+  const open = await page.locator("#compose").isVisible();
+  const st = await page.locator("#st-msg").textContent();
+  expect(!open && st === "message saved to Drafts", "closing waits for the save and saves again when it failed: " + JSON.stringify({ open, st }));
+});
+
+scenario("a save still running when the message is sent", async ({ page, calls, mock }, expect) => {
+  const done = [];
+  mock.handler = async ({ name }) => { if (name === "messages.saveV3") { await sleep(800); done.push(calls.length); } };
+  await newMessage(page, { subject: "Race", text: "body" });
+  await page.keyboard.press("Control+s");
+  await page.waitForTimeout(100);
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  const sendAt = calls.findIndex(c => c.name === "messages.saveAndSend");
+  const n = await notice(page);
+  expect(!/could not be saved/.test(n), "no false save error after a send: " + n);
+  expect(sendAt >= 0 && done.length === 1 && sendAt >= done[0], "the send waits for the save in flight: " + JSON.stringify({ sendAt, done }));
+});
+
+scenario("discard while the first save is running", async ({ page, calls, mock }, expect) => {
+  mock.handler = async ({ name }) => { if (name === "messages.saveV3") await sleep(800); };
+  await newMessage(page, { subject: "Gone", text: "body" });
+  await page.keyboard.press("Control+s");
+  await page.waitForTimeout(100);
+  page.once("dialog", d => d.accept());
+  await page.click("#c-discard");
+  await page.waitForTimeout(1500);
+  const del = calls.filter(c => c.name === "messages.delete").map(c => c.envelope.requests[0].uri);
+  expect(del.some(u => u.includes("MSGDRAFT_99")), "the draft saved after Discard is deleted: " + JSON.stringify(del));
+  expect(!/could not/.test(await notice(page)), "no error notice: " + await notice(page));
+});
+
 // ---------- runner ----------
 (async () => {
   const only = process.argv[2];
