@@ -52,6 +52,12 @@ const folders = [
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
   page.on("console", m => { if (m.type() === "error") errors.push("console: " + m.text()); });
   await page.addInitScript(() => {
+    // A Mac, when the test asks for one.
+    let mac = false; try { mac = !!localStorage.getItem("mac"); } catch { /* a sandboxed frame */ }
+    if (mac) {
+      Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" });
+      Object.defineProperty(Navigator.prototype, "userAgentData", { get: () => ({ platform: "macOS" }) });
+    }
     const area = (ns) => ({
       get: async k => { const ks = Array.isArray(k) ? k : [k]; const o = {}; for (const x of ks) { const v = localStorage.getItem(ns + x); if (v !== null) o[x] = JSON.parse(v); } return o; },
       set: async o => { for (const [k, v] of Object.entries(o)) localStorage.setItem(ns + k, JSON.stringify(v)); } });
@@ -222,7 +228,34 @@ const folders = [
   await page.locator("#folder-list .folder", { hasText: /^▸Work/ }).locator(".tw").click();
   const tree = await page.locator("#folder-list .folder").evaluateAll(els => els.map(e => `${e.querySelector(".nm").textContent}@${parseInt(e.style.paddingLeft)}`));
   await page.locator("#folder-list .folder", { hasText: /^▾Work/ }).locator(".tw").click();
+  // Keys: Backspace deletes in the list, a symbol typed with Alt (Option, AltGr) still counts, Alt
+  // with a letter does not; on a Mac the shortcuts are labelled with the Command key.
+  const keys = {};
+  const undoText = () => page.locator("#st-undo").textContent();
+  const rowCount = () => page.locator("#rows .row").count();
+  await page.locator("#list").focus(); await page.keyboard.press("Home");
+  keys.before = await rowCount();
+  await page.keyboard.press("Backspace");
+  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  keys.backspace = { rows: await rowCount(), undo: await undoText() };
+  await page.keyboard.press("z"); await page.waitForTimeout(400);
+  const altKey = key => page.locator("#list").evaluate((l, key) => l.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true })), key);
+  await altKey("e"); await page.waitForTimeout(400);
+  keys.altLetter = await rowCount();
+  await altKey("#");
+  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  keys.altHash = { rows: await rowCount(), undo: await undoText() };
+  await page.keyboard.press("z"); await page.waitForTimeout(400);
+  const labels = () => page.evaluate(() => ({ send: document.getElementById("c-send").title, help: [...document.querySelectorAll("#help td")].map(t => t.textContent).filter(t => /Ctrl|⌘/.test(t)).join(" | ") }));
+  keys.pc = await labels();
+  await page.evaluate(() => localStorage.setItem("mac", "1")); await page.reload(); await page.waitForSelector("#rows .row");
+  keys.mac = await labels();
+  await page.evaluate(() => localStorage.removeItem("mac"));
   const expectEnd = (cond, what) => { if (!cond) errors.push("assert: " + what); };
+  expectEnd(keys.backspace.rows === keys.before - 1 && /Undo: delete/.test(keys.backspace.undo) && keys.altLetter === keys.before &&
+    keys.altHash.rows === keys.before - 1 && /Undo: delete/.test(keys.altHash.undo), "Backspace and Alt+# delete, Alt+letter does nothing: " + JSON.stringify(keys));
+  expectEnd(keys.pc.send === "Send (Ctrl+Enter)" && keys.mac.send === "Send (⌘Enter)" && !/Ctrl/.test(keys.mac.help) && /⌘Z/.test(keys.mac.help) && /⌘-click/.test(keys.mac.help),
+    "Mac shortcut labels: " + JSON.stringify([keys.pc, keys.mac]));
   expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
     "layout, palette and pane sizes survive a reload: " + JSON.stringify(persisted));
   expectEnd(ghAfterZip === 1 && ghAfterStore === 1, "a ZIP install asks GitHub once, a store install never: " + JSON.stringify({ ghAfterZip, ghAfterStore }));

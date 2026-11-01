@@ -1437,6 +1437,17 @@ async function doSearch(term, everywhere = false) {
 // ---------- keyboard ----------
 let pendingG = false;
 const modals = ["help", "settings", "movebox"];
+// On a Mac, shortcuts shown as Ctrl+X are labelled as the Command key the user presses.
+const IS_MAC = /^mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+function macLabels() {
+  if (!IS_MAC) return;
+  const mac = s => s.replace(/Ctrl\+/g, "⌘").replace(/Ctrl-/g, "⌘-");
+  for (const el of document.querySelectorAll("[title*='Ctrl']")) el.title = mac(el.title);
+  const walk = document.createTreeWalker($("help"), NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.nodeValue.includes("Ctrl")) n.nodeValue = mac(n.nodeValue);
+}
+
+const SYMBOL_KEYS = new Set(["#", "!", "?", "/", "*", ","]);
 function onKey(e) {
   if (e.target.closest && e.target.closest("#compose")) return;
   if (viewer.isOpen()) { viewer.onKey(e); return; }
@@ -1490,7 +1501,9 @@ function onKey(e) {
     else if (e.key === "a" && document.activeElement === $("list")) { e.preventDefault(); markRange(0, state.messages.length - 1); }
     return;
   }
-  if (e.altKey) return;
+  // Alt with a letter belongs to the browser and the system. A symbol command may need Option
+  // (macOS) or AltGr (many European layouts) to type, so it still counts.
+  if (e.altKey && !SYMBOL_KEYS.has(e.key)) return;
   if (pendingG) {
     pendingG = false;
     const map = { i: "INBOX", s: "SENT", t: "TRASH", d: "DRAFT", a: "ARCHIVE", b: "BULK" };
@@ -1521,6 +1534,7 @@ function onKey(e) {
     case "x": toggleMark(state.selected); break;
     case "e": runAction("archive"); break;
     case "#": case "Delete": runAction("delete"); break;
+    case "Backspace": if (document.activeElement === $("list")) { e.preventDefault(); runAction("delete"); } break;   // the Mac delete key
     case "v": e.preventDefault(); runAction("move"); break;
     case "u": runAction("read"); break;
     case "s": runAction("star"); break;
@@ -1771,6 +1785,7 @@ async function syncContacts(full = false) {
 }
 
 document.addEventListener("keydown", onKey);
+macLabels();
 $("retry").onclick = () => api.bootstrap(true).then(start, start);
 $("folder-filter").oninput = () => { state.kbFolder = -1; renderFolders(); };
 wireSettings();
