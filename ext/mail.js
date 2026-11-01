@@ -1151,6 +1151,7 @@ const undoStack = [], redoStack = [];
 const UNDO_MAX = 50;
 
 function pushUndo(entry) {
+  entry.fails = 0;
   undoStack.push(entry); if (undoStack.length > UNDO_MAX) undoStack.shift();
   redoStack.length = 0;
   showUndo();
@@ -1172,26 +1173,30 @@ function showUndo() {
   updateToolbar();
 }
 
-async function undo() {
-  const e = undoStack.pop(); if (!e) return;
-  status(`undoing: ${e.label}…`);
+// Undo and redo steps return the api results; ids that failed are reported like a first try's.
+const failedOf = res => (Array.isArray(res) ? res : [res]).flatMap(r => r?.failed || []);
+// A step that fails stays for one more try (the network may be back); failing again, it is taken
+// off the list so the older entries stay reachable.
+async function undoOrRedo(from, to, step, words) {
+  const e = from.pop(); if (!e) return;
+  status(`${words[0]}: ${e.label}…`);
   let ok = false;
-  try { await e.undo(); ok = true; redoStack.push(e); status(`undone: ${e.label}`); }
-  catch (err) { undoStack.push(e); handleError(err, "undo"); }
+  try {
+    const failed = failedOf(await e[step]());
+    ok = true; e.fails = 0; to.push(e);
+    if (failed.length) notify(`${failed.length} of ${plural(e.count || failed.length, "message")} could not be ${words[2]}; the rest were.`, { err: Object.assign(new Error(`${failed.length} failed`), { detail: { failed } }), what: step });
+    else status(`${words[1]}: ${e.label}`);
+  } catch (err) {
+    e.fails = (e.fails || 0) + 1;
+    if (e.fails >= 2) { notify(`Could not ${step} “${e.label}” twice, so it was removed from the undo list.`, { detail: cause(err), err, what: step }); console.error(step, err); }
+    else { from.push(e); handleError(err, step); }
+  }
   showUndo();
   await loadFolders(true).catch(() => {});
-  await loadList("refresh", ok ? e.reopen : null);
+  await loadList("refresh", ok && step === "undo" ? e.reopen : null);
 }
-
-async function redo() {
-  const e = redoStack.pop(); if (!e) return;
-  status(`redoing: ${e.label}…`);
-  try { await e.redo(); undoStack.push(e); status(`redone: ${e.label}`); }
-  catch (err) { redoStack.push(e); handleError(err, "redo"); }
-  showUndo();
-  await loadFolders(true).catch(() => {});
-  await loadList("refresh");
-}
+const undo = () => undoOrRedo(undoStack, redoStack, "undo", ["undoing", "undone", "put back"]);
+const redo = () => undoOrRedo(redoStack, undoStack, "redo", ["redoing", "redone", "changed again"]);
 
 // ---------- actions ----------
 const byIds = ids => { const set = new Set(ids); return state.messages.filter(m => set.has(m.id)); };
@@ -1213,8 +1218,8 @@ async function doSetRead(ids, read) {
     applyFlags(r.ok, { read });
     status(`marked ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`, r.ms); partial(r, "mark");
     const okSet = new Set(r.ok);
-    pushUndo({ label: `mark ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`,
-      undo: async () => { for (const [was, g] of groupBy(before.filter(([, id]) => okSet.has(id)))) await api.setRead(g, was); },
+    pushUndo({ label: `mark ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`, count: r.ok.length,
+      undo: async () => { const out = []; for (const [was, g] of groupBy(before.filter(([, id]) => okSet.has(id)))) out.push(await api.setRead(g, was)); return out; },
       redo: () => api.setRead(r.ok, read) });
   } catch (e) { handleError(e, "mark"); }
 }
@@ -1228,8 +1233,8 @@ async function doSetStarred(ids, flagged) {
     refreshStarredCount();
     status(`${flagged ? "starred" : "unstarred"} ${plural(r.ok.length, "message")}`, r.ms); partial(r, "star");
     const okSet = new Set(r.ok);
-    pushUndo({ label: `${flagged ? "star" : "unstar"} ${plural(r.ok.length, "message")}`,
-      undo: async () => { for (const [was, g] of groupBy(before.filter(([, id]) => okSet.has(id)))) await api.setStarred(g, was); },
+    pushUndo({ label: `${flagged ? "star" : "unstar"} ${plural(r.ok.length, "message")}`, count: r.ok.length,
+      undo: async () => { const out = []; for (const [was, g] of groupBy(before.filter(([, id]) => okSet.has(id)))) out.push(await api.setStarred(g, was)); return out; },
       redo: () => api.setStarred(r.ok, flagged) });
   } catch (e) { handleError(e, "star"); }
 }
@@ -1259,10 +1264,12 @@ async function doMove(ids, folderId, verb = "move") {
       spam: [`mark ${n} as spam`, `marked ${n} as spam`], notspam: [`mark ${n} not spam`, `marked ${n} not spam, moved to Inbox`] }[verb];
     status(words[1], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
-    pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null,
+    pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null, count: done.length,
       undo: async () => {
-        for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) await api.move(g, from);
+        const out = [];
+        for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) out.push(await api.move(g, from));
         if (known.length < done.length) notify(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`, { info: true });
+        return out;
       },
       redo: () => api.move(done.map(o => o.id), dest.id) });
   } catch (e) { handleError(e, verb); }

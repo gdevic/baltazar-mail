@@ -262,6 +262,36 @@ scenario("a search term with an unknown value says so", async ({ page }, expect)
   expect(/is:important is not a search term/.test(n) && await page.locator("#list-title").textContent() === title, "the reason is shown and the list stays: " + n);
 });
 
+scenario("an undo that keeps failing stops blocking the older ones", async ({ page, mock }, expect) => {
+  const before = await subjects(page);
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(400);
+  await page.locator("#list").focus(); await page.keyboard.press("e"); await page.waitForTimeout(500);
+  await page.keyboard.press("e"); await page.waitForTimeout(500);
+  mock.failMoves = 99;
+  await page.keyboard.press("z"); await page.waitForTimeout(500);
+  await page.keyboard.press("z"); await page.waitForTimeout(500);
+  const n = await notice(page), label = await page.locator("#st-undo").textContent();
+  mock.failMoves = 0;
+  await page.keyboard.press("z"); await page.waitForTimeout(800);
+  const after = await page.locator("#st-undo").textContent();
+  expect(/removed from the undo list/.test(n) && /Undo: archive 1 message/.test(label), "the failing entry is dropped after a second failure: " + JSON.stringify({ n, label }));
+  expect(!/Undo:/.test(after) && /Redo: archive 1 message/.test(after) && (await subjects(page)).includes(before[0]), "the older entry then undoes: " + JSON.stringify({ after }));
+}, { allow: /EC-5003|undo/ });
+
+scenario("an undo where some messages fail says so", async ({ page, mock }, expect) => {
+  await page.locator("#rows .row").nth(0).click();
+  await page.locator("#rows .row").nth(1).click({ modifiers: ["Shift"] }); await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("e"); await page.waitForTimeout(600);
+  mock.handler = async ({ name, post }) => {
+    if (name !== "messages.move") return;
+    const ids = [...post.matchAll(/"id":"(UnifiedUpdateMessage_\d+)"/g)].map(m => m[1]);
+    return { responses: ids.map((id, i) => ({ id, httpCode: i === 0 ? 204 : 500 })) };
+  };
+  await page.keyboard.press("z"); await page.waitForTimeout(800);
+  const n = await notice(page);
+  expect(/1 of 2 messages could not be/.test(n), "a partial undo is reported as partial: " + JSON.stringify({ n }));
+});
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
