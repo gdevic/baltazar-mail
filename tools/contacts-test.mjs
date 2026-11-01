@@ -1,5 +1,5 @@
 // Golden values for the machine-sender rule in ext/contacts.js. node tools/contacts-test.mjs
-import { machineAddress, isHidden } from "../ext/contacts.js";
+import { machineAddress, isHidden, scanStep } from "../ext/contacts.js";
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",
@@ -26,5 +26,18 @@ const cases = [
   [{ email: "jane.doe@gmail.com", sent: 5, hidden: true }, true],
 ];
 for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("FAIL isHidden", JSON.stringify(e), "want", want); }
+// Scans walk newest-first and stop at the bookmark; a future-dated message never moves it.
+{
+  const check = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
+  const now = 2_000_000_000, day = 86400;
+  const scan = (dates, opts) => { let newest = opts.newestSeen, recorded = 0, stopped = false;
+    for (const d of dates) { const s = scanStep(d, newest, { ...opts, now }); if (s.stop) { stopped = true; break; } if (s.record) recorded++; newest = s.newest; }
+    return { newest, recorded, stopped }; };
+  const future = now + 365 * day;
+  const first = scan([future, now - 10, now - 20], { full: true, newestSeen: 0 });
+  check(first.recorded === 3 && first.newest === now - 10, "full scan counts the future-dated message once, bookmark stays at today: " + JSON.stringify(first));
+  const next = scan([future, now - 5, now - 10, now - 20], { full: false, newestSeen: first.newest });
+  check(next.recorded === 1 && next.stopped && next.newest === now - 5, "incremental scan passes the future message and learns the new one: " + JSON.stringify(next));
+}
 console.log(fail ? `${fail} FAIL` : `PASS (${machine.length} machine, ${person.length} person)`);
 process.exit(fail ? 1 : 0);

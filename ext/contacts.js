@@ -94,6 +94,16 @@ async function flush(pending) {
 async function getMeta(key) { const r = await tx(META, "readonly", s => s.get(key)); return r ? r.value : null; }
 async function setMeta(key, value) { await tx(META, "readwrite", s => s.put({ key, value })); }
 
+// One message of a newest-first scan: whether to stop, whether to record it, and the bookmark (the
+// newest date recorded). A date more than a day ahead (a sender's wrong clock) never moves the
+// bookmark, or every later scan would stop at its first message; incremental scans pass over such
+// a message, so only a full scan counts it, once.
+export function scanStep(when, newest, { full, newestSeen, now }) {
+  if (when > now + 86400) return { stop: false, record: full, newest };
+  if (!full && when <= newestSeen) return { stop: true, record: false, newest };
+  return { stop: false, record: true, newest: Math.max(newest, when) };
+}
+
 // Walk a folder newest-first. full: everything; otherwise stop at messages older than the last scan.
 async function scanFolder(folderId, direction, full, progress) {
   await loadAll();
@@ -101,14 +111,14 @@ async function scanFolder(folderId, direction, full, progress) {
   const prev = full ? null : await getMeta(metaKey);
   const newestSeen = prev?.newest || 0;
   let offset = 0, newest = newestSeen, done = false, seen = 0;
-  const pending = new Map();
+  const pending = new Map(), now = Date.now() / 1000;
   while (!done) {
     const r = await api.list(folderId, SCAN_PAGE, offset);
     for (const m of r.messages) {
-      const when = Number(m.headers?.date) || 0;
-      if (!full && when <= newestSeen) { done = true; break; }
-      await record(m, direction, pending);
-      newest = Math.max(newest, when); seen++;
+      const step = scanStep(Number(m.headers?.date) || 0, newest, { full, newestSeen, now });
+      if (step.stop) { done = true; break; }
+      if (step.record) { await record(m, direction, pending); seen++; }
+      newest = step.newest;
     }
     offset += r.messages.length;
     if (r.messages.length < SCAN_PAGE) done = true;
