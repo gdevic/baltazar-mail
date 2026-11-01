@@ -9,12 +9,13 @@ const machine = [
   "a1b2c3d4e5f6a7b8c9d0e1f2@example.com",
   "store@email.example.com", "deals@t.example.com", "brand@appmail.example.com", "x@info6.example.com",
   "NOREPLY@example.com", "acme-auto-reply@example.com", "acme.newsletter@example.com", "acme_automated@example.com",
-  "acme-info@example.com", "info.us@example.com", "x@example-info.com", "x@infos-example.com", "x@shopemail.com", "x@example.email",
+  "acme-info@example.com", "info.us@example.com", "deals@email.shop.co.uk", "x@news.example.com.br", "x@example-info.com", "x@infos-example.com", "x@shopemail.com", "x@example.email",
 ];
 const person = [
   "jane.doe@gmail.com", "john@yahoo.com", "ana@hotmail.com", "bob@protonmail.com", "mike@fastmail.com",
   "j.smith@company.example", "newman@example.com", "updike@example.com", "teamlead.joe@example.com",
   "jane@mail.example.edu", "x@mail.example.ac.uk", "dept42@example.com", "sinfo@example.com", "infoman@example.com", "irena@example.hr",
+  "ana@hotmail.co.uk", "joao@hotmail.com.br", "ken@mail.co.jp", "liz@gmail.com.au", "sam@email.co.nz",
 ];
 let fail = 0;
 const check = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };

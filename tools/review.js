@@ -141,6 +141,26 @@ scenario("a previewed file's type comes from its name, not the sender", async ({
   expect(thumb, "thumbnails are image elements with data: sources");
 });
 
+// ---------- address book ----------
+scenario("the address book survives a repeated full build and a second tab", async (h, expect) => {
+  const { page } = h;
+  const counts = () => page.evaluate(async () => { const c = await import("./contacts.js"); return (await c.all()).reduce((n, e) => n + e.sent + e.received, 0); });
+  await page.waitForFunction(() => /address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  const first = await counts();
+  // a full build again (as after an interrupted first build) must not count the same mail twice
+  await page.evaluate(async () => { const c = await import("./contacts.js"); await c.sync({ inbox: "1", sent: "2", full: true }); });
+  const again = await counts();
+  expect(first > 0 && again === first, "a second full build counts each message once: " + JSON.stringify({ first, again }));
+  // another tab hides an address; this tab then records mail to it
+  const other = await h.ctx.newPage(); await other.goto(`chrome-extension://${h.extId}/mail.html`); await other.waitForSelector("#rows .row", { timeout: 15000 });
+  await other.evaluate(async () => { const c = await import("./contacts.js"); await c.hide("s2@x.com"); });
+  await page.evaluate(async () => { const c = await import("./contacts.js"); await c.noteSent([{ email: "s2@x.com" }]); });
+  const seen = await other.evaluate(async () => { const c = await import("./contacts.js"); return c.lookup("s2@x.com"); });
+  const here = await page.evaluate(async () => { const c = await import("./contacts.js"); return c.lookup("s2@x.com"); });
+  expect(seen?.hidden && here?.hidden, "a hide in one tab survives a write in another: " + JSON.stringify({ other: seen?.hidden, here: here?.hidden }));
+  await other.close();
+}, { settings: { pollSec: 600 } });
+
 // ---------- dark reader ----------
 scenario("darkenHtml golden values, and crafted styles stay fast", async ({ page }, expect) => {
   const r = await page.evaluate(async () => {

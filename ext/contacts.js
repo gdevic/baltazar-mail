@@ -28,7 +28,27 @@ const tx = (store, mode, fn) => openDb().then(d => new Promise((ok, no) => {
   t.onerror = () => no(t.error);
 }));
 
+// Tabs share the store: after a write, the others drop their copy and read it again when next
+// needed. Writes merge into what is stored, inside one transaction, so no tab undoes another's.
+let bc = null;
+function channel() {
+  if (!bc && typeof BroadcastChannel !== "undefined") { bc = new BroadcastChannel("baltazar-contacts"); bc.onmessage = () => { cache = null; }; bc.unref?.(); }
+  return bc;
+}
+const changed = () => channel()?.postMessage("changed");
+// mutate(stored or undefined, email) -> the row to store, or null to leave it; returns the rows written.
+const updateRows = (emails, mutate) => openDb().then(d => new Promise((ok, no) => {
+  const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE), out = [];
+  for (const email of emails) {
+    const r = s.get(email);
+    r.onsuccess = () => { const row = mutate(r.result, email); if (row) { s.put(row); out.push(row); } };
+  }
+  t.oncomplete = () => { for (const row of out) cache?.set(row.email, row); changed(); ok(out); };
+  t.onerror = () => no(t.error);
+}));
+
 async function loadAll() {
+  channel();
   if (cache) return cache;
   const rows = await tx(STORE, "readonly", s => s.getAll());
   cache = new Map((rows || []).map(r => [r.email, r]));
@@ -50,15 +70,18 @@ const MACHINE_WORD = /-(auto-?reply|auto-?responder|automated|newsletters?|maile
 const ROLE_WORD = /^(bounces?|notifications?|notify|notices?|alerts?|automated|newsletters?|news|marketing|updates?|mailer|mail|sendmail|reply|postmaster|promo(tions?)?|offers?|deals|messages?|messenger|receipts?|transactions?|orders?|invoices?|billing|statements?|accounts?|edelivery|surveys?|websurvey|membership|rewards|tickets?|info|information|sales|support|service|services|hello|team)\d*$/;
 const BULK_LABEL = /mail|^([etom]|em|ma|m\d|msg|txn|news|newsletter|info|infos|update|updates|mkt|marketing|send|bounces?|notify|notifications?|notice|alerts?|reply|promo|offers?|campaign|comms|communications|comunicaciones|messaging|orders?|print)\d*$/;
 const BULK_WORD = /^(e?mails?|info|infos|news|notice|notify|surveys?|alerts?|promo|offers?)$/;
+const SECOND_LEVEL = /^(co|com|net|org|gov|edu|ac|ne|or|go|gob|gen|ltd|plc|nic|mil)$/;
 export function machineAddress(email) {
   email = email.toLowerCase();
   const at = email.lastIndexOf("@"), local = email.slice(0, at), labels = email.slice(at + 1).split(".");
+  // The registrable domain is two labels, or three under a country's second level (hotmail.co.uk)
+  const n = labels.length, sld = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.test(labels[n - 2]) ? 3 : 2;
   const dashed = `-${local.replace(/[._+]/g, "-")}-`;
   if (NO_REPLY.test(dashed) || MACHINE_WORD.test(dashed) || ROLE_WORD.test(local.split(/[._+-]/)[0])) return true;
   if (local.length >= 20 && (local.match(/\d/g) || []).length >= 6) return true;
-  const name = labels[labels.length - 2] || "";
-  const academic = labels[labels.length - 1] === "edu" || labels.includes("ac");  // mail.uni.edu is a person
-  return labels[labels.length - 1] === "email" || (!academic && labels.slice(0, -2).some(l => BULK_LABEL.test(l))) ||
+  const name = labels[n - sld] || "";
+  const academic = labels[n - 1] === "edu" || labels.includes("ac");  // mail.uni.edu is a person
+  return labels[n - 1] === "email" || (!academic && labels.slice(0, -sld).some(l => BULK_LABEL.test(l))) ||
     (name.includes("-") && name.split("-").some(w => BULK_WORD.test(w))) || (name.length > 5 && name.endsWith("email"));
 }
 const machineMemo = new Map();
@@ -98,7 +121,7 @@ async function record(m, direction, pending) {
   for (const list of lists) for (const a of list || []) {
     const email = (a.email || "").trim().toLowerCase();
     if (!email || !email.includes("@") || own.has(email)) continue;
-    const e = pending.get(email) || cache.get(email) || { email, name: "", nameBy: {}, sent: 0, received: 0, last: 0, lastSent: 0 };
+    const e = pending.get(email) || { email, nameBy: {}, sent: 0, received: 0, last: 0, lastSent: 0 };   // what this scan adds
     noteName(e, a.name, direction === "sent" ? "mine" : list === h.from ? "self" : "others");
     if (direction === "sent") { e.sent++; e.lastSent = Math.max(e.lastSent, when); } else e.received++;
     e.last = Math.max(e.last, when);
@@ -106,14 +129,25 @@ async function record(m, direction, pending) {
   }
 }
 
+// Adds what a scan saw to the stored entries.
 async function flush(pending) {
   if (!pending.size) return;
-  for (const e of pending.values()) {
+  const adds = new Map(pending); pending.clear();
+  await updateRows([...adds.keys()], (stored, email) => {
+    const d = adds.get(email);
+    const e = stored || { email, name: "", nameBy: {}, sent: 0, received: 0, last: 0, lastSent: 0 };
+    e.sent = (e.sent || 0) + d.sent; e.received = (e.received || 0) + d.received;
+    e.last = Math.max(e.last || 0, d.last); e.lastSent = Math.max(e.lastSent || 0, d.lastSent);
+    for (const [src, names] of Object.entries(d.nameBy)) for (const [n, c] of Object.entries(names)) for (let i = 0; i < c; i++) noteName(e, n, src);
     e.name = bestName(e);
-    cache.set(e.email, e);
-  }
-  await tx(STORE, "readwrite", s => { for (const e of pending.values()) s.put(e); });
-  pending.clear();
+    return e;
+  });
+}
+
+// A full build counts every message again, so it starts from zero; the user's hide choices stay.
+async function resetCounts() {
+  const emails = [...(await loadAll()).keys()];
+  await updateRows(emails, stored => stored && Object.assign(stored, { sent: 0, received: 0, last: 0, lastSent: 0, nameBy: {}, names: undefined, name: "" }));
 }
 
 async function getMeta(key) { const r = await tx(META, "readonly", s => s.get(key)); return r ? r.value : null; }
@@ -160,6 +194,7 @@ export async function sync({ inbox, sent, full = false, progress } = {}) {
   await loadAll();
   const built = await getMeta("built");
   const doFull = full || !built;
+  if (doFull) await resetCounts();
   let n = 0;
   if (sent) n += await scanFolder(sent, "sent", doFull, progress);
   if (inbox) n += await scanFolder(inbox, "received", doFull, progress);
@@ -186,12 +221,7 @@ function score(e, now) {
 }
 
 // Addresses the user never wants suggested (newsletters and the like). Still counted, never shown.
-export async function hide(email, hidden = true) {
-  await loadAll();
-  const e = cache.get(email.toLowerCase()); if (!e) return;
-  e.hidden = hidden;
-  await tx(STORE, "readwrite", s => s.put(e));
-}
+export async function hide(email, hidden = true) { await hideMany([email], hidden); }
 
 // Every entry, for the address book manager.
 export async function all() {
@@ -201,9 +231,7 @@ export async function all() {
 
 export async function hideMany(emails, hidden = true) {
   await loadAll();
-  const list = emails.map(x => cache.get(String(x).toLowerCase())).filter(Boolean);
-  for (const e of list) e.hidden = hidden;
-  if (list.length) await tx(STORE, "readwrite", s => { for (const e of list) s.put(e); });
+  await updateRows(emails.map(x => String(x).toLowerCase()), stored => stored && Object.assign(stored, { hidden }));
 }
 
 export async function hiddenList() {
