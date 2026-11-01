@@ -184,7 +184,8 @@ export async function open(opts) {
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
   // A message without a usable date is quoted without one, not as "Invalid Date".
   const sent = new Date(Number(h.date) * 1000), when = h.date && !isNaN(sent) ? sent.toLocaleString() : "";
-  const quoteHeader = () => `${when ? `On ${when}, ` : ""}${esc(fmt((h.from || [])[0]))} wrote:`;
+  const quoteHeaderText = () => `${when ? `On ${when}, ` : ""}${fmt((h.from || [])[0])} wrote:`;
+  const quoteHeader = () => esc(quoteHeaderText());
   switch (opts.mode) {
     case "reply":
     case "replyAll": {
@@ -194,7 +195,7 @@ export async function open(opts) {
       // The sender's style sheets stay out of the reply: they would apply to the whole outgoing
       // message in the recipients' mail and could restyle or hide the user's own text.
       draft.quoteHtml = `<div class="ymq"><div>${quoteHeader()}</div><blockquote style="border-left:1px solid #ccc;margin:0 0 0 .8em;padding-left:1em">${withoutStyleSheets(opts.body.html)}</blockquote></div>`;
-      draft.quoteText = `${quoteHeader().replace(/&lt;/g, "<").replace(/&gt;/g, ">")}\n` + toText(opts.body.html).split("\n").map(l => "> " + l).join("\n");
+      draft.quoteText = `${quoteHeaderText()}\n` + toText(opts.body.html).split("\n").map(l => "> " + l).join("\n");
       break;
     }
     case "forward": {
@@ -203,7 +204,8 @@ export async function open(opts) {
       const hdr = `---------- Forwarded message ----------<br>From: ${esc(fmtList(h.from))}${when ? `<br>Date: ${when}` : ""}<br>Subject: ${esc(h.subject || "")}<br>To: ${esc(fmtList(h.to))}${h.cc?.length ? `<br>Cc: ${esc(fmtList(h.cc))}` : ""}<br><br>`;
       // as in a reply, the sender's style sheets stay out of the outgoing message
       draft.quoteHtml = `<div class="ymq">${hdr}${withoutStyleSheets(opts.body.html)}</div>`;
-      draft.quoteText = hdr.replace(/<br>/g, "\n").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") + toText(opts.body.html);
+      const hdrText = `---------- Forwarded message ----------\nFrom: ${fmtList(h.from)}${when ? `\nDate: ${when}` : ""}\nSubject: ${h.subject || ""}\nTo: ${fmtList(h.to)}${h.cc?.length ? `\nCc: ${fmtList(h.cc)}` : ""}\n\n`;
+      draft.quoteText = hdrText + toText(opts.body.html);
       draft.refs = (opts.body.attachments || []).filter(a => a.disposition !== "inline" && a.partId)
         .map(a => ({ messageId: m.id, partId: a.partId, contentId: a.contentId, filename: a.filename || "Untitled", size: a.size || 0 }));
       break;
@@ -484,12 +486,23 @@ function withoutStyleSheets(html) {
   return tpl.innerHTML;
 }
 
+// Plain text of an HTML message: links keep their address, list items their bullet or number,
+// table cells a tab between them.
 function toText(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   doc.querySelectorAll("style, script").forEach(e => e.remove());
+  for (const a of doc.querySelectorAll("a[href]")) {
+    const href = a.getAttribute("href").trim(), text = a.textContent.trim();
+    if (/^https?:\/\//i.test(href) && text && text !== href && text !== href.replace(/\/$/, "")) a.append(` <${href}>`);
+  }
+  for (const li of doc.querySelectorAll("li")) {
+    const ol = li.parentElement?.tagName === "OL";
+    li.prepend(ol ? `${[...li.parentElement.children].filter(c => c.tagName === "LI").indexOf(li) + 1}. ` : "• ");
+  }
+  for (const td of doc.querySelectorAll("td, th")) if (td.nextElementSibling) td.append("\t");
   doc.querySelectorAll("br").forEach(e => e.replaceWith("\n"));
   doc.querySelectorAll("p, div, tr, li, h1, h2, h3, h4, blockquote, pre").forEach(e => e.append("\n"));
-  return doc.body.textContent.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return doc.body.textContent.replace(/ +\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 function textToHtml(t) { return esc(t).replace(/\n/g, "<br>"); }
 
@@ -658,7 +671,7 @@ async function send() {
   hooks.onClose();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
-    run: async () => { await saved(); const r = await api.send(d, sentId); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
+    run: async () => { await saved(); const r = await api.send(d, sentId).catch(e => { if (e.savedId) snapshot.savedId = e.savedId; throw e; }); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
     restore: () => reopenFrom(snapshot),
   });
 }

@@ -352,6 +352,11 @@ export async function send(d, sentFolderId) {
   const { message } = saveResult(r);
   const sent = r.find(x => x.id === "SendMessage");
   const code = sent?.httpCode ?? 0;
-  if (code < 200 || code >= 300) throw new ApiError(`send: HTTP ${code} ${JSON.stringify(sent?.response?.error || "").slice(0, 120)}`, sent);
+  if (code < 200 || code >= 300) {
+    // The message was saved to Drafts before the send failed; the composer keeps track of that copy.
+    const e = new ApiError(`send: HTTP ${code} ${JSON.stringify(sent?.response?.error || "").slice(0, 120)}`, sent);
+    e.savedId = message?.id || null;
+    throw e;
+  }
   return { message, ms: r.ms };
 }

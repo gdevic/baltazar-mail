@@ -328,6 +328,34 @@ scenario("outgoing mail carries no sender style sheet and no Yahoo address", asy
   expect(out.every(o => !o.style && !o.yahoo), "forward and reply carry neither: " + JSON.stringify(out));
 });
 
+scenario("a plain-text reply quotes names and structure as text", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") { m.headers.from = [{ name: `O'Brien "AT&T"`, email: "ob@x.ie" }];
+    body.html = '<p>See <a href="https://example.com/doc">the doc</a> and <a href="https://example.com/">https://example.com/</a></p><ul><li>one</li><li>two</li></ul><ol><li>first</li></ol><table><tr><td>a</td><td>b</td></tr></table>'; } };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.click("#c-quote-toggle"); await page.waitForTimeout(300);
+  const text = await page.frameLocator("#c-quote iframe").locator("pre").textContent();
+  expect(/O'Brien "AT&T" <ob@x\.ie> wrote:/.test(text) && !/&#39;|&quot;|&amp;/.test(text), "the header reads as text: " + JSON.stringify(text.split("\n")[0]));
+  expect(text.includes("the doc <https://example.com/doc>") && !text.includes("https://example.com/ <https://example.com/>"), "links keep their address once: " + JSON.stringify(text));
+  expect(/> • one\n> • two/.test(text) && /> 1\. first/.test(text) && /> a\tb/.test(text), "bullets, numbers and cells survive: " + JSON.stringify(text));
+}, { settings: { composeHtml: false } });
+
+scenario("a send that fails after saving reopens with its Drafts copy", async ({ page, calls, mock }, expect) => {
+  let fail = 1;
+  mock.handler = async ({ name, top }) => {
+    if (name !== "messages.saveAndSend" || fail-- <= 0) return;
+    const ans = saveAnswer(top); ans.responses.find(x => x.id === "SendMessage").httpCode = 500; return ans;
+  };
+  await newMessage(page, { subject: "Bounce", text: "body" });
+  await page.keyboard.press("Control+Enter");
+  await page.waitForSelector("#compose:not(.hidden)", { timeout: 8000 });
+  await page.waitForTimeout(300);
+  page.once("dialog", d => d.accept());
+  await page.click("#c-discard"); await page.waitForTimeout(600);
+  const del = calls.filter(c => c.name === "messages.delete").map(c => c.envelope.requests[0].uri);
+  expect(del.some(u => u.includes("MSGDRAFT_99")), "discarding it deletes the copy the failed send saved: " + JSON.stringify(del));
+}, { allow: /send|HTTP 500/ });
+
 scenario("saving again does not upload attachments again", async ({ page, calls, mock }, expect) => {
   let partial = 0;
   mock.handler = async ({ name, top }) => {
