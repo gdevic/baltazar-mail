@@ -78,5 +78,29 @@ await ids("alex picture oslo");
 check("no negated keyword sent", calls.some(c => /-keyword|-from|-subject/.test(c)), false);
 let threw = null; try { parse("(a OR b) (c OR d) (e OR f) (g OR h) (i OR j)"); nativeQuery(parse("(a OR b) (c OR d) (e OR f) (g OR h) (i OR j)")); } catch (e) { threw = e.message; }
 check("complexity cap", !!threw, true);
+// values a field does not know are refused, not searched as words
+const err = f => { try { f(); return null; } catch (e) { return e.message; } };
+check("unknown is:", /is:important/.test(err(() => nativeQuery(parse("is:important"))) || ""), true);
+check("unknown date", /after:yesterday/.test(err(() => nativeQuery(parse("after:yesterday alex"))) || ""), true);
+check("impossible date", /2026-02-30/.test(err(() => nativeQuery(parse("before:2026-02-30"))) || ""), true);
+check("unknown has:", /has:pictures/.test(err(() => nativeQuery(parse("has:pictures"))) || ""), true);
+check("valid date still fine", nativeQuery(parse("after:2024-02-29")), "after:2024-02-29");
+// a quoted operator is a word; empty quotes and parentheses are nothing
+check("quoted OR is a word", describe(parse('alex "OR" sam')), "alex AND OR AND sam");
+check("quoted OR native", nativeQuery(parse('"OR"')), "keyword:OR");
+check("empty parens in quotes", parse('"()"'), null);
+check("empty quotes", parse('alex ""'), parse("alex"));
+// very deep nesting is refused with a message instead of overflowing the stack
+check("deep NOT", /nested too deeply/.test(err(() => parse("NOT ".repeat(3000) + "x")) || ""), true);
+check("deep parens", /nested too deeply/.test(err(() => parse("(".repeat(3000) + "x")) || ""), true);
+check("ordinary nesting", describe(parse("((a OR b) (c OR NOT d))")), "(a OR b) AND (c OR NOT d)");
+// a long OR of fields is capped instead of firing one request per term
+check("OR fan-out cap", /too many/.test(await evaluate(parse(Array.from({ length: 200 }, (_, i) => `from:u${i}`).join(" OR ")), run).then(() => "", e => e.message)), true);
+{
+  let live = 0, peak = 0;
+  const slow = async (q, n) => { live++; peak = Math.max(peak, live); await new Promise(r => setTimeout(r, 5)); live--; return server(q, n); };
+  await evaluate(parse(Array.from({ length: 12 }, (_, i) => `from:u${i}`).join(" OR ")), slow);
+  check("at most 4 queries at once", peak <= 4, true);
+}
 console.log(fail ? `FAILED ${fail}` : "PASS");
 process.exit(fail ? 1 : 0);

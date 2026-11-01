@@ -3,7 +3,7 @@ import { THEMES, applyTheme, clampContrast } from "./themes.js";
 import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
-import { parse, nativeQuery, evaluate, describe, CAP } from "./query.js";
+import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { extract } from "./mime.js";
@@ -1488,7 +1488,9 @@ function updateScopeChip() {
 async function doSearch(term, everywhere = false) {
   term = term.trim();
   if (!term) return;
-  if (!parse(term)) { status("nothing to search for"); return; }
+  let ast;
+  try { ast = parse(term); check(ast); } catch (e) { notify(`Could not search: ${e.message}.`); return; }
+  if (!ast) { status("nothing to search for"); return; }
   const scope = everywhere || scopeOff ? null : scopeOfView();
   const back = state.view.kind === "search" ? state.view.back : state.view;
   leaveView();

@@ -234,6 +234,14 @@ scenario("the message list speaks to screen readers", async ({ page }, expect) =
   expect(marked === 2, "selected rows are marked selected: " + marked);
 });
 
+scenario("a search term with an unknown value says so", async ({ page }, expect) => {
+  const title = await page.locator("#list-title").textContent();
+  await page.locator("#search").click(); await page.keyboard.type("is:important"); await page.keyboard.press("Enter");
+  await page.waitForTimeout(500);
+  const n = await notice(page);
+  expect(/is:important is not a search term/.test(n) && await page.locator("#list-title").textContent() === title, "the reason is shown and the list stays: " + n);
+});
+
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };

@@ -11,6 +11,8 @@
 const FIELDS = new Set(["from", "to", "subject", "has", "is", "after", "before"]);
 export const CAP = 500;          // messages fetched per native query of a compound search
 const MAX_CONJ = 16;
+const MAX_DEPTH = 64;            // nesting of parentheses and NOT
+const PARALLEL = 4;              // native queries in flight at once
 
 // ---------- parsing ----------
 function tokenize(s) {
@@ -22,7 +24,7 @@ function tokenize(s) {
     if (c === "(" || c === ")") { out.push({ k: c }); i++; continue; }
     let neg = false;
     if (c === "-" && i + 1 < s.length && !/\s/.test(s[i + 1])) { neg = true; i++; }
-    let field = null, value = "", phrase = false;
+    let field = null, value = "", phrase = false, quoted = false;
     const m = s.slice(i).match(/^([a-z]+):(?=\S)/i);
     if (m && FIELDS.has(m[1].toLowerCase())) { field = m[1].toLowerCase(); i += m[0].length; }
     if (s[i] === "(") {          // -( ... ) negates a group, field:( ... ) applies to its terms
@@ -32,6 +34,7 @@ function tokenize(s) {
       continue;
     }
     if (s[i] === '"') {
+      quoted = true;
       const end = s.indexOf('"', i + 1);
       value = s.slice(i + 1, end < 0 ? s.length : end);
       i = end < 0 ? s.length : end + 1;
@@ -42,8 +45,8 @@ function tokenize(s) {
       i += value.length;
     }
     value = value.trim();
-    if (!field && !neg && !phrase && /^(AND|OR|NOT)$/.test(value)) { out.push({ k: value }); continue; }
-    if (!value) continue;
+    if (!field && !neg && !quoted && /^(AND|OR|NOT)$/.test(value)) { out.push({ k: value }); continue; }
+    if (!clean(value)) continue;     // nothing searchable: "" or "()"
     const term = { t: "term", field, value, phrase };
     out.push({ k: "term", node: neg ? { t: "not", kid: term } : term });
   }
@@ -60,8 +63,9 @@ function withField(n, field) {
 
 export function parse(input) {
   const toks = tokenize(String(input || ""));
-  let p = 0;
+  let p = 0, depth = 0;
   const peek = () => toks[p]?.k;
+  const deeper = () => { if (++depth > MAX_DEPTH) throw new Error("search is nested too deeply"); };
   function orExpr() {
     const kids = [andExpr()].filter(Boolean);
     while (peek() === "OR") { p++; const k = andExpr(); if (k) kids.push(k); }
@@ -79,10 +83,12 @@ export function parse(input) {
     return kids.length > 1 ? { t: "and", kids } : kids[0] || null;
   }
   function unary() {
-    if (peek() === "NOT") { p++; const u = unary(); return u ? { t: "not", kid: u } : null; }
+    if (peek() === "NOT") { p++; deeper(); const u = unary(); depth--; return u ? { t: "not", kid: u } : null; }
     if (peek() === "(") {
       const field = toks[p++].field;
+      deeper();
       const e = orExpr();
+      depth--;
       if (peek() === ")") p++;
       if (field) withField(e, field);
       return e;
@@ -102,9 +108,13 @@ export function parse(input) {
 
 // ---------- terms to Yahoo atoms ----------
 const clean = v => v.replace(/["()]/g, " ").replace(/\s+/g, " ").trim();
+// A real calendar date as YYYY-MM-DD, or null (2026-02-30 is not one).
 function isoDate(v) {
   const m = v.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
-  return m ? `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}` : null;
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])], t = new Date(Date.UTC(y, mo - 1, d));
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return null;
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
 }
 
 // Yahoo atom for a term, or for its negation when Yahoo can negate it; null when it cannot.
@@ -115,15 +125,17 @@ export function atom(term, neg = false) {
     case "from": return neg ? null : `from:("${v}")`;
     case "to": return neg ? null : `to:("${v}")`;
     case "subject": return neg ? null : `subject:"${v}"`;
-    case "has": return /^attachments?$/.test(lv) ? `${neg ? "-" : ""}has:attachment` : null;
+    case "has":
+      if (/^attachments?$/.test(lv)) return `${neg ? "-" : ""}has:attachment`;
+      throw new Error(`has:${v} is not a search term; has:attachment is`);
     case "is":
       if (lv === "starred" || lv === "flagged") return `${neg ? "-" : ""}is:flagged`;
       if (lv === "unread") return neg ? "is:read" : "is:unread";
       if (lv === "read") return neg ? "is:unread" : "is:read";
-      return null;
+      throw new Error(`is:${v} is not a search term; is:starred, is:unread and is:read are`);
     case "after": case "before": {
       const d = isoDate(v);
-      if (!d) return null;
+      if (!d) throw new Error(`${term.field}:${v} is not a date; write it as YYYY-MM-DD`);
       const f = (term.field === "after") !== neg ? "after" : "before";
       return `${f}:${d}`;
     }
@@ -133,6 +145,14 @@ export function atom(term, neg = false) {
 const isKeyword = t => t.field === null;
 const known = t => t.field === null || atom(t) !== null;
 
+// Throws, with the reason, for a term whose field does not know its value (is:important).
+export function check(node) {
+  if (!node) return;
+  if (node.t === "term") { if (node.field) atom(node); return; }
+  if (node.t === "not") return check(node.kid);
+  node.kids.forEach(check);
+}
+
 // ---------- normal form ----------
 // Returns an array of conjunctions; each is an array of { term, neg }.
 function dnf(node, neg = false) {
@@ -141,7 +161,11 @@ function dnf(node, neg = false) {
   if (node.t === "not") return dnf(node.kid, !neg);
   const asAnd = (node.t === "and") !== neg;
   const parts = node.kids.map(k => dnf(k, neg));
-  if (!asAnd) return parts.flat();
+  if (!asAnd) {
+    const all = parts.flat();
+    if (all.length > MAX_CONJ) throw new Error("search is too complex (too many alternatives joined by OR)");
+    return all;
+  }
   let acc = [[]];
   for (const p of parts) {
     const next = [];
@@ -181,12 +205,23 @@ export function nativeQuery(ast) {
 }
 
 // ---------- evaluation ----------
+// fn with at most n calls running at once; the rest wait their turn.
+function limited(fn, n) {
+  let live = 0;
+  const queue = [];
+  const next = () => { if (live < n && queue.length) { live++; queue.shift()(); } };
+  return (...args) => new Promise((ok, no) => {
+    queue.push(() => Promise.resolve().then(() => fn(...args)).then(ok, no).finally(() => { live--; next(); }));
+    next();
+  });
+}
 // run(query, count) -> Promise<message[]> runs a Yahoo query (scope already applied by the
 // caller for base queries; id-filter queries need none). Returns { messages, truncated }.
 export async function evaluate(ast, run, scope = "") {
   const conjs = dnf(ast);
   let truncated = false;
   const byId = new Map();
+  run = limited(run, PARALLEL);
   await Promise.all(conjs.map(async conj => {
     const p = plan(conj);
     const fixed = [scope, ...p.native].filter(Boolean).join(" ");
