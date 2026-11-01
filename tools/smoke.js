@@ -32,6 +32,11 @@ const folders = [
   { id: "31", name: "Projects", types: ["USER"], unread: 0, total: 5, highestModSeq: 13 },
   { id: "32", name: "Projects/A-Z80", types: ["USER"], unread: 1, total: 7, highestModSeq: 14 },
   { id: "99", name: "Hidden", types: ["SYNC"], unread: 0, total: 0, highestModSeq: 15 },
+  // nesting by path segment, and a subfolder whose parent does not exist
+  { id: "50", name: "Work", types: ["USER"], unread: 0, total: 1, highestModSeq: 19 },
+  { id: "51", name: "Work.x", types: ["USER"], unread: 0, total: 1, highestModSeq: 20 },
+  { id: "52", name: "Work/Sub", types: ["USER"], unread: 0, total: 1, highestModSeq: 21 },
+  { id: "53", name: "Orphan/Child", types: ["USER"], unread: 0, total: 1, highestModSeq: 22 },
 ];
 
 (async () => {
@@ -213,12 +218,19 @@ const folders = [
   await page.emulateMedia({ forcedColors: "none" });
   // Start-up clears a toolbar dot left by an earlier load and keeps the tab from being discarded.
   const startup = await page.evaluate(() => ({ icon: JSON.stringify((window.iconCalls || [])[0] || null), tab: JSON.stringify(window.tabUpdates || []) }));
+  // Subfolders sit under their own parent; one without a parent folder is still listed.
+  await page.locator("#folder-list .folder", { hasText: /^▸Work/ }).locator(".tw").click();
+  const tree = await page.locator("#folder-list .folder").evaluateAll(els => els.map(e => `${e.querySelector(".nm").textContent}@${parseInt(e.style.paddingLeft)}`));
+  await page.locator("#folder-list .folder", { hasText: /^▾Work/ }).locator(".tw").click();
   const expectEnd = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
     "layout, palette and pane sizes survive a reload: " + JSON.stringify(persisted));
   expectEnd(ghAfterZip === 1 && ghAfterStore === 1, "a ZIP install asks GitHub once, a store install never: " + JSON.stringify({ ghAfterZip, ghAfterStore }));
   expectEnd(forced.sel === "solid 2" && forced.marked === "dashed 1" && forced.folder === "solid 2" && forced.hit, "selection, marks, the active folder and search hits show in forced colours: " + JSON.stringify(forced));
   expectEnd(startup.icon.includes("icons/16.png") && startup.tab === '[[7,{"autoDiscardable":false}]]', "start-up resets the toolbar icon and keeps the tab: " + JSON.stringify(startup));
+  const at = n => tree.findIndex(t => t.startsWith(n + "@"));
+  expectEnd(at("Sub") === at("Work") + 1 && tree[at("Sub")].endsWith("@20") && at("Work.x") > at("Sub") && tree.includes("Orphan/Child@8"),
+    "subfolders nest under their own parent, orphans stay listed: " + JSON.stringify(tree));
   expectEnd(!unexpected.size, "no request left for the real network: " + [...unexpected].join(", "));
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();

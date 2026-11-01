@@ -189,17 +189,24 @@ function renderFolders() {
   const visible = state.folders.filter(f => !isHidden(f));
   // System folders in their usual order, the primary account's before a linked account's.
   const sys = visible.filter(folderType).sort((a, b) => SYSTEM_ORDER.indexOf(folderType(a)) - SYSTEM_ORDER.indexOf(folderType(b)) || ofPrimary(b) - ofPrimary(a));
-  const user = visible.filter(f => !folderType(f)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  // User folders sorted by path segment, so "Work/Sub" follows "Work" rather than "Work.x".
+  const byPath = (a, b) => {
+    const x = a.name.split("/"), y = b.name.split("/");
+    for (let i = 0; i < Math.min(x.length, y.length); i++) { const c = x[i].localeCompare(y[i], undefined, { sensitivity: "base" }); if (c) return c; }
+    return x.length - y.length;
+  };
+  const user = visible.filter(f => !folderType(f)).sort(byPath);
+  const userNames = new Set(user.map(f => f.name));
   const hasChildren = new Set();
   for (const f of user) { const p = f.name.split("/"); for (let i = 1; i < p.length; i++) hasChildren.add(p.slice(0, i).join("/")); }
   const frag = document.createDocumentFragment();
-  const add = (f, depth, twisty) => {
+  const add = (f, depth, twisty, label = folderName(f).split("/").pop()) => {
     const el = document.createElement("div");
     el.className = "folder" + (f.unread ? " unread" : "") + (folderType(f) ? " sys" : "") +
       (state.view.kind === "folder" && state.view.folderId === f.id ? " active" : "");
     el.dataset.id = f.id;
     el.style.paddingLeft = `${8 + depth * 12}px`;
-    el.innerHTML = `<span class="tw">${twisty}</span><span class="nm" title="${esc(folderName(f))}">${esc(folderName(f).split("/").pop())}</span><span class="ct"></span>`;
+    el.innerHTML = `<span class="tw">${twisty}</span><span class="nm" title="${esc(folderName(f))}">${esc(label)}</span><span class="ct"></span>`;
     el.onclick = e => {
       if (e.target.classList.contains("tw") && twisty) { toggleExpand(f.name); return; }
       openFolder(f.id);
@@ -244,11 +251,13 @@ function renderFolders() {
   for (const f of user) {
     const parts = f.name.split("/");
     if (filter) { if (folderName(f).toLowerCase().includes(filter)) add(f, 0, ""); continue; }
-    let hidden = false;
-    for (let i = 1; i < parts.length; i++) if (!state.expanded.has(parts.slice(0, i).join("/"))) { hidden = true; break; }
-    if (hidden) continue;
+    // Only ancestors that are shown folders nest and collapse it; a missing or hidden parent
+    // stays part of the name, so the folder is never out of reach.
+    const shown = [];
+    for (let i = 1; i < parts.length; i++) if (userNames.has(parts.slice(0, i).join("/"))) shown.push(i);
+    if (shown.some(i => !state.expanded.has(parts.slice(0, i).join("/")))) continue;
     const kids = hasChildren.has(f.name);
-    add(f, parts.length - 1, kids ? (state.expanded.has(f.name) ? "▾" : "▸") : "");
+    add(f, shown.length, kids ? (state.expanded.has(f.name) ? "▾" : "▸") : "", parts.slice(shown.at(-1) || 0).join("/"));
   }
   list.innerHTML = "";
   list.appendChild(frag);
