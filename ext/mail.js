@@ -93,10 +93,8 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || null) : null;
 // System folders of the primary account (the one holding Yahoo's own Inbox, folder 1); linked
 // accounts bring an Inbox, Sent and so on of their own.
-const folderByType = t => {
-  const acct = state.byId.get("1")?.acctId, all = state.folders.filter(f => f.types.includes(t));
-  return all.find(f => acct == null || f.acctId == null || f.acctId === acct) || all[0];
-};
+const ofPrimary = f => { const acct = state.byId.get("1")?.acctId; return acct == null || f.acctId == null || f.acctId === acct; };
+const folderByType = t => { const all = state.folders.filter(f => f.types.includes(t)); return all.find(ofPrimary) || all[0]; };
 const inboxId = () => folderByType("INBOX")?.id ?? "1";
 const isHidden = f => f.types.some(t => t === "SYNC" || t === "INVISIBLE");
 // Yahoo names the spam folder "Bulk" internally; the web UI shows it as Spam.
@@ -189,7 +187,8 @@ function renderFolders() {
   const list = $("folder-list");
   const filter = $("folder-filter").value.toLowerCase();
   const visible = state.folders.filter(f => !isHidden(f));
-  const sys = visible.filter(folderType).sort((a, b) => SYSTEM_ORDER.indexOf(folderType(a)) - SYSTEM_ORDER.indexOf(folderType(b)));
+  // System folders in their usual order, the primary account's before a linked account's.
+  const sys = visible.filter(folderType).sort((a, b) => SYSTEM_ORDER.indexOf(folderType(a)) - SYSTEM_ORDER.indexOf(folderType(b)) || ofPrimary(b) - ofPrimary(a));
   const user = visible.filter(f => !folderType(f)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   const hasChildren = new Set();
   for (const f of user) { const p = f.name.split("/"); for (let i = 1; i < p.length; i++) hasChildren.add(p.slice(0, i).join("/")); }
@@ -238,9 +237,9 @@ function renderFolders() {
     frag.appendChild(el);
   };
   for (const f of sys) {
-    if (filter && !folderName(f).toLowerCase().includes(filter)) { if (folderType(f) === "INBOX") addStarred(); continue; }
+    if (filter && !folderName(f).toLowerCase().includes(filter)) { if (f === folderByType("INBOX")) addStarred(); continue; }
     add(f, 0, "");
-    if (folderType(f) === "INBOX") addStarred();
+    if (f === folderByType("INBOX")) addStarred();
   }
   for (const f of user) {
     const parts = f.name.split("/");

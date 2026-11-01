@@ -146,6 +146,8 @@ const folders = [
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expect(versionLine === "Baltazar Mail 0.14.0", "version line: " + versionLine);
   expect(rows === 95 && foldersShown.some(f => f.startsWith("Folder 88")) && foldersShown.some(f => f.startsWith("Inbox (linked)")), "starts with odd folders, opening the primary Inbox: " + JSON.stringify({ rows, foldersShown }));
+  expect(foldersShown.filter(f => f.startsWith("Starred")).length === 1 && foldersShown.slice(0, 3).join("|") === "Inbox3|Starred95|Inbox (linked)8" && !foldersShown.some(f => f.startsWith("Hidden")),
+    "one Starred, after the primary Inbox; SYNC folders hidden: " + JSON.stringify(foldersShown));
   expect(scoped.chip === "in Inbox" && scoped.divider === 1 && scoped.allChip === "All mail" && scoped.allDivider === 0, "search scope: " + JSON.stringify(scoped));
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
