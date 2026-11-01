@@ -1,5 +1,5 @@
-// Golden values for the machine-sender rule in ext/contacts.js. node tools/contacts-test.mjs
-import { machineAddress, isHidden, scanStep } from "../ext/contacts.js";
+// Golden values for the machine-sender rule and the display-name choice in ext/contacts.js. node tools/contacts-test.mjs
+import { machineAddress, isHidden, scanStep, noteName, bestName } from "../ext/contacts.js";
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",
@@ -17,6 +17,7 @@ const person = [
   "jane@mail.example.edu", "x@mail.example.ac.uk", "dept42@example.com", "sinfo@example.com", "infoman@example.com", "irena@example.hr",
 ];
 let fail = 0;
+const check = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
 for (const e of machine) if (!machineAddress(e)) { fail++; console.log("FAIL should hide:", e); }
 for (const e of person) if (machineAddress(e)) { fail++; console.log("FAIL should keep:", e); }
 // The rule applies only to addresses never written to, and never overrides the user's choice.
@@ -28,7 +29,6 @@ const cases = [
 for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("FAIL isHidden", JSON.stringify(e), "want", want); }
 // Scans walk newest-first and stop at the bookmark; a future-dated message never moves it.
 {
-  const check = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
   const now = 2_000_000_000, day = 86400;
   const scan = (dates, opts) => { let newest = opts.newestSeen, recorded = 0, stopped = false;
     for (const d of dates) { const s = scanStep(d, newest, { ...opts, now }); if (s.stop) { stopped = true; break; } if (s.record) recorded++; newest = s.newest; }
@@ -38,6 +38,26 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   check(first.recorded === 3 && first.newest === now - 10, "full scan counts the future-dated message once, bookmark stays at today: " + JSON.stringify(first));
   const next = scan([future, now - 5, now - 10, now - 20], { full: false, newestSeen: first.newest });
   check(next.recorded === 1 && next.stopped && next.newest === now - 5, "incremental scan passes the future message and learns the new one: " + JSON.stringify(next));
+}
+// Names by source: a label other senders put on an address loses to the person's own From name,
+// which loses to the name the user typed, however often the weaker one is seen.
+{
+  const e = { names: { "Legacy": 9 } };
+  check(bestName(e) === "Legacy", "a name recorded before sources were kept still shows");
+  for (let i = 0; i < 20; i++) noteName(e, "Click Here To Pay", "others");
+  check(bestName(e) === "Click Here To Pay", "others' labels outvote legacy names only by count");
+  noteName(e, "Ann Smith", "self");
+  check(bestName(e) === "Ann Smith", "the person's own name beats any number of labels");
+  noteName(e, "Annie", "mine"); noteName(e, "  ", "mine"); noteName(e, null, "mine");
+  check(bestName(e) === "Annie", "the user's own name for them beats everything");
+  noteName(e, "Bob\u202Eevil", "mine"); noteName(e, "Bob\u202Eevil", "mine");
+  check(bestName(e) === "Bobevil", "bidi controls are not stored");
+  noteName(e, "x".repeat(300), "self");
+  check(Object.keys(e.nameBy.self).every(n => n.length <= 100), "names are capped in length");
+  const f = {};
+  for (let i = 0; i < 30; i++) noteName(f, `Spam ${i}`, "others");
+  noteName(f, "Spam 29", "others");
+  check(Object.keys(f.nameBy.others).length === 8 && bestName(f) === "Spam 29" && "Spam 28" in f.nameBy.others, "at most 8 names per source, newest kept: " + JSON.stringify(f.nameBy.others));
 }
 console.log(fail ? `${fail} FAIL` : `PASS (${machine.length} machine, ${person.length} person)`);
 process.exit(fail ? 1 : 0);

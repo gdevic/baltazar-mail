@@ -1,8 +1,9 @@
 import * as api from "./api.js";
+import { noBidi } from "./text.js";
 
 // Address book built from the user's own Inbox and Sent headers, kept in IndexedDB.
 // One entry per lowercase address: counts of messages sent to and received from it, the display
-// names seen (the most frequent one is shown), and the last time it was used.
+// names seen, and the last time it was used.
 
 const DB = "baltazar-mail", STORE = "contacts", META = "meta";
 let db = null;
@@ -66,6 +67,30 @@ const isMachine = email => { let m = machineMemo.get(email); if (m === undefined
 // hidden: true or false once the user decides; unset, a machine sender never written to is hidden.
 export const isHidden = e => e.hidden ?? (!e.sent && isMachine(e.email));
 
+// A display name is only as good as whoever wrote it. Names are kept by source, best first: the
+// user's own (recipients of mail they sent), the person's own (the From of mail they sent), and
+// anyone else's (other recipients of received mail, which any sender can label as they like).
+// The shown name is the most frequent of the best source that has one. names holds names recorded
+// before sources were kept, and counts as anyone else's.
+const SOURCES = ["mine", "self", "others"];
+const NAMES_KEPT = 8, NAME_MAX = 100;
+export function noteName(e, raw, source) {
+  const n = noBidi(raw).trim().slice(0, NAME_MAX);
+  if (!n) return;
+  const m = ((e.nameBy ||= {})[source] ||= {});
+  m[n] = (m[n] || 0) + 1;
+  const keys = Object.keys(m);
+  if (keys.length > NAMES_KEPT) delete m[keys.reduce((lo, k) => m[k] < m[lo] ? k : lo)];
+}
+export function bestName(e) {
+  for (const s of SOURCES) {
+    const m = { ...(s === "others" ? e.names : null), ...e.nameBy?.[s] };
+    const top = Object.entries(m).sort((a, b) => b[1] - a[1])[0];
+    if (top) return top[0];
+  }
+  return "";
+}
+
 // Record one message's addresses. direction: "sent" (we wrote it) or "received".
 async function record(m, direction, pending) {
   const h = m.headers || {}; const when = Number(h.date) || 0;
@@ -73,8 +98,8 @@ async function record(m, direction, pending) {
   for (const list of lists) for (const a of list || []) {
     const email = (a.email || "").trim().toLowerCase();
     if (!email || !email.includes("@") || own.has(email)) continue;
-    const e = pending.get(email) || cache.get(email) || { email, name: "", names: {}, sent: 0, received: 0, last: 0, lastSent: 0 };
-    if (a.name && a.name.trim()) { const n = a.name.trim(); e.names[n] = (e.names[n] || 0) + 1; }
+    const e = pending.get(email) || cache.get(email) || { email, name: "", nameBy: {}, sent: 0, received: 0, last: 0, lastSent: 0 };
+    noteName(e, a.name, direction === "sent" ? "mine" : list === h.from ? "self" : "others");
     if (direction === "sent") { e.sent++; e.lastSent = Math.max(e.lastSent, when); } else e.received++;
     e.last = Math.max(e.last, when);
     pending.set(email, e);
@@ -84,7 +109,7 @@ async function record(m, direction, pending) {
 async function flush(pending) {
   if (!pending.size) return;
   for (const e of pending.values()) {
-    e.name = Object.entries(e.names).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    e.name = bestName(e);
     cache.set(e.email, e);
   }
   await tx(STORE, "readwrite", s => { for (const e of pending.values()) s.put(e); });
