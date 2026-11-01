@@ -44,6 +44,8 @@ Privacy policy URL: https://github.com/gdevic/baltazar-mail/blob/main/PRIVACY.md
 
 ## Store listing (English)
 
+The description names features in sentences, not lists: the Chrome Web Store rejects runs of format or product names as keyword spam.
+
 Extension name: Baltazar Mail (from the manifest)
 
 Short description (from the manifest): A fast, ad-free client for Yahoo Mail that reuses your existing Yahoo sign-in. Not affiliated with Yahoo.
@@ -52,15 +54,15 @@ Description:
 
 > Baltazar Mail is a fast, clean, ad-free way to read and write your Yahoo Mail. It opens in its own tab and uses the Yahoo sign-in you already have in the browser, so there is nothing to set up: sign in to mail.yahoo.com once, then click the Baltazar Mail button.
 >
-> Reading: three-column or stacked layout with resizable panes, eleven light and dark palettes (one of them plain black on white), and a dark reading pane that darkens messages to match while keeping their colours and images. A Starred view collects flagged mail from every folder.
+> Reading: a three-column or stacked layout with resizable panes, light and dark palettes, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their colours and images. A Starred view collects flagged mail from every folder.
 >
-> Mailbox: read and unread, star, archive, move, delete, spam and not spam, on one message or a selection, with multi-level undo and redo.
+> Mailbox: mark messages read or unread, star, archive, move, delete or report them as spam, one at a time or as a selection, with multi-level undo and redo.
 >
-> Search: scoped to the open folder and its subfolders, with matches elsewhere listed below. AND, OR, NOT, quoted phrases and fields such as from:, to:, subject:, has:attachment and after: refine it.
+> Search: limited to the open folder and its subfolders, with matches elsewhere listed below, and simple operators to narrow it down.
 >
-> Writing: new message, reply, reply all and forward with the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own Inbox and Sent, with automated senders left out.
+> Writing: new messages, replies and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own Inbox and Sent, with automated senders left out.
 >
-> Attachments open in place: PDF with selectable text and zoom, Word, Excel and other spreadsheets, PowerPoint, images, text and code, CSV, audio, video and ZIP listings. Files are parsed in an isolated sandbox with no access to your session.
+> Attachments open in place: documents, spreadsheets, presentations, images and media are previewed without downloading, inside an isolated sandbox with no access to your session.
 >
 > Privacy: no server, no analytics, no ads. Your mail goes only between your browser and Yahoo. The source code is public at github.com/gdevic/baltazar-mail.
 >
