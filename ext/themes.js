@@ -1,6 +1,6 @@
 // Palettes mapped onto the UI's colour roles, one per hue, mostly in light and dark pairs.
-// Solarized Dark (ethanschoonover.com/solarized) and Gruvbox Dark (github.com/morhetz/gruvbox) are
-// as published; the others are ours.
+// Solarized Dark (ethanschoonover.com/solarized) and Gruvbox Dark (github.com/morhetz/gruvbox) use
+// their published colours, which the contrast minimums below may lift; the others are ours.
 // Roles: bg page, bg2 chrome, bg3 hover and buttons, fg text, fg2 secondary, fg3 hints, line
 // borders, sel selected row, selLine focus ring, accent stars/brand, unread bold text, link links.
 // bg3 and line are optional: without them they are derived from bg2.
