@@ -179,7 +179,9 @@ export async function open(opts) {
   let to = [], cc = [], subject = "", bodyHtml = "";
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
   const notMe = l => (l || []).filter(a => !mine.has((a.email || "").toLowerCase()));
-  const quoteHeader = () => `On ${new Date(Number(h.date) * 1000).toLocaleString()}, ${esc(fmt((h.from || [])[0]))} wrote:`;
+  // A message without a usable date is quoted without one, not as "Invalid Date".
+  const sent = new Date(Number(h.date) * 1000), when = h.date && !isNaN(sent) ? sent.toLocaleString() : "";
+  const quoteHeader = () => `${when ? `On ${when}, ` : ""}${esc(fmt((h.from || [])[0]))} wrote:`;
   switch (opts.mode) {
     case "reply":
     case "replyAll": {
@@ -197,7 +199,7 @@ export async function open(opts) {
     case "forward": {
       subject = /^fwd?:/i.test(h.subject || "") ? h.subject : `Fwd: ${h.subject || ""}`;
       draft.inReplyTo = { id: m.id, forwarded: true };
-      const hdr = `---------- Forwarded message ----------<br>From: ${esc(fmtList(h.from))}<br>Date: ${new Date(Number(h.date) * 1000).toLocaleString()}<br>Subject: ${esc(h.subject || "")}<br>To: ${esc(fmtList(h.to))}${h.cc?.length ? `<br>Cc: ${esc(fmtList(h.cc))}` : ""}<br><br>`;
+      const hdr = `---------- Forwarded message ----------<br>From: ${esc(fmtList(h.from))}${when ? `<br>Date: ${when}` : ""}<br>Subject: ${esc(h.subject || "")}<br>To: ${esc(fmtList(h.to))}${h.cc?.length ? `<br>Cc: ${esc(fmtList(h.cc))}` : ""}<br><br>`;
       draft.quoteHtml = `<div class="ymq">${hdr}${opts.body.html}</div>`;
       draft.quoteText = hdr.replace(/<br>/g, "\n").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") + toText(opts.body.html);
       draft.refs = (opts.body.attachments || []).filter(a => a.disposition !== "inline" && a.partId)
