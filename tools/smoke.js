@@ -46,9 +46,11 @@ const folders = [
   const page = await browser.newPage();
   const errors = [], mutations = [];
   // Nothing may reach the real network: hosts without a mock are recorded and refused. The test
-  // message's remote image (https://x/y.png) is the one request the reader is meant to make.
+  // message's remote image (on Yahoo's image proxy) is the one request the reader is meant to make.
   const unexpected = new Set();
-  await page.route(/^https?:\/\//, r => { const h = new URL(r.request().url()).hostname; if (h === "127.0.0.1") return r.continue(); if (h !== "x") unexpected.add(h); return r.abort(); });
+  const imageHosts = [];
+  // Images the reader asks the network for (requests a CSP blocks never get here).
+  await page.route(/^https?:\/\//, r => { const h = new URL(r.request().url()).hostname; if (r.request().frame().url() === "about:srcdoc") imageHosts.push(h); if (h === "127.0.0.1") return r.continue(); if (h !== "ecp.yusercontent.com") unexpected.add(h); return r.abort(); });
   page.on("pageerror", e => errors.push("pageerror: " + e.message));
   page.on("console", m => { if (m.type() === "error") errors.push("console: " + m.text()); });
   await page.addInitScript(() => {
@@ -78,7 +80,7 @@ const folders = [
     const uri = uriM ? uriM[1].replace(/\\u0026/g, "&") : "";
     let result;
     if (uri.endsWith("/folders")) result = { folders, accounts: [{ id: "1", highestModSeq: 1 }] };
-    else if (uri.includes("/content/simplebody/full")) result = { message: msg(1, "1"), simpleBody: { html: "<p>Hello <b>body</b><img src='https://x/y.png'></p>", attachments: [{ filename: "a.pdf", size: 2048, disposition: "attachment", downloadUrl: "https://cloud-apis.mail.yahoo.com/x" }] } };
+    else if (uri.includes("/content/simplebody/full")) result = { message: msg(1, "1"), simpleBody: { html: "<p>Hello <b>body</b><img src='https://ecp.yusercontent.com/y.png'><img src='https://cloud-apis.mail.yahoo.com/z.png'></p>", attachments: [{ filename: "a.pdf", size: 2048, disposition: "attachment", downloadUrl: "https://cloud-apis.mail.yahoo.com/x" }] } };
     else {
       const q = decodeURIComponent(uri.split("q=")[1] || "");
       const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1";
@@ -246,6 +248,40 @@ const folders = [
   await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
   keys.altHash = { rows: await rowCount(), undo: await undoText() };
   await page.keyboard.press("z"); await page.waitForTimeout(400);
+  // In the message: shortcuts work, scroll keys and copy stay with the message. Backspace deletes
+  // outside text fields too, but not in the search box.
+  const sel = () => page.locator("#rows .row").evaluateAll(rs => rs.findIndex(r => r.classList.contains("sel")));
+  const inBody = () => page.frameLocator("#r-body").locator("body").click({ position: { x: 5, y: 5 } });
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(600);
+  await inBody(); keys.frameFocus = await page.evaluate(() => document.activeElement.id);
+  await page.keyboard.press("Delete");
+  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  keys.frameDelete = { rows: await rowCount(), undo: await undoText() };
+  await page.keyboard.press("z"); await page.waitForTimeout(500);
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(600);
+  await inBody(); await page.keyboard.press("ArrowDown"); await page.waitForTimeout(300);
+  keys.frameArrow = await sel();
+  keys.frameCopy = await page.frameLocator("#r-body").locator("body").evaluate(b => { const e = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true, cancelable: true }); b.dispatchEvent(e); return e.defaultPrevented; });
+  await page.keyboard.press("j"); await page.waitForTimeout(600);
+  keys.frameJ = await sel();
+  await page.locator("#r-subject").click(); keys.before2 = await rowCount();
+  await page.keyboard.press("Backspace");
+  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  keys.headerBackspace = { rows: await rowCount(), undo: await undoText() };
+  await page.keyboard.press("z"); await page.waitForTimeout(500);
+  await page.locator("#search").focus(); const undoBefore = await undoText(); await page.keyboard.press("Backspace"); await page.waitForTimeout(400);
+  keys.searchBackspace = (await undoText()) === undoBefore && await rowCount() === keys.before2;
+  await page.keyboard.press("Escape");
+  // a frame with the reader's sandbox runs no script, even one that skipped the cleaning
+  keys.sandbox = await page.evaluate(async () => {
+    const f = document.createElement("iframe");
+    f.setAttribute("sandbox", document.getElementById("r-body").getAttribute("sandbox"));
+    f.srcdoc = `<script>parent.pwnedFrame = 1</script><img src="data:," onerror="parent.pwnedFrame = 1"><svg onload="parent.pwnedFrame = 1"></svg>`;
+    await new Promise(r => { f.onload = r; document.body.appendChild(f); });
+    await new Promise(r => setTimeout(r, 300));
+    f.remove();
+    return { attr: f.getAttribute("sandbox"), pwned: window.pwnedFrame ?? null };
+  });
   const labels = () => page.evaluate(() => ({ send: document.getElementById("c-send").title, help: [...document.querySelectorAll("#help td")].map(t => t.textContent).filter(t => /Ctrl|⌘/.test(t)).join(" | ") }));
   keys.pc = await labels();
   await page.evaluate(() => localStorage.setItem("mac", "1")); await page.reload(); await page.waitForSelector("#rows .row");
@@ -254,6 +290,11 @@ const folders = [
   const expectEnd = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expectEnd(keys.backspace.rows === keys.before - 1 && /Undo: delete/.test(keys.backspace.undo) && keys.altLetter === keys.before &&
     keys.altHash.rows === keys.before - 1 && /Undo: delete/.test(keys.altHash.undo), "Backspace and Alt+# delete, Alt+letter does nothing: " + JSON.stringify(keys));
+  expectEnd(keys.frameFocus === "r-body" && keys.frameDelete.rows === keys.before - 1 && /Undo: delete/.test(keys.frameDelete.undo) && keys.frameArrow === 0 && !keys.frameCopy && keys.frameJ === 1,
+    "shortcuts work while the message has focus; scrolling and copy stay with it: " + JSON.stringify(keys));
+  expectEnd(keys.headerBackspace.rows === keys.before2 - 1 && keys.searchBackspace, "Backspace deletes outside text fields: " + JSON.stringify(keys));
+  expectEnd(!/allow-scripts/.test(keys.sandbox.attr) && keys.sandbox.pwned === null, "the reader's sandbox runs no script: " + JSON.stringify(keys.sandbox));
+  expectEnd(imageHosts.includes("ecp.yusercontent.com") && !imageHosts.some(h => /yahoo\.com$/.test(h)), "the reader loads images only from Yahoo's proxy: " + JSON.stringify([...new Set(imageHosts)]));
   expectEnd(keys.pc.send === "Send (Ctrl+Enter)" && keys.mac.send === "Send (⌘Enter)" && !/Ctrl/.test(keys.mac.help) && /⌘Z/.test(keys.mac.help) && /⌘-click/.test(keys.mac.help),
     "Mac shortcut labels: " + JSON.stringify([keys.pc, keys.mac]));
   expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
@@ -268,7 +309,8 @@ const folders = [
   console.log(JSON.stringify({ rows, foldersShown, subject, frameHtml: frameHtml.slice(0, 80), hit, sentRows, helpVisible, errors }, null, 1));
   await browser.close();
   server.close();
-  const real = errors.filter(e => !e.includes("img-src 'none'") && !e.includes("ERR_TUNNEL_CONNECTION_FAILED") && !e.includes("net::ERR_"));
+  // Expected: images outside Yahoo's proxy refused by the reader's CSP, scripts refused by the sandbox.
+  const real = errors.filter(e => !e.includes("img-src 'none'") && !e.includes(`"img-src https://*.yusercontent.com data:"`) && !e.includes("the 'allow-scripts' permission is not set") && !e.includes("ERR_TUNNEL_CONNECTION_FAILED") && !e.includes("net::ERR_"));
   if (real.length) { console.error("FAILED:", real); process.exit(1); }
   console.log("PASS");
 })().catch(e => { console.error(e); process.exit(1); });

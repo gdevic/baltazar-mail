@@ -781,7 +781,7 @@ async function thumbFor(a) {
 // look: "light" (as written), "dark" (declared colours darkened, see darken.js) or "dim" (as
 // written, at 90% brightness so a white message does not glare in a dark app).
 function bodyDoc(html, images, look = "light") {
-  const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? "https: data:" : "'none'"};`;
+  const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? "https://*.yusercontent.com data:" : "'none'"};`;
   const dark = look === "dark";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:${dark ? DARK.fg : "#111"};word-wrap:break-word}` +
@@ -837,12 +837,21 @@ function showReaderError(e, what) {
 
 // A fresh frame per message: a sandboxed srcdoc frame that has been hidden and reused
 // does not reliably repaint in every Chromium build.
+// The frame runs no scripts (no allow-scripts, and its CSP has no script-src) but shares the
+// app's origin, so the app hears keys pressed while the message has focus: shortcuts work there
+// as anywhere else, and the keys that scroll the message stay with it. Its images are limited to
+// Yahoo's image proxy and data: URLs, so mail cannot make a request that carries Yahoo cookies.
+const READER_SANDBOX = "allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " "]);
 function setFrame(doc) {
   const old = $("r-body");
   const f = document.createElement("iframe");
   f.id = "r-body";
-  f.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+  f.setAttribute("sandbox", READER_SANDBOX);
   f.setAttribute("referrerpolicy", "no-referrer");
+  f.addEventListener("load", () => {
+    f.contentDocument?.addEventListener("keydown", e => { if (!SCROLL_KEYS.has(e.key) || e.ctrlKey || e.metaKey) onKey(e); });
+  });
   f.srcdoc = doc;
   old.replaceWith(f);
 }
@@ -1534,7 +1543,7 @@ function onKey(e) {
     case "x": toggleMark(state.selected); break;
     case "e": runAction("archive"); break;
     case "#": case "Delete": runAction("delete"); break;
-    case "Backspace": if (document.activeElement === $("list")) { e.preventDefault(); runAction("delete"); } break;   // the Mac delete key
+    case "Backspace": if (!e.target.closest?.("input, textarea, select, [contenteditable]")) { e.preventDefault(); runAction("delete"); } break;   // the Mac delete key
     case "v": e.preventDefault(); runAction("move"); break;
     case "u": runAction("read"); break;
     case "s": runAction("star"); break;

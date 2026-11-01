@@ -192,6 +192,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     if (/^https:\/\/ecp\.yusercontent\.com\//.test(m.location()?.url || "") && /ERR_TUNNEL|ERR_NAME|ERR_PROXY/.test(t)) return;
     // The inline part Yahoo cannot render answers 501, as in production; the browser logs it.
     if (/\/parts\/@\.id==5\/thumbnail/.test(m.location()?.url || "") && /status of 501/.test(t)) return;
+    // Playwright adds its own listeners to a frame it has looked into; in the reader frame, where
+    // no script may run, the browser blocks them and says so on every click and key.
+    if (/^about:srcdoc/.test(m.location()?.url || "") && t.includes("the 'allow-scripts' permission is not set")) return;
     if (/Content Security Policy|violates the following/.test(t)) cspViolations.push(t.slice(0, 220));
     // EC-5003 is the error the failed-archive step provokes on purpose; the app logs it
     else if (m.type() === "error" && !t.includes("net::ERR_FAILED") && !t.includes('"code":"EC-5003"')) errors.push("console: " + t.slice(0, 200));
@@ -246,6 +249,13 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     clips: await page.locator("#rows .row .fl").evaluateAll(els => els.map(e => e.innerHTML ? 1 : 0).join("")),
     spacerHeight: await page.frameLocator("#r-body").locator("#spacer").evaluate(e => e.getBoundingClientRect().height) };
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
+  // keys pressed while the message has focus reach the app; scroll keys stay with the message
+  const selIndex = () => page.locator("#rows .row").evaluateAll(rs => rs.findIndex(r => r.classList.contains("sel")));
+  await page.frameLocator("#r-body").locator("body").click({ position: { x: 5, y: 5 } });
+  const frameKeys = { focus: await page.evaluate(() => document.activeElement.id), before: await selIndex() };
+  await page.keyboard.press("PageDown"); await page.waitForTimeout(200); frameKeys.pageDown = await selIndex();
+  await page.keyboard.press("k"); await page.waitForTimeout(600); frameKeys.k = await selIndex();
+  results.frameKeys = frameKeys;
 
   // dark theme: the reader darkens declared colours; the sun/moon button shows the original, dimmed
   const paper = () => page.frameLocator("#r-body").locator("#paper").evaluate(e => ({ bg: getComputedStyle(e).backgroundColor, fg: getComputedStyle(e).color, filter: getComputedStyle(e.ownerDocument.documentElement).filter }));
@@ -890,6 +900,8 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const si = results.spamImages;
   expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteCsp.trim() === "img-src data:", "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
   expect(results.colorScheme === "dark" && results.keepTab === false, "dark palettes set a dark color-scheme; the tab is not discarded: " + JSON.stringify({ cs: results.colorScheme, keep: results.keepTab }));
+  const fk = results.frameKeys;
+  expect(fk.focus === "r-body" && fk.before === 1 && fk.pageDown === 1 && fk.k === 0, "shortcuts reach the app from the message frame: " + JSON.stringify(fk));
   const bd = results.bidi;
   expect(!/[\u202A-\u202E\u2066-\u2069]/.test(bd) && bd.includes("Pay eulav") && bd.includes("Bobevil") && bd.includes("invfdp.exe"),
     "bidi controls are removed from names, subjects and filenames: " + JSON.stringify(bd));
