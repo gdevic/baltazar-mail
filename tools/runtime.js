@@ -10,7 +10,11 @@ const now = Math.floor(Date.now() / 1000);
 const goneElsewhere = new Set();
 let convFail = false, deckBinary = false;   // Yahoo's converter gives up (813); the deck's bytes are binary   // messages another device removed; list queries leave them out
 // Every third message has a file; message 4 has only images built into its body, which are not files.
-const msg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, csid: `csid${i}`,
+// Projects/FPGA (32) carries bidi controls in its names, subjects and filenames.
+const RLO = "\u202E", PDF = "\u202C", RLI = "\u2067", PDI = "\u2069";
+const msg = (i, folder) => folder === "32" ? spoofed(plainMsg(i, folder)) : plainMsg(i, folder);
+const spoofed = m => ({ ...m, headers: { ...m.headers, subject: `Pay ${RLO}eulav${PDF} ${m.id.split("_")[1]}`, from: [{ name: `Bob${RLI}evil${PDI}`, email: m.headers.from[0].email }] } });
+const plainMsg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, csid: `csid${i}`,
   attachmentCount: i % 3 === 0 ? 1 : i === 4 ? 2 : 0,
   attachments: i % 3 === 0 ? [{ disposition: "attachment", filename: "f.pdf" }] : i === 4 ? [{ disposition: "inline" }, { disposition: "inline" }] : [],
   flags: { read: i % 2 === 0, flagged: false },
@@ -94,6 +98,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
         { partId: "7", filename: "budget.xlsx", size: 17000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.spreadsheetml.sheet", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/xlsx" },
         { partId: "8", filename: "deck.pptx", size: 90000, disposition: "attachment", type: "application", subtype: "vnd.openxmlformats-officedocument.presentationml.presentation", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pptx", documentId: "DOC8" },
       ];
+      if (id.startsWith("MSG32_")) message.attachments[2].filename = `inv${RLO}fdp.exe`;
       // One inline image in Yahoo's real part-thumbnail shape, which must be inlined, and one address
       // hidden in an alt attribute, which must never be requested.
       // Part 5 is one Yahoo cannot render (EP-5001); it is cut out of the message source instead.
@@ -759,6 +764,16 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     await folder("Projects");
   }
 
+  // bidi controls never reach the page: in the list, the reader header and attachment names
+  const shown = async () => page.evaluate(() => [...document.querySelectorAll("#rows, #r-subject, #r-from, #r-attach, #list-title")].map(e => e.textContent + " " + [...e.querySelectorAll("[title]")].map(t => t.title).join(" ")).join(" "));
+  const projectsTwisty = page.locator("#folder-list .folder", { hasText: "Projects" }).locator(".tw");
+  await projectsTwisty.click();
+  await page.locator("#folder-list .folder", { hasText: "FPGA" }).click(); await page.waitForTimeout(400);
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  results.bidi = await shown();
+  await projectsTwisty.click();
+  await page.locator("#folder-list .folder", { hasText: "Projects" }).click(); await page.waitForTimeout(400);
+
   // new mail while the tab is in the background: a green dot on the tab icon, gone when looked at
   await page.evaluate(() => Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }));
   folders[0].unread = 4; folders[0].highestModSeq++;
@@ -865,6 +880,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const si = results.spamImages;
   expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteCsp.trim() === "img-src data:", "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
   expect(results.colorScheme === "dark" && results.keepTab === false, "dark palettes set a dark color-scheme; the tab is not discarded: " + JSON.stringify({ cs: results.colorScheme, keep: results.keepTab }));
+  const bd = results.bidi;
+  expect(!/[\u202A-\u202E\u2066-\u2069]/.test(bd) && bd.includes("Pay eulav") && bd.includes("Bobevil") && bd.includes("invfdp.exe"),
+    "bidi controls are removed from names, subjects and filenames: " + JSON.stringify(bd));
   const u = results.unsafe;
   expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && u.csp === 1 && !u.handlers.length && u.link && !u.link.ping && u.link.target === "_blank" && /noopener/.test(u.link.rel) && u.pwned === null,
     "the reader removes scripts, forms, frames, refresh, handlers and pings: " + JSON.stringify(u));

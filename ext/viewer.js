@@ -5,9 +5,9 @@
 
 import { listParts, extract } from "./mime.js";
 import { asText, hexDump } from "./bytes.js";
+import { esc, noBidi } from "./text.js";
 
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const sizeStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
 const extOf = n => (String(n || "").match(/\.([a-z0-9]{1,6})$/i)?.[1] || "").toLowerCase();
 
@@ -164,7 +164,7 @@ async function show(i) {
   index = (i + items.length) % items.length;
   const a = items[index], k = kindOf(a), id = msgId, at = index;
   $("viewer").classList.remove("hidden");
-  $("v-name").textContent = a.filename || "Untitled";
+  $("v-name").textContent = noBidi(a.filename || "Untitled");
   const meta = extra => { $("v-meta").textContent = `${sizeStr(a.size)} · ${LABEL[k]}${extra ? ` · ${extra}` : ""}${items.length > 1 ? ` · ${index + 1} of ${items.length}` : ""}`; };
   meta("");
   $("v-prev").disabled = $("v-next").disabled = items.length < 2;
@@ -338,7 +338,7 @@ async function download(a) {
   try {
     const blob = await fetchBlob(a);
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob); link.download = a.filename || "attachment";
+    link.href = URL.createObjectURL(blob); link.download = noBidi(a.filename || "attachment");
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 60000);
   } catch {

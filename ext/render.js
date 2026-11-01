@@ -8,7 +8,7 @@
   const root = document.getElementById("root");
   const PARENT = new URL(location.href).origin;          // the extension's origin
   const post = (m, transfer) => parent.postMessage(m, PARENT, transfer || []);
-  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const esc = s => String(s ?? "").replace(/[\u202A-\u202E\u2066-\u2069]/g, "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const sizeStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
   const note = text => `<div class="note">${esc(text)}</div>`;
   let mode = "", zoom = null;

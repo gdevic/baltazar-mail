@@ -9,6 +9,7 @@ import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { extract } from "./mime.js";
 import { sniffImage } from "./bytes.js";
 import { remember, failure, freshFailure, recent, RETRY_FAILED } from "./cache.js";
+import { esc, noBidi } from "./text.js";
 
 const $ = id => document.getElementById(id);
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
@@ -86,7 +87,6 @@ const state = {
 };
 
 // ---------- helpers ----------
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const addr = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
 const addrs = l => (l || []).map(addr).join(", ");
 const status = (msg, ms) => { $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
@@ -126,7 +126,7 @@ function dayLabel(epoch) {
 
 // Subjects from search carry ^_term^_ hit markers; turn them into <mark>.
 const subjectHtml = s => esc(s || "(no subject)").replace(/\^_(.*?)\^_/g, "<mark>$1</mark>");
-const plainSubject = s => (s || "(no subject)").replace(/\^_/g, "");
+const plainSubject = s => noBidi(s || "(no subject)").replace(/\^_/g, "");
 
 // What the user must not miss (something failed or did not happen) appears in a notice above the
 // status bar until dismissed; routine progress stays in the status line. A notice given a key is
@@ -420,7 +420,7 @@ async function loadList(mode = "fresh", focusId = null) {
   }
   renderList();
   const name = v.starred ? "Starred" : v.kind === "search" ? `“${v.term}” in ${v.scope ? v.scope.name : "all mail"}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
-  $("list-title").textContent = name;
+  $("list-title").textContent = noBidi(name);
   $("list-title").title = v.kind === "search" && !v.raw ? `Searched for: ${describe(parse(v.term))}` : "";
   const elseN = state.elsewhere.length, elseStr = elseN >= ELSEWHERE_MAX ? `${ELSEWHERE_MAX}+` : String(elseN);
   if (v.kind === "search" && v.scope && elseN && state.more) {
@@ -857,7 +857,7 @@ async function renderMessage(m, r) {
   $("r-cc-row").classList.toggle("hidden", !(h.cc && h.cc.length));
   $("r-cc").innerHTML = addrHtml(h.cc);
   $("r-date").textContent = toDate(h.date)?.toLocaleString() || "";
-  $("r-folder").textContent = r.message.folder?.name || "";
+  $("r-folder").textContent = noBidi(r.message.folder?.name);
   const auto = autoImages(r.message);
   const hasImg = /<img\b/i.test(r.html);
   $("r-images").classList.toggle("hidden", !hasImg || auto);

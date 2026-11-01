@@ -1,12 +1,12 @@
 import * as api from "./api.js";
 import { sniffImage } from "./bytes.js";
 import * as contacts from "./contacts.js";
+import { esc, noBidi } from "./text.js";
 
 // Compose panel: new message, reply, reply all, forward, or editing a draft.
 // Owns its DOM under #compose; talks to the rest of the app through the hooks given to init().
 
 const $ = id => document.getElementById(id);
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
 const fmtList = l => (l || []).map(fmt).join(", ");
 
@@ -44,7 +44,7 @@ class AddrField {
   render() {
     for (const ch of [...this.el.querySelectorAll(".chip")]) ch.remove();
     for (const [i, a] of this.list.entries()) {
-      const ch = document.createElement("span"); ch.className = "chip"; ch.title = fmt(a);
+      const ch = document.createElement("span"); ch.className = "chip"; ch.title = noBidi(fmt(a));
       ch.innerHTML = `<span>${a.name ? `<b>${esc(a.name)}</b> <i>${esc(a.email)}</i>` : esc(a.email)}</span><a title="Remove">×</a>`;
       ch.querySelector("a").onclick = () => { this.list.splice(i, 1); dirty = true; this.render(); this.input.focus(); };
       this.el.insertBefore(ch, this.input);
