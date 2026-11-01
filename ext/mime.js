@@ -12,6 +12,9 @@ const latin1 = bytes => {
 const HEADER_MAX = 256 * 1024, MAX_PARTS = 1000, MAX_DEPTH = 16;
 
 function head(s, start, end) {
+  // a part that starts with its blank line has no headers
+  if (s.startsWith("\r\n", start)) return { headers: {}, bodyStart: start + 2 };
+  if (s[start] === "\n") return { headers: {}, bodyStart: start + 1 };
   const block = s.slice(start, Math.min(end, start + HEADER_MAX));
   const a = block.indexOf("\r\n\r\n"), b = block.indexOf("\n\n");
   let he = end, bs = end;
@@ -89,7 +92,9 @@ function splitParts(s, start, end, boundary) {
     for (let k = from - start; ;) {
       k = region.indexOf(delim, k);
       if (k < 0) return -1;
-      if (k === 0 || region[k - 1] === "\n") return start + k;
+      // a delimiter starts a line and ends it (after an optional closing "--"): --X is not --X-1
+      const after = region.slice(k + delim.length, k + delim.length + 2) === "--" ? k + delim.length + 2 : k + delim.length;
+      if ((k === 0 || region[k - 1] === "\n") && /^[ \t]*(\r?\n|$)/.test(region.slice(after, after + 80))) return start + k;
       k += delim.length;
     }
   };
@@ -114,11 +119,29 @@ function walk(s, start, end, num, out, depth = 0) {
     return;
   }
   const cd = parseParams(headers["content-disposition"] || "");
+  const inner = ct.value === "message/rfc822" && depth < MAX_DEPTH;
   out.push({
     partId: num || "1", type: ct.value, start: bodyStart, end,
     encoding: (headers["content-transfer-encoding"] || "").trim().toLowerCase(),
-    filename: decodeWords(cd.params.filename || ct.params.name || ""),
+    filename: decodeWords(rawUtf8(cd.params.filename || ct.params.name || "")),
   });
+  // A forwarded message's own parts are numbered under it, the IMAP way: 2.1, 2.2, ...
+  if (inner) walkMessage(s, bodyStart, end, num || "1", out, depth + 1);
+}
+
+function walkMessage(s, start, end, num, out, depth) {
+  const { headers, bodyStart } = head(s, start, end);
+  const ct = parseParams(headers["content-type"] || "text/plain");
+  if (ct.value.startsWith("multipart/") && ct.params.boundary) {
+    splitParts(s, bodyStart, end, ct.params.boundary).forEach(([a, b], i) => walk(s, a, b, `${num}.${i + 1}`, out, depth + 1));
+  } else walk(s, start, end, `${num}.1`, out, depth + 1);
+}
+
+// Header text is read byte for byte; a name some clients write as raw UTF-8 is decoded as such
+// when it is valid UTF-8, and left as it is otherwise.
+function rawUtf8(v) {
+  if (!/[\x80-\xff]/.test(v) || /[^\x00-\xff]/.test(v)) return v;
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(v, c => c.charCodeAt(0))); } catch { return v; }
 }
 
 export function listParts(bytes) {
@@ -131,7 +154,8 @@ function decodeBody(s, p) {
   const body = s.slice(p.start, p.end);
   let bin;
   if (p.encoding === "base64") bin = atob(body.replace(/[^A-Za-z0-9+/=]/g, "").replace(/=+(?=[A-Za-z0-9+/])/g, ""));
-  else if (p.encoding === "quoted-printable") bin = body.replace(/=\r?\n/g, "").replace(/=([0-9A-Fa-f]{2})/g, (x, h) => String.fromCharCode(parseInt(h, 16)));
+  // quoted-printable: whitespace at a line end is padding, also after a soft break's "="
+  else if (p.encoding === "quoted-printable") bin = body.replace(/=[ \t]*\r?\n/g, "").replace(/[ \t]+(?=\r?\n|$)/g, "").replace(/=([0-9A-Fa-f]{2})/g, (x, h) => String.fromCharCode(parseInt(h, 16)));
   else bin = body;
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);

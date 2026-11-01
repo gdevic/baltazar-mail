@@ -1,5 +1,5 @@
 // Attachment names as mail clients write them, through ext/mime.js. node tools/mime-test.mjs
-import { listParts } from "../ext/mime.js";
+import { listParts, extract } from "../ext/mime.js";
 
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
@@ -20,5 +20,30 @@ ok(name(`attachment`) === "", "no name");
   ok(got?.length === 300004, "huge RFC 2231 parameter: " + String(got).slice(0, 40));
 }
 
+{
+  const enc = t => new TextEncoder().encode(t);
+  const dec = b => new TextDecoder().decode(b);
+  // a boundary that is a prefix of a nested one does not cut the outer part short
+  const nested = enc("Content-Type: multipart/mixed; boundary=\"X\"\r\n\r\n--X\r\nContent-Type: multipart/related; boundary=\"X-1\"\r\n\r\n" +
+    "--X-1\r\nContent-Type: text/html\r\n\r\n<p>hi</p>\r\n--X-1\r\nContent-Type: image/png; name=\"a.png\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUE5H\r\n--X-1--\r\n" +
+    "--X\r\nContent-Type: application/pdf; name=\"b.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERg==\r\n--X--\r\n");
+  const np = listParts(nested);
+  ok(np.parts.map(p => p.partId).join() === "1.1,1.2,2" && dec(extract(np, "1.2", "a.png").bytes) === "PNG" && dec(extract(np, "2", "b.pdf").bytes) === "%PDF",
+    "--X does not match --X-1: " + np.parts.map(p => `${p.partId}:${p.filename}`).join());
+  // quoted-printable: trailing spaces on a line are padding; a soft break may carry them too
+  const qp = listParts(enc("Content-Type: text/plain\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nline one   \r\nsoft=  \r\nbreak=3D\r\n"));
+  ok(dec(extract(qp, "1").bytes) === "line one\r\nsoftbreak=\r\n", "quoted-printable whitespace: " + JSON.stringify(dec(extract(qp, "1").bytes)));
+  // a part with no headers starts with its blank line; its first paragraph is body
+  const bare = listParts(enc("Content-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\n\r\nFirst paragraph.\r\n\r\nSecond.\r\n--B--\r\n"));
+  ok(dec(extract(bare, "1").bytes) === "First paragraph.\r\n\r\nSecond.", "headerless part keeps its first paragraph: " + JSON.stringify(dec(extract(bare, "1").bytes)));
+  // a raw UTF-8 filename (no encoding, as some clients send) reads as UTF-8
+  ok(name(`attachment; filename="résumé.pdf"`) === "résumé.pdf", "raw UTF-8 name: " + name(`attachment; filename="résumé.pdf"`));
+  // attachments of a forwarded message (message/rfc822) are reached
+  const fwd = listParts(enc("Content-Type: multipart/mixed; boundary=\"O\"\r\n\r\n--O\r\nContent-Type: text/plain\r\n\r\nsee below\r\n" +
+    "--O\r\nContent-Type: message/rfc822\r\n\r\nSubject: inner\r\nContent-Type: multipart/mixed; boundary=\"I\"\r\n\r\n--I\r\nContent-Type: text/plain\r\n\r\ninner body\r\n" +
+    "--I\r\nContent-Type: application/pdf; name=\"inner.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERg==\r\n--I--\r\n--O--\r\n"));
+  ok(fwd.parts.some(p => p.partId === "2.2" && p.filename === "inner.pdf") && dec(extract(fwd, "2.2", "inner.pdf").bytes) === "%PDF" && fwd.parts.some(p => p.partId === "2" && p.type === "message/rfc822"),
+    "attachments inside a forwarded message: " + fwd.parts.map(p => `${p.partId}:${p.type}:${p.filename}`).join());
+}
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);
