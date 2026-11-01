@@ -25,7 +25,9 @@ function head(s, start, end) {
   return { headers, bodyStart: bs };
 }
 
-// "type/sub; a=1; b*=utf-8''x%20y; c*0=..; c*1=.." -> { value, params }
+// "type/sub; a=1; b*=utf-8''x%20y; c*0=..; c*1=.." -> { value, params }. A parameter given both
+// plainly and in RFC 2231 form (filename and filename*) takes the RFC 2231 value; the plain one is
+// the fallback for clients that cannot read the other.
 function parseParams(v) {
   const out = { value: "", params: {} };
   const parts = []; let cur = "", q = false;
@@ -36,7 +38,7 @@ function parseParams(v) {
   }
   parts.push(cur);
   out.value = parts.shift().trim().toLowerCase();
-  const pieces = {};
+  const pieces = {}, plain = {};
   for (const p of parts) {
     const eq = p.indexOf("=");
     if (eq < 0) continue;
@@ -44,6 +46,7 @@ function parseParams(v) {
     if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1).replace(/\\(.)/g, "$1");
     const m = k.match(/^([^*]+)(?:\*(\d+))?(\*)?$/);
     if (!m) continue;
+    if (m[2] === undefined && !m[3]) { if (!(m[1] in plain)) plain[m[1]] = val; continue; }
     (pieces[m[1]] ||= []).push({ n: Number(m[2] || 0), enc: !!m[3], val });
   }
   for (const [k, list] of Object.entries(pieces)) {
@@ -58,6 +61,7 @@ function parseParams(v) {
     }
     out.params[k] = charset ? decodeBytes(new Uint8Array(bytes), charset) : list.map(p => p.val).join("");
   }
+  for (const [k, val] of Object.entries(plain)) if (!(k in out.params)) out.params[k] = val;
   return out;
 }
 
