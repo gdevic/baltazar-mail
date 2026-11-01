@@ -156,6 +156,9 @@ body.dragging iframe { pointer-events: none; }
 #status { grid-area: status; display: flex; justify-content: space-between; padding: 0 10px; font-size: calc(11 * var(--fu)); color: var(--fg3); background: var(--bg2); border-top: 1px solid var(--line); font-family: var(--mono); }
 
 #signin { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; }
+#signin-fail { max-width: 560px; text-align: center; }
+#signin-fail .tech { display: block; color: var(--fg2); font-size: calc(12 * var(--fu)); overflow-wrap: anywhere; }
+.fail-note { color: var(--fg3); font-size: calc(12 * var(--fu)); }
 #help { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; }
 #help-box { background: var(--bg2); border: 1px solid var(--line); padding: 16px 24px; border-radius: 6px; min-width: 420px; }
 #help td { padding: 2px 14px 2px 0; }

@@ -124,8 +124,15 @@
 </div>
 <div id="signin" class="hidden">
   <h1>Baltazar Mail</h1>
-  <p>No Yahoo Mail session found in this browser.</p>
-  <p><a href="https://mail.yahoo.com/" target="_blank" rel="noopener">Sign in at mail.yahoo.com</a>, then <button id="retry">retry</button>.</p>
+  <div id="signin-none">
+    <p>No Yahoo Mail session found in this browser.</p>
+    <p><a href="https://mail.yahoo.com/" target="_blank" rel="noopener">Sign in at mail.yahoo.com</a>, then <button id="retry">retry</button>.</p>
+  </div>
+  <div id="signin-fail" class="hidden" role="alert">
+    <p id="fail-text"></p>
+    <p><button id="fail-retry">Try again</button> <button id="fail-copy" title="Copy the error, version and browser, for a bug report">Copy details</button></p>
+    <p class="fail-note">Trying again by itself every 30 seconds and when the connection returns.</p>
+  </div>
 </div>
 <div id="settings" class="hidden">
   <div id="settings-box">

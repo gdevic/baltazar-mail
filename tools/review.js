@@ -8,11 +8,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Settings for every scenario unless it sets its own: no undo-send hold, slow polling.
 const BASE = { pollSec: 600, undoSendSec: 0 };
-async function start(h, settings = {}) {
+async function start(h, { settings = {}, noWait = false } = {}) {
+  const offline = h.mock.offline;
+  h.mock.offline = false;
   await h.open();
   await h.page.evaluate(s => chrome.storage.local.set({ settings: s }), { ...BASE, ...settings });
+  h.mock.offline = offline;
   await h.page.reload();
-  await h.page.waitForSelector("#rows .row", { timeout: 15000 });
+  if (noWait) await h.page.waitForTimeout(1500); else await h.page.waitForSelector("#rows .row", { timeout: 15000 });
 }
 const folder = async (page, name) => { await page.locator("#folder-list .folder", { hasText: name }).first().click(); await page.waitForTimeout(500); };
 const saves = calls => calls.filter(c => c.name === "messages.saveV3");
@@ -41,6 +44,29 @@ async function newMessage(page, { to = "q@example.com", subject = "Test", text =
   await page.locator("#c-editor").focus();
   if (text) await page.keyboard.type(text);
 }
+
+// ---------- start-up ----------
+scenario("starting offline says why and recovers by itself", async ({ page, mock }, expect) => {
+  const shown = { panel: await page.locator("#signin-fail").isVisible(), app: await page.locator("#app").isVisible(), text: await page.locator("#fail-text").textContent() };
+  expect(shown.panel && !shown.app && /Could not load your mailbox\. Yahoo could not be reached/.test(shown.text), "an offline start shows the reason: " + JSON.stringify(shown));
+  mock.offline = false;
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await page.waitForSelector("#rows .row", { timeout: 10000 }).catch(() => {});
+  expect(await page.locator("#app").isVisible() && await page.locator("#rows .row").count() > 0 && await page.locator("#signin").isHidden(), "coming online loads the mailbox");
+}, { mock: { offline: true }, noWait: true, allow: /start|ERR_INTERNET_DISCONNECTED|Failed to fetch/ });
+
+scenario("folders failing after sign-in can be retried, and polling starts", async ({ page, calls, mock }, expect) => {
+  const shown = { panel: await page.locator("#signin-fail").isVisible(), text: await page.locator("#fail-text").textContent() };
+  expect(shown.panel && /Could not load your mailbox/.test(shown.text), "a folder failure at start shows the reason: " + JSON.stringify(shown));
+  mock.handler = null;
+  await page.click("#fail-retry");
+  await page.waitForSelector("#rows .row", { timeout: 10000 }).catch(() => {});
+  const syncs = () => calls.filter(c => c.name === "mailbox.sync").length;
+  const before = syncs();
+  await page.waitForTimeout(6500);
+  expect(await page.locator("#rows .row").count() > 0, "Try again loads the mailbox");
+  expect(syncs() > before, "polling runs after a retried start: " + JSON.stringify({ before, after: syncs() }));
+}, { mock: { handler: async ({ name }) => name === "mailbox.sync" ? { error: { code: "EC-5003", message: "Internal error" } } : undefined }, noWait: true, settings: { pollSec: 5 }, allow: /start|EC-5003/ });
 
 // ---------- compose ----------
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
@@ -150,11 +176,11 @@ scenario("saving again does not upload attachments again", async ({ page, calls,
     const local = [];
     const expect = (ok, what) => { if (!ok) local.push(what); };
     try {
-      await start(h, s.opts.settings);
+      await start(h, s.opts);
       await s.fn(h, expect);
     } catch (e) { local.push("threw: " + (e.stack || e.message)); }
     if (h.unexpectedHosts.size) local.push("requests left for the real network: " + [...h.unexpectedHosts].join(", "));
-    local.push(...h.errors);
+    local.push(...h.errors.filter(e => !s.opts.allow?.test(e)));
     await h.close();
     console.log(`${local.length ? "FAIL" : "ok  "} ${s.name}`);
     for (const f of local) console.log("     " + f);

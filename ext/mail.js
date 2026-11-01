@@ -150,15 +150,16 @@ function errorReport(what, e) {
     detail, (e.stack || "").split("\n").slice(1, 6).join("\n")].filter(Boolean).join("\n");
 }
 $("notice-close").onclick = () => $("notice").classList.add("hidden");
-$("notice-copy").onclick = async () => {
-  let text = noticeReport;
+async function copyReport(report, button) {
+  let text = report;
   try { text = text.replace(/^(Baltazar Mail \S+)/, `$1 (${(await chrome.management.getSelf()).installType})`); } catch { /* version alone */ }
   try {
     await navigator.clipboard.writeText(text);
-    $("notice-copy").textContent = "Copied";
-    setTimeout(() => { $("notice-copy").textContent = "Copy details"; }, 1500);
+    button.textContent = "Copied";
+    setTimeout(() => { button.textContent = "Copy details"; }, 1500);
   } catch { status("could not copy to the clipboard"); }
-};
+}
+$("notice-copy").onclick = () => copyReport(noticeReport, $("notice-copy"));
 
 // What failed, in words, for each action that reports errors; the technical cause follows it.
 const FAILED = {
@@ -1750,11 +1751,38 @@ async function loadedFromZip() {
 function showSignIn() {
   state.signedIn = false;
   startPolling();
+  clearTimeout(startRetry);
+  $("signin-none").classList.remove("hidden"); $("signin-fail").classList.add("hidden");
   $("signin").classList.remove("hidden");
   $("app").classList.add("hidden");
 }
 
+// The mailbox could not be loaded (offline, Yahoo down): the reason is shown on a page of its own,
+// since the app and its notice bar are hidden, and loading is tried again by itself.
+let startRetry = null, startReport = "", starting = false;
+function showStartError(e) {
+  console.error("start", e);
+  state.signedIn = false;
+  startPolling();
+  const tech = Object.assign(document.createElement("span"), { className: "tech", textContent: cause(e) });
+  $("fail-text").replaceChildren(FAILED.start, " ", tech);
+  startReport = errorReport("start", e);
+  $("signin-none").classList.add("hidden"); $("signin-fail").classList.remove("hidden");
+  $("signin").classList.remove("hidden");
+  $("app").classList.add("hidden");
+  clearTimeout(startRetry);
+  startRetry = setTimeout(start, 30000);
+}
+const startFailed = () => !$("signin-fail").classList.contains("hidden") && !$("signin").classList.contains("hidden");
+window.addEventListener("online", () => { if (startFailed()) start(); });
+
 async function start() {
+  if (starting) return;
+  starting = true;
+  clearTimeout(startRetry);
+  try { await startUp(); } finally { starting = false; }
+}
+async function startUp() {
   // A new-mail dot left on the toolbar button by an earlier load of this page (a reload, or the
   // browser discarding the tab) goes; and the browser is asked not to discard this tab, which
   // would stop the mail checks.
@@ -1772,7 +1800,7 @@ async function start() {
     startPolling();
     await openFolder(inboxId());
     syncContacts();
-  } catch (e) { handleError(e, "start"); }
+  } catch (e) { if (e instanceof api.NotSignedIn) showSignIn(); else showStartError(e); }
   checkUpdate().catch(() => {});
 }
 
@@ -1796,6 +1824,8 @@ async function syncContacts(full = false) {
 document.addEventListener("keydown", onKey);
 macLabels();
 $("retry").onclick = () => api.bootstrap(true).then(start, start);
+$("fail-retry").onclick = () => start();
+$("fail-copy").onclick = () => copyReport(startReport, $("fail-copy"));
 $("folder-filter").oninput = () => { state.kbFolder = -1; renderFolders(); };
 wireSettings();
 wireSplitters();

@@ -44,10 +44,10 @@ async function launch(opts = {}) {
   const unexpectedHosts = new Set();
   await ctx.route(/^https?:\/\//, r => { unexpectedHosts.add(new URL(r.request().url()).hostname); return r.abort(); });
   const calls = [], docCalls = [];
-  // Knobs a test turns to provoke server behaviour. patchBody(id, message, simpleBody) edits a
+  // Knobs a test turns to provoke server behaviour. offline refuses every Yahoo request. patchBody(id, message, simpleBody) edits a
   // message body before it is answered. handler({ name, envelope, top, uri, post, req })
   // may answer a batch call itself: return { responses } or { error }, or nothing to fall through.
-  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, ...opts.mock };
+  const mock = { failSaves: 0, failMoves: 0, listDelay: 0, failSends: 0, hiddenFetched: false, convFail: false, deckBinary: false, thumbFull: false, handler: null, patchBody: null, offline: false, ...opts.mock };
   const folders = structuredClone(FOLDERS);
   const goneElsewhere = new Set();   // messages another device removed; list queries leave them out
   // GitHub's release API, asked once a day for the newest version
@@ -59,6 +59,7 @@ async function launch(opts = {}) {
   await ctx.route("https://ecp.yusercontent.com/**", route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64") }));
   await ctx.route("https://mail.yahoo.com/**", async route => {
     const req = route.request();
+    if (mock.offline) return route.abort("internetdisconnected");
     if (req.url().includes("hidden-in-alt")) mock.hiddenFetched = true;
     if (req.url() === "https://mail.yahoo.com/") return route.fulfill({ contentType: "text/html", body: '<html><script>window.AppBootstrapData={"appId":"YMailCLDNovation","mailWssid":"w1","primaryMailbox":{"email":"me@yahoo.com","id":"MB1"}}</script></html>' });
     const name = new URL(req.url()).searchParams.get("name");
