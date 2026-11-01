@@ -174,7 +174,8 @@ export async function open(opts) {
   const me = opts.myEmail;
   const primary = accounts.find(a => a.isPrimary) || accounts[0] || { email: me, sendingName: "" };
   const m = opts.message, h = m?.headers || {};
-  draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true };
+  // images: whether the quoted message's remote images may load, as decided in the reader
+  draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true, images: opts.images !== false };
   let to = [], cc = [], subject = "", bodyHtml = "";
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
   const notMe = l => (l || []).filter(a => !mine.has((a.email || "").toLowerCase()));
@@ -187,7 +188,9 @@ export async function open(opts) {
       if (opts.mode === "replyAll") { to = to.concat(notMe(h.to)); cc = notMe(h.cc); }
       subject = /^re:/i.test(h.subject || "") ? h.subject : `Re: ${h.subject || ""}`;
       draft.inReplyTo = { id: m.id, replied: true };
-      draft.quoteHtml = `<div class="ymq"><div>${quoteHeader()}</div><blockquote style="border-left:1px solid #ccc;margin:0 0 0 .8em;padding-left:1em">${opts.body.html}</blockquote></div>`;
+      // The sender's style sheets stay out of the reply: they would apply to the whole outgoing
+      // message in the recipients' mail and could restyle or hide the user's own text.
+      draft.quoteHtml = `<div class="ymq"><div>${quoteHeader()}</div><blockquote style="border-left:1px solid #ccc;margin:0 0 0 .8em;padding-left:1em">${withoutStyleSheets(opts.body.html)}</blockquote></div>`;
       draft.quoteText = `${quoteHeader().replace(/&lt;/g, "<").replace(/&gt;/g, ">")}\n` + toText(opts.body.html).split("\n").map(l => "> " + l).join("\n");
       break;
     }
@@ -451,7 +454,7 @@ function renderQuote(expanded) {
   frame.setAttribute("sandbox", "");
   frame.referrerPolicy = "no-referrer";
   frame.title = "Quoted text";
-  frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https:">` +
+  frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:${draft.images ? " https:" : ""}">` +
     `<style>body{margin:0;font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif;color:#333;word-wrap:break-word}pre{white-space:pre-wrap;font:inherit}img{max-width:100%;height:auto}</style>` +
     (draft.html ? draft.quoteHtml : `<pre>${esc(draft.quoteText)}</pre>`);
   $("c-quote").replaceChildren(frame);
@@ -459,6 +462,13 @@ function renderQuote(expanded) {
   $("c-quote-toggle").textContent = expanded ? "Hide quoted text" : "Show quoted text";
 }
 function toggleQuote() { renderQuote($("c-quote").classList.contains("hidden")); }
+
+function withoutStyleSheets(html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  tpl.content.querySelectorAll("style, link").forEach(e => e.remove());
+  return tpl.innerHTML;
+}
 
 function toText(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -575,7 +585,7 @@ async function reopenFrom(snap) {
     return;
   }
   await loadAccounts();
-  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html };
+  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html, images: snap.images };
   $("c-title").textContent = "Message not sent";
   $("c-from").value = snap.d.from.email;
   fields.to.set(snap.d.to); fields.cc.set(snap.d.cc); fields.bcc.set(snap.d.bcc);

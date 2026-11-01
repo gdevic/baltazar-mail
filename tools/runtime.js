@@ -112,9 +112,12 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
         `<a id="h-link" href="https://evil.example/" ping="https://evil.example/ping" target="_top">link</a>` +
         `<meta http-equiv="refresh" content="0;url=https://evil.example/"><iframe id="h-frame" src="https://evil.example/"></iframe>` +
         `<object id="h-obj" data="https://evil.example/x"></object><svg id="h-svg" onload="parent.pwned = 1"><circle r="1"/></svg>` : "";
+      // Every message tries to hide or cover the printed header.
+      const forge = id.startsWith("MSG3_") ? "" : `<style>.hdr, .hdr * { display: none !important }</style>` +
+        `<div id="forge" style="position:fixed;top:0;left:0;width:100%;height:160px;background:#fff;z-index:9">Fake header</div>`;
       const hostile = id.startsWith("MSG3_") ? `<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:#f00">Session expired</div>` +
         `<img src="data:text/html;base64,PGgxPmhpPC9oMT4=">` + `<img src="data:image/png;base64,@@not base64@@">` : "";
-      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}${hostile}${unsafe}` } } } }];
+      responses = [{ id: top.id, httpCode: 200, response: { result: { message, simpleBody: { html: `<p>Body of <b>${id}</b></p>${inline}${card}${hostile}${unsafe}${forge}` } } } }];
     }
     else if (uri === "/ws/docpreview/v2/fetch") {
       // Yahoo's converter: first ask is still queued, then pages arrive entity-encoded.
@@ -472,9 +475,29 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   const [printPage] = await Promise.all([ctx.waitForEvent("page"), page.keyboard.press("p")]);
   printPage.on("pageerror", e => errors.push("print pageerror: " + e.message));
   await printPage.waitForSelector(".msg .body", { timeout: 8000 });
-  results.print = { url: printPage.url().split("/").pop().split("?")[0], subject: await printPage.locator(".hdr h1").textContent(), body: (await printPage.locator(".msg .body").innerText()).slice(0, 20), title: await printPage.title() };
+  results.print = { url: printPage.url().split("/").pop().split("?")[0], subject: await printPage.locator(".hdr h1").textContent(), body: (await printPage.locator(".msg .body p").first().innerText()).slice(0, 20), title: await printPage.title(),
+    // the message's style sheet and its fixed box stay inside the body: the header shows, uncovered
+    header: await printPage.evaluate(() => { const h = document.querySelector(".hdr h1"), r = h.getBoundingClientRect(); return { visible: r.height > 0, onTop: document.elementFromPoint(r.left + 5, r.top + r.height / 2) === h }; }),
+    remote: await printPage.evaluate(() => [...document.querySelector(".msg .body").shadowRoot.querySelectorAll("img")].map(i => i.getAttribute("src").slice(0, 30)).filter(s => !s.startsWith("data:"))) };
   await printPage.close();
   await page.bringToFront();
+
+  // a message in Spam: printing and replying leave its remote images out, as the reader does
+  {
+    const back = (await page.locator("#folder-list .folder.active .nm").textContent()).trim();
+    await page.locator("#folder-list .folder", { hasText: "Spam" }).first().click(); await page.waitForTimeout(700);
+    await page.locator("#rows .row").first().click(); await page.waitForTimeout(700);
+    const [spamPrint] = await Promise.all([ctx.waitForEvent("page"), page.keyboard.press("p")]);
+    await spamPrint.waitForSelector(".msg .body", { timeout: 8000 });
+    const imgs = await spamPrint.evaluate(() => [...document.querySelector(".msg .body").shadowRoot.querySelectorAll("img")].map(i => (i.getAttribute("src") || "").slice(0, 30)));
+    await spamPrint.close(); await page.bringToFront();
+    await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
+    const quoteCsp = await page.locator("#c-quote iframe").evaluate(f => (f.srcdoc.match(/img-src[^;"]*/) || [""])[0]);
+    await page.keyboard.press("Escape"); await page.waitForSelector("#compose", { state: "hidden" }).catch(() => {});
+    results.spamImages = { printImgs: imgs, quoteCsp };
+    await page.locator("#folder-list .folder", { hasText: back }).first().click(); await page.waitForTimeout(700);
+    await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  }
 
   // forward: original's attachments carried by reference
   await page.keyboard.press("f"); await page.waitForSelector("#compose:not(.hidden)");
@@ -760,7 +783,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));
   expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8" && results.vKeyForward, "converter: " + JSON.stringify(results.vSlides));
   {
-    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\//.test(v));
+    // img-src 'none' (reader) and img-src data: (reply quote) are a message's images blocked on
+    // purpose: Spam, Trash, or the setting
+    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\//.test(v) && !/img-src ('none|data:\\?")/.test(v));
     expect(unexpected.length === 0, "content security policy blocked something the app needs: " + JSON.stringify(unexpected.slice(0, 5)));
   }
   expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
@@ -800,6 +825,9 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
   expect(results.print.url === "print.html" && results.print.body.startsWith("Body of"), "print page: " + JSON.stringify(results.print));
+  expect(results.print.header.visible && results.print.header.onTop && results.print.remote.length > 0, "a message's styles cannot hide or cover the printed header: " + JSON.stringify(results.print));
+  const si = results.spamImages;
+  expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteCsp.trim() === "img-src data:", "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
   const u = results.unsafe;
   expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && u.csp === 1 && !u.handlers.length && u.link && !u.link.ping && u.link.target === "_blank" && /noopener/.test(u.link.rel) && u.pwned === null,
     "the reader removes scripts, forms, frames, refresh, handlers and pings: " + JSON.stringify(u));

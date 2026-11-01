@@ -834,8 +834,7 @@ async function renderMessage(m, r) {
   $("r-cc").innerHTML = addrHtml(h.cc);
   $("r-date").textContent = toDate(h.date)?.toLocaleString() || "";
   $("r-folder").textContent = r.message.folder?.name || "";
-  const ft = folderType(state.byId.get(r.message.folder?.id)) || folderType(state.byId.get(state.view.folderId));
-  const auto = settings.images === "always" || (settings.images !== "never" && ft !== "BULK" && ft !== "TRASH");
+  const auto = autoImages(r.message);
   const hasImg = /<img\b/i.test(r.html);
   $("r-images").classList.toggle("hidden", !hasImg || auto);
   viewer.renderStrip(r.message, r.attachments, id => state.openId === id);
@@ -883,7 +882,7 @@ async function startCompose(mode) {
   hideReaderForCompose(true);
   status("preparing…");
   currentBody.html = await inlineYahooParts(currentBody.html);
-  await compose.open({ mode, message: currentBody.message, body: currentBody, myEmail: me });
+  await compose.open({ mode, message: currentBody.message, body: currentBody, images: bodyImages, myEmail: me });
   status("");
 }
 
@@ -954,6 +953,34 @@ window.addEventListener("beforeunload", e => {
 
 // ---------- print ----------
 // Opens print.html in a new tab with the messages' sanitised HTML; several selected messages print as one document.
+// Whether a message's remote images load by the setting: always, never, or except in Spam and Trash.
+function autoImages(message) {
+  const ft = folderType(state.byId.get(message.folder?.id)) || folderType(state.byId.get(state.view.folderId));
+  return settings.images === "always" || (settings.images !== "never" && ft !== "BULK" && ft !== "TRASH");
+}
+// The same decision for a message, honouring images the user loaded in the reader.
+const imagesFor = message => currentBody && message.id === currentBody.message.id ? bodyImages : autoImages(message);
+
+// Printed messages show remote images only when the reader would. An image still addressed to
+// Yahoo's mail hosts (a part that could not be inlined) is always dropped: the print page is the
+// extension's own and would request it with the user's session.
+function printableImages(html, allowed) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  for (const img of tpl.content.querySelectorAll("img")) {
+    const src = img.getAttribute("src") || "";
+    if (src.startsWith("data:")) { img.removeAttribute("srcset"); continue; }
+    let host = ""; try { host = new URL(src).hostname; } catch { /* not a URL */ }
+    if (!allowed || /(^|\.)mail\.yahoo\.com$/i.test(host)) img.remove(); else img.removeAttribute("srcset");
+  }
+  if (!allowed) {
+    for (const el of tpl.content.querySelectorAll("[background]")) el.removeAttribute("background");
+    for (const el of tpl.content.querySelectorAll("[style]")) el.setAttribute("style", el.getAttribute("style").replace(/url\([^)]*\)/gi, "none"));
+    for (const st of tpl.content.querySelectorAll("style")) st.textContent = st.textContent.replace(/url\([^)]*\)/gi, "none");
+  }
+  return tpl.innerHTML;
+}
+
 async function printMessages() {
   const ids = state.marked.size ? targetIds() : (currentBody ? [currentBody.message.id] : []);
   if (!ids.length) { status("open or select a message to print"); return; }
@@ -963,7 +990,7 @@ async function printMessages() {
     let r;
     if (currentBody && currentBody.message.id === id) r = currentBody;
     else { try { r = await api.body(id); r.html = cleanHtml(r.html); } catch (e) { handleError(e, "print"); return; } }
-    const html = await inlineYahooParts(r.html);
+    const html = printableImages(await inlineYahooParts(r.html), imagesFor(r.message));
     messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html });
   }
   const key = `print:${Date.now()}`;
