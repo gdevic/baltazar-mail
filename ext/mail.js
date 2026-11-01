@@ -283,6 +283,15 @@ function toggleExpand(name) {
   renderFolders();
 }
 
+// Folder changes seen by any folder refresh wait here until acted on, so none is lost to a refresh
+// made for another reason (after a send or a move) or while an action was running.
+const listDirty = new Set(), contactsDirty = new Set();
+async function actOnChanges() {
+  const v = state.view;
+  if (v.kind === "folder" && listDirty.has(v.folderId) && !busy) { listDirty.clear(); await loadList("refresh"); }
+  if (contactsDirty.has(inboxId()) || contactsDirty.has(folderByType("SENT")?.id)) { contactsDirty.clear(); syncContacts(); }
+}
+
 async function loadFolders(silent = false) {
   const r = await api.folders();
   state.folders = r.folders;
@@ -290,7 +299,7 @@ async function loadFolders(silent = false) {
   const changed = [];
   for (const f of r.folders) {
     const prev = state.modseq.get(f.id);
-    if (prev !== undefined && prev !== f.highestModSeq) changed.push(f.id);
+    if (prev !== undefined && prev !== f.highestModSeq) { changed.push(f.id); listDirty.add(f.id); contactsDirty.add(f.id); }
     state.modseq.set(f.id, f.highestModSeq);
   }
   renderFolders();
@@ -348,6 +357,7 @@ async function loadList(mode = "fresh", focusId = null) {
   const oldOrder = state.messages.map(m => m.id), oldCursor = state.selected;
   const offset = mode === "more" ? state.messages.length : 0;
   const count = mode === "refresh" ? Math.max(PAGE, state.messages.length) : PAGE;
+  if (mode !== "more" && v.kind === "folder") listDirty.delete(v.folderId);
   if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; state.loading = true; renderList(); }
   else if (mode === "more" && !state.messages.length) return;
   status(mode === "more" ? "loading more…" : "loading…");
@@ -933,7 +943,10 @@ function scheduleSend(job) {
     const i = pendingSends.indexOf(entry); if (i >= 0) pendingSends.splice(i, 1);
     showUndo();
     status(`sending…`);
-    try { const r = await job.run(); status(`sent: ${job.label.replace(/^send /, "")}`, r.ms); await loadFolders(true).catch(() => {}); }
+    try {
+      const r = await job.run(); status(`sent: ${job.label.replace(/^send /, "")}`, r.ms);
+      await loadFolders(true).catch(() => {}); await actOnChanges().catch(() => {});
+    }
     catch (e) { handleError(e, "send"); await job.restore(); hideReaderForCompose(compose.isOpen()); }
   };
   if (!secs) { fire(); return; }
@@ -1671,10 +1684,8 @@ async function poll() {
   if (busy || polling) return;
   polling = true; lastPoll = Date.now();
   try {
-    const changed = await loadFolders(true);
-    const v = state.view;
-    if (v.kind === "folder" && changed.includes(v.folderId) && !busy) await loadList("refresh");
-    if (changed.includes(inboxId()) || changed.includes(folderByType("SENT")?.id)) syncContacts();
+    await loadFolders(true);
+    await actOnChanges();
   } catch (e) { handleError(e, "poll", { quiet: true }); }
   finally { polling = false; }
   checkUpdate().catch(() => {});  // network at most once a day; otherwise a storage read

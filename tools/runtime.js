@@ -653,6 +653,21 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
   await page.click("#c-discard"); await page.waitForTimeout(300);
   queue.leaveQuiet = await page.evaluate(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return !e.defaultPrevented; });
   results.sendQueue = queue;
+  // mail that arrives in the folder refresh right after a send still shows: polling is held
+  // off (10 minutes) so only the send can notice it
+  {
+    const setPoll = async secs => { await page.locator("#list").focus(); await page.keyboard.press(","); await page.locator("#poll").fill(String(secs)); await page.locator("#poll").dispatchEvent("change"); await page.click("#settings-close"); };
+    await setPoll(600); await setUndoSend(0);
+    await page.locator("#folder-list .folder", { hasText: "Inbox" }).first().click(); await page.waitForTimeout(500);
+    const inboxLists = () => calls.filter(c => c.name === "messageGroups.getList" && /folderId%3A1\b|folderId:1\b/.test(c.envelope?.requests?.[0]?.uri || "")).length;
+    const before = inboxLists();
+    folders[0].highestModSeq++;
+    await sendOne("Arrival");
+    await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(800);
+    results.afterSend = { refreshed: inboxLists() > before };
+    await setPoll(5);
+  }
   await setUndoSend(2);
 
   // address book: one summary line in Settings, the list on its own page
@@ -847,6 +862,7 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
     ["report.pdf", "data.csv", "cv.docx", "deck.pptx"].every(n => de.uploaded.includes(n)) && !de.partLinks && de.closed, "editing a draft keeps its attachments and images: " + JSON.stringify(de));
   expect(de.overlay.present && de.overlay.position !== "fixed" && !de.overlay.coversApp, "a quoted box cannot cover the app: " + JSON.stringify(de.overlay));
   expect(de.uploaded.filter(n => n.startsWith("inline-")).every(n => /\.(png|jpg|gif|webp|bmp)$/.test(n)) && de.uploaded.filter(n => n.startsWith("inline-")).length === 3, "only real images become inline parts, bad ones do not stop the save: " + JSON.stringify(de.uploaded));
+  expect(results.afterSend.refreshed, "a folder change seen right after a send refreshes the list: " + JSON.stringify(results.afterSend));
   const sq = results.sendQueue;
   expect(/Queue B.*1 more message waiting/.test(sq.pending) && sq.leaveAsks, "two pending sends both wait, and leaving asks first: " + JSON.stringify(sq));
   expect(sq.reopened === "Queue B" && /Queue A/.test(sq.stillPending), "z reopens only the newest send: " + JSON.stringify(sq));
