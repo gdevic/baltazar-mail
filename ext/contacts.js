@@ -230,8 +230,10 @@ export async function all() {
 }
 
 export async function hideMany(emails, hidden = true) {
-  await loadAll();
-  await updateRows(emails.map(x => String(x).toLowerCase()), stored => stored && Object.assign(stored, { hidden }));
+  const keys = emails.map(x => String(x).toLowerCase());
+  const c = await loadAll();
+  for (const k of keys) { const e = c.get(k); if (e) e.hidden = hidden; }   // shown at once; stored below
+  await updateRows(keys, stored => stored && Object.assign(stored, { hidden }));
 }
 
 export async function hiddenList() {

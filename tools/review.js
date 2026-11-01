@@ -145,7 +145,7 @@ scenario("a previewed file's type comes from its name, not the sender", async ({
 scenario("the address book survives a repeated full build and a second tab", async (h, expect) => {
   const { page } = h;
   const counts = () => page.evaluate(async () => { const c = await import("./contacts.js"); return (await c.all()).reduce((n, e) => n + e.sent + e.received, 0); });
-  await page.waitForFunction(() => /address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
   const first = await counts();
   // a full build again (as after an interrupted first build) must not count the same mail twice
   await page.evaluate(async () => { const c = await import("./contacts.js"); await c.sync({ inbox: "1", sent: "2", full: true }); });
