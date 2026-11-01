@@ -32,6 +32,9 @@ for (const level of [0, CONTRAST_MAX]) {
     for (const k of ["fg", "unread", "fg2", "fg3", "accent", "link"])
       ok(meets(k, worst(r[k], [r.bg, r.bg2]), T[k]), `${at}: ${k} ${worst(r[k], [r.bg, r.bg2]).toFixed(2)} < ${T[k]}`);
     for (const k of ["fg", "unread"]) ok(meets(k, ratio(r[k], r.sel), T.onSelection), `${at}: ${k} on the selected row`);
+    // the Send button's text on the accent colour, and secondary text (sender, date) on the selected row
+    ok(ratio(r.onAccent, r.accent) >= 4.5, `${at}: text on the accent ${ratio(r.onAccent, r.accent).toFixed(2)}`);
+    for (const k of ["fg2", "fg3"]) ok(meets(k, ratio(r[k], r.sel), T.secondaryOnSelection), `${at}: ${k} on the selected row ${ratio(r[k], r.sel).toFixed(2)}`);
   }
   // At level 0 a colour that already meets its minimum is the palette's own.
   if (!level) ok(roles("light", 0).link === THEMES.light.link && roles("dark", 0).accent === THEMES.dark.accent, "passing colours untouched");

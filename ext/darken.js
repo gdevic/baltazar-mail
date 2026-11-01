@@ -19,10 +19,32 @@ const NAMED = {
   ghostwhite: "#f8f8ff", snow: "#fffafa", ivory: "#fffff0", linen: "#faf0e6", beige: "#f5f5dc", aliceblue: "#f0f8ff",
 };
 
-// "#abc", "#aabbcc", "#aabbccdd", "rgb(1,2,3)", "rgba(1 2 3 / .5)", a common colour name -> [r, g, b, a]
+// Every other CSS colour name, as the browser reads it: a canvas normalises a name it knows to hex.
+// Keywords that are not a fixed colour are never resolved.
+const NOT_COLOURS = new Set(["currentcolor", "inherit", "initial", "unset", "revert", "transparent", "none", "auto"]);
+const resolved = new Map();
+let ctx2d;
+function byBrowser(s) {
+  if (!/^[a-z]{3,30}$/.test(s) || NOT_COLOURS.has(s)) return null;
+  if (resolved.has(s)) return resolved.get(s);
+  let out = null;
+  try {
+    ctx2d ||= typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1).getContext("2d") : null;
+    if (ctx2d) { ctx2d.fillStyle = "#010203"; ctx2d.fillStyle = s; if (ctx2d.fillStyle !== "#010203") out = ctx2d.fillStyle; }
+  } catch { /* no canvas here */ }
+  if (resolved.size < 500) resolved.set(s, out);
+  return out;
+}
+function hsl(h, s, l) {
+  const f = n => { const k = (n + h / 30) % 12, a = s * Math.min(l, 1 - l); return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))); };
+  return [f(0), f(8), f(4)].map(Math.round);
+}
+
+// "#abc", "#aabbcc", "#aabbccdd", "rgb(1,2,3)", "rgba(1 2 3 / .5)", "hsl(0 100% 50%)", a colour name -> [r, g, b, a]
 export function parseColor(s) {
   s = String(s).trim().toLowerCase();
   if (NAMED[s]) s = NAMED[s];
+  else if (/^[a-z]+$/.test(s)) s = byBrowser(s) || s;
   let m = s.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
   if (m) {
     let h = m[1];
@@ -35,6 +57,12 @@ export function parseColor(s) {
     const ch = v => Math.max(0, Math.min(255, v.endsWith("%") ? parseFloat(v) * 2.55 : parseFloat(v)));
     const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
     return [ch(m[1]), ch(m[2]), ch(m[3]), Math.max(0, Math.min(1, a))];
+  }
+  m = s.match(/^hsla?\(\s*([\d.]+)(deg|turn|rad)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
+  if (m) {
+    const h = parseFloat(m[1]) * (m[2] === "turn" ? 360 : m[2] === "rad" ? 180 / Math.PI : 1);
+    const a = m[5] === undefined ? 1 : m[5].endsWith("%") ? parseFloat(m[5]) / 100 : parseFloat(m[5]);
+    return [...hsl(((h % 360) + 360) % 360, Math.min(1, parseFloat(m[3]) / 100), Math.min(1, parseFloat(m[4]) / 100)), Math.max(0, Math.min(1, a))];
   }
   return null;
 }
@@ -64,17 +92,27 @@ function relight(lab, L) {
 const hex = n => n.toString(16).padStart(2, "0");
 const format = ([r, g, b], a) => a < 1 ? `rgba(${r}, ${g}, ${b}, ${+a.toFixed(3)})` : `#${hex(r)}${hex(g)}${hex(b)}`;
 
-// role "bg" (backgrounds, borders) or "text"; returns the new colour, or null to keep it.
+// Text must read on the darkened page: at least 4.5:1, like the app's own text.
+const TEXT_MIN = 4.5;
+const lum = rgb => { const [r, g, b] = rgb.map(toLin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const PAGE_BG = relight(toOklab([255, 255, 255]), flip(toOklab([255, 255, 255])[0], "bg"));
+const onPage = rgb => (Math.max(lum(rgb), lum(PAGE_BG)) + 0.05) / (Math.min(lum(rgb), lum(PAGE_BG)) + 0.05);
+
+// role "bg" (backgrounds, borders) or "text"; returns the new colour, or null to keep it. Light
+// text that already reads on the page is kept; dimmer text is lifted until it does, keeping its hue.
 export function remap(color, role) {
   const c = parseColor(color);
   if (!c || c[3] === 0) return null;
   const lab = toOklab(c), L = lab[0];
-  if (role === "bg" ? L <= BG_FROM : L >= TEXT_UNTIL) return null;
-  return format(relight(lab, flip(L, role)), c[3]);
+  if (role === "bg") return L <= BG_FROM ? null : format(relight(lab, flip(L, role)), c[3]);
+  if (L >= TEXT_UNTIL && onPage(c.slice(0, 3)) >= TEXT_MIN) return null;
+  let L2 = L >= TEXT_UNTIL ? L : flip(L, role), out = relight(lab, L2);
+  while (onPage(out) < TEXT_MIN && L2 < 1) { L2 = Math.min(1, L2 + 0.01); out = relight(lab, L2); }
+  return format(out, c[3]);
 }
 
 // Bounded, so a crafted value of unclosed rgb( cannot make matching quadratic.
-const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|rgba?\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
+const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
 const remapValue = (value, role) => value.replace(COLOR_TOKEN, t => remap(t, role) || t);
 
 // Colour declarations in a style sheet or a style attribute. Declarations with an image are kept.

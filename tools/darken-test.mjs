@@ -1,5 +1,7 @@
 // Golden values for the dark reader's colour remapping in ext/darken.js. node tools/darken-test.mjs
-import { parseColor, remap, darkenCss } from "../ext/darken.js";
+import { parseColor, remap, darkenCss, PAGE } from "../ext/darken.js";
+const lum = c => { const [r, g, b] = parseColor(c).map(v => (v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrastOnPage = c => { const [x, y] = [lum(c), lum(PAGE.bg)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
 
 let fail = 0;
 const eq = (got, want, what) => { if (got !== want) { fail++; console.log("FAIL", what, "got", got, "want", want); } };
@@ -8,6 +10,9 @@ eq(JSON.stringify(parseColor("rgba(255, 0, 0, 0.5)")), "[255,0,0,0.5]", "rgba wi
 eq(JSON.stringify(parseColor("rgb(0 128 255 / 50%)")), "[0,128,255,0.5]", "rgb with spaces and slash");
 eq(JSON.stringify(parseColor("White")), "[255,255,255,1]", "colour name");
 eq(parseColor("inherit"), null, "keyword is not a colour");
+eq(JSON.stringify(parseColor("hsl(0, 100%, 50%)")), "[255,0,0,1]", "hsl");
+eq(JSON.stringify(parseColor("hsla(120deg 100% 25% / 0.5)")), "[0,128,0,0.5]", "hsla with spaces");
+eq(darkenCss("color:hsl(0,0%,20%)"), "color:#b1b1b1", "hsl text darkens like its hex");
 // light paper and borders darken; dark ink lightens; hue survives
 eq(remap("#ffffff", "bg"), "#1f1f1f", "white paper");
 eq(remap("#dddddd", "bg"), "#282828", "light border");
@@ -19,7 +24,11 @@ eq(remap("rgba(255,255,255,0.5)", "bg"), "rgba(31, 31, 31, 0.5)", "alpha kept");
 // already dark backgrounds, already light text and transparent are kept
 eq(remap("#222222", "bg"), null, "dark background kept");
 eq(remap("#ffffff", "text"), null, "white text kept");
-eq(remap("#cc0000", "text"), null, "readable red kept");
+// text kept as it is only when it reads on the dark page (4.5:1); dimmer text is lifted, keeping its hue
+eq(remap("#ff6666", "text"), null, "light red kept");
+eq(contrastOnPage(remap("#cc0000", "text")) >= 4.5, true, "dark red lifted to 4.5:1");
+eq(contrastOnPage(remap("#0066cc", "text")) >= 4.5, true, "mid blue lifted to 4.5:1 (was 2.96:1)");
+eq(contrastOnPage(remap("#808080", "text")) >= 4.5, true, "mid grey lifted");
 eq(remap("transparent", "bg"), null, "transparent kept");
 // style sheets and style attributes
 eq(darkenCss("color:#333;background-color:#fff"), "color:#b1b1b1;background-color:#1f1f1f", "declarations");

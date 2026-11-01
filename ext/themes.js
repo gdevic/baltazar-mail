@@ -2,7 +2,8 @@
 // Solarized Dark (ethanschoonover.com/solarized) and Gruvbox Dark (github.com/morhetz/gruvbox) use
 // their published colours, which the contrast minimums below may lift; the others are ours.
 // Roles: bg page, bg2 chrome, bg3 hover and buttons, fg text, fg2 secondary, fg3 hints, line
-// borders, sel selected row, selLine focus ring, accent stars/brand, unread bold text, link links.
+// borders, sel selected row, selLine focus ring, accent stars/brand, unread bold text, link links;
+// onAccent (text on the accent colour) is derived.
 // bg3 and line are optional: without them they are derived from bg2.
 
 export const THEMES = {
@@ -68,9 +69,9 @@ export const THEMES = {
 // changes the picture, not only the steps where a minimum overtakes the palette.
 export const CONTRAST_MAX = 10;
 export const AT_MIN = { panel: 1.12, hover: 1.15, selection: 1.3, selectionVsHover: 1.1, border: 1.5, focus: 3,
-  fg: 4.5, unread: 4.5, fg2: 3, fg3: 3, accent: 3, link: 3, onSelection: 4.5 };
+  fg: 4.5, unread: 4.5, fg2: 3, fg3: 3, accent: 3, link: 3, onSelection: 4.5, secondaryOnSelection: 3 };
 export const AT_MAX = { panel: 1.4, hover: 1.6, selection: 2, selectionVsHover: 1.2, border: 4.5, focus: 7,
-  fg: 18, unread: 21, fg2: 12, fg3: 9, accent: 6, link: 6, onSelection: 12 };
+  fg: 18, unread: 21, fg2: 12, fg3: 9, accent: 6, link: 6, onSelection: 12, secondaryOnSelection: 7 };
 export const clampContrast = v => Math.min(CONTRAST_MAX, Math.max(0, Math.round(Number(v) || 0)));
 
 const hex2 = (c, i) => parseInt(c.slice(i, i + 2), 16);
@@ -104,17 +105,20 @@ function derive(p, T) {
   if (!keep.has("sel")) r.sel = push(p.sel, p.link === ink ? p.fg : p.link,
     c => worst(c, [p.bg, r.bg2]) >= T.selection && ratio(c, r.bg3) >= T.selectionVsHover);
   raise("selLine", p.selLine, ink, [p.bg, r.bg2], T.focus);
-  // Text moves toward black or white; main and unread text also stay readable on the selected row.
+  // Text moves toward black or white and stays readable on the selected row too: main and unread
+  // text fully, secondary text (sender, date) at its own minimum.
   for (const k of ["fg", "unread", "fg2", "fg3", "accent", "link"]) {
-    const onSel = k === "fg" || k === "unread";
-    if (!keep.has(k)) r[k] = push(p[k], ink, c => worst(c, [p.bg, r.bg2]) >= T[k] && (!onSel || ratio(c, r.sel) >= T.onSelection));
+    const onSel = k === "fg" || k === "unread" ? T.onSelection : k === "fg2" || k === "fg3" ? T.secondaryOnSelection : 0;
+    if (!keep.has(k)) r[k] = push(p[k], ink, c => worst(c, [p.bg, r.bg2]) >= T[k] && ratio(c, r.sel) >= onSel);
   }
+  // Text on the accent colour (the Send button): black or white, whichever reads better.
+  r.onAccent = ratio("#000000", r.accent) >= ratio("#ffffff", r.accent) ? "#000000" : "#ffffff";
   delete r.keep;
   return r;
 }
 
 const VARS = { bg: "--bg", bg2: "--bg2", bg3: "--bg3", fg: "--fg", fg2: "--fg2", fg3: "--fg3", line: "--line",
-  sel: "--sel", selLine: "--sel-line", accent: "--accent", unread: "--unread", link: "--link" };
+  sel: "--sel", selLine: "--sel-line", accent: "--accent", unread: "--unread", link: "--link", onAccent: "--on-accent" };
 
 const cache = new Map();
 export function roles(id, level = 0) {
@@ -122,6 +126,7 @@ export function roles(id, level = 0) {
   if (!cache.has(key)) {
     const lo = derive(p, AT_MIN), hi = derive(p, AT_MAX), r = { ...lo };
     for (const k of Object.keys(VARS)) r[k] = mix(lo[k], hi[k], n / CONTRAST_MAX);
+    r.onAccent = ratio("#000000", r.accent) >= ratio("#ffffff", r.accent) ? "#000000" : "#ffffff";
     cache.set(key, r);
   }
   return cache.get(key);
