@@ -73,7 +73,8 @@ export function remap(color, role) {
   return format(relight(lab, flip(L, role)), c[3]);
 }
 
-const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|\b[a-z]+\b/gi;
+// Bounded, so a crafted value of unclosed rgb( cannot make matching quadratic.
+const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|rgba?\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
 const remapValue = (value, role) => value.replace(COLOR_TOKEN, t => remap(t, role) || t);
 
 // Colour declarations in a style sheet or a style attribute. Declarations with an image are kept.
@@ -84,7 +85,8 @@ export function darkenCss(css) {
 }
 
 const ownTextColor = el => (el.getAttribute("style") || "").match(/(?:^|;)\s*color\s*:\s*([^;!]+)/i)?.[1].trim() || el.getAttribute("color") || null;
-const hasBgImage = el => el.hasAttribute("background") || /background(?:-image)?\s*:[^;]*url\(/i.test(el.getAttribute("style") || "");
+const hasBgImage = el => el.hasAttribute("background") ||
+  (el.getAttribute("style") || "").split(";").some(d => /^\s*background(?:-image)?\s*:/i.test(d) && /url\(/i.test(d));
 
 // The message HTML with its declared colours darkened. Uses an inert template: nothing loads.
 export function darkenHtml(html, doc = document) {

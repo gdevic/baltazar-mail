@@ -27,5 +27,14 @@ eq(darkenCss("td{border:1px solid #ddd}"), "td{border:1px solid #282828}", "bord
 eq(darkenCss("background:#fff url(hero.jpg) no-repeat"), "background:#fff url(hero.jpg) no-repeat", "image background untouched");
 eq(darkenCss("background-color: white !important"), "background-color: #1f1f1f !important", "important kept");
 eq(darkenCss(".x{width:100px;font-weight:bold}"), ".x{width:100px;font-weight:bold}", "non-colour properties untouched");
+// crafted style text stays linear: about 1 MB of unclosed rgb( and long words
+{
+  const t0 = Date.now();
+  darkenCss("color:" + "rgb(".repeat(250000));
+  darkenCss("background:" + "rgba(1,".repeat(120000));
+  darkenCss("border:" + "a".repeat(1 << 20));
+  const ms = Date.now() - t0;
+  if (ms > 1500) { fail++; console.log("FAIL crafted style text took", ms, "ms"); }
+}
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);
