@@ -189,6 +189,34 @@ async function loadAccounts() {
   return accounts;
 }
 
+// ---------- draft formats ----------
+// A draft opens in the format it was saved in, never in whatever the default is now (converting
+// HTML to text would lose its formatting on the next save). This app records the format of each
+// draft it saves under the draft's csid, which survives every save; for a draft saved elsewhere the
+// message's own type and body tell. The record goes when the draft is sent or discarded.
+const FORMATS_KEPT = 200;
+async function formatRecords() { try { return (await chrome.storage.local.get("draftFormats")).draftFormats || {}; } catch { return {}; } }
+async function recordFormat(csid, html) {
+  if (!csid) return;
+  const all = await formatRecords();
+  delete all[csid]; all[csid] = html ? "html" : "text";
+  const keys = Object.keys(all); for (const k of keys.slice(0, Math.max(0, keys.length - FORMATS_KEPT))) delete all[k];
+  try { await chrome.storage.local.set({ draftFormats: all }); } catch { /* the format is then worked out from the draft */ }
+}
+async function forgetFormat(csid) {
+  const all = await formatRecords();
+  if (csid in all) { delete all[csid]; try { await chrome.storage.local.set({ draftFormats: all }); } catch { /* harmless */ } }
+}
+// true for HTML, false for plain text
+export async function draftIsHtml(message, body) {
+  const rec = (await formatRecords())[message?.csid];
+  if (rec) return rec === "html";
+  const type = String(message?.headers?.mimeType || "").toLowerCase();
+  if (type.startsWith("text/plain")) return false;
+  if (!body?.html?.trim() && body?.text) return false;
+  return true;
+}
+
 // ---------- open ----------
 // opts: { mode: "new"|"reply"|"replyAll"|"forward"|"draft", message, body (from api.body), myEmail }
 export async function open(opts) {
@@ -199,7 +227,7 @@ export async function open(opts) {
   // images: whether the quoted message's remote images may load, as decided in the reader
   // quoteHtml and quoteText hold the original of a reply or forward until it goes into the editor
   draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true, images: opts.images !== false };
-  let to = [], cc = [], bcc = [], subject = "", bodyHtml = "";
+  let to = [], cc = [], bcc = [], subject = "", bodyHtml = "", bodyText = null, html = hooks.settings().composeHtml !== false;
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
   // A message without a usable date is quoted without one, not as "Invalid Date".
   const sent = new Date(Number(h.date) * 1000), when = h.date && !isNaN(sent) ? sent.toLocaleString() : "";
@@ -236,7 +264,9 @@ export async function open(opts) {
       draft.files = withFiles([], opts.files || []);
       (opts.files || []).forEach((f, i) => { if (draft.files.includes(f) && opts.partIds?.[i]) stored.set(f, { messageId: m.id, partId: opts.partIds[i] }); });
       to = h.to || []; cc = h.cc || []; bcc = h.bcc || []; subject = h.subject || "";
-      bodyHtml = opts.body.html || "";
+      html = await draftIsHtml(m, opts.body);
+      bodyHtml = opts.body.html || (opts.body.text ? textToHtml(opts.body.text) : "");
+      bodyText = opts.body.text || toText(opts.body.html || "");
       if (api.isMessageId(m.inReplyTo?.messageReference?.id)) draft.inReplyTo = { id: m.inReplyTo.messageReference.id, replied: !!m.inReplyTo.replied, forwarded: !!m.inReplyTo.forwarded };
       break;
     }
@@ -252,7 +282,7 @@ export async function open(opts) {
   $("c-subject").value = subject;
   const sig = fromAcct.signatureActive && fromAcct.signature ? `<div><br></div><div><br></div><div class="ymsig">${fromAcct.signature}</div>` : "<div><br></div>";
   const sigText = fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "";
-  setMode(hooks.settings().composeHtml !== false);
+  setMode(html);
   applyDefaultFont();
   // A reply or forward has the original under the signature, in the editor, so it can be answered
   // inline. Like a reopened draft it is cleaned strictly; its remote images are held back when the
@@ -261,7 +291,7 @@ export async function open(opts) {
   draft.quoteHtml = draft.quoteText = "";
   $("c-editor").innerHTML = editorSafe(bodyHtml || (quote ? `${sig}<div><br></div>${quote}` : sig), { images: draft.images });
   syncFontControls();
-  $("c-text").value = bodyHtml ? toText(bodyHtml) : quoteText ? `${sigText}\n\n${quoteText}` : sigText;
+  $("c-text").value = bodyText != null ? bodyText : quoteText ? `${sigText}\n\n${quoteText}` : sigText;
   renderFiles();
   $("compose").classList.remove("hidden");
   dirty = false;
@@ -325,7 +355,8 @@ function switchMode(v) {
   if (!html && !confirm("Switch to plain text? Formatting in this message will be lost.")) { $("c-mode").value = "html"; return; }
   if (html) $("c-editor").innerHTML = textToHtml($("c-text").value); else $("c-text").value = toText($("c-editor").innerHTML);
   setMode(html); dirty = true;
-  hooks.saveSetting("composeHtml", html);
+  // a reopened draft keeps its own format; elsewhere the choice is also the default for new messages
+  if (draft.mode !== "draft") hooks.saveSetting("composeHtml", html);
 }
 
 // ---------- font controls ----------
@@ -710,6 +741,7 @@ async function saveNow(silent = false) {
     const r = await p;
     mine.savedId = r.message?.id || mine.savedId;
     remember(mine, r.message);
+    recordFormat(d.csid, d.html != null);
     if (draft === mine) { hooks.clearNotice("compose"); hooks.status("draft saved", r.ms); }
     return "";
   } catch (e) {
@@ -745,7 +777,7 @@ async function send() {
   hooks.onClose();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
-    run: async () => { await saved(); const r = await api.send(d, sentId).catch(e => { if (e.savedId) snapshot.savedId = e.savedId; throw e; }); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
+    run: async () => { await saved(); const r = await api.send(d, sentId).catch(e => { if (e.savedId) snapshot.savedId = e.savedId; throw e; }); forgetFormat(d.csid); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
     restore: () => reopenFrom(snapshot),
   });
 }
@@ -790,6 +822,7 @@ async function discard() {
   if (!id) return;
   try {
     await api.deleteForever([id]);
+    forgetFormat(mine.csid);
     hooks.status("draft discarded");
     hooks.onDiscarded([...new Set([id, mine.openedFrom].filter(Boolean))]);
   } catch (e) { warn(`The saved draft could not be deleted: ${e.message}`, e); }

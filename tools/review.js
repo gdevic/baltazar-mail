@@ -614,6 +614,42 @@ scenario("the font size box sets the size it shows", async ({ page }, expect) =>
   expect(opts.startsWith("8,9,10,11,12,13,14,15,16"), "15 sits between 14 and 16: " + opts);
 });
 
+scenario("a draft opens in the format it was saved in, whatever the default", async ({ page, calls, mock }, expect) => {
+  mock.patchBody = (id, m, body) => {
+    if (id === "MSG3_3") { m.headers.mimeType = "text/plain"; body.html = ""; body.text = "plain words\nsecond line"; }
+  };
+  const mode = () => page.inputValue("#c-mode");
+  const openDraft = async i => { await page.locator("#rows .row").nth(i).click(); await page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 }); await page.waitForTimeout(300); };
+  const closeIt = async () => { await page.click("#c-discard").catch(() => {}); };
+  await folder(page, "Draft");
+  // an HTML draft with the default set to plain text
+  await openDraft(0);
+  const a = { mode: await mode(), html: await page.locator("#c-editor").innerHTML() };
+  page.once("dialog", d => d.dismiss()); await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+  // a draft another client saved as plain text
+  await openDraft(2);
+  const b = { mode: await mode(), text: await page.inputValue("#c-text") };
+  await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+  // a draft this app saved as plain text, recorded by its csid
+  await page.evaluate(() => chrome.storage.local.set({ draftFormats: { csid2: "text" } }));
+  await openDraft(1);
+  const c = { mode: await mode() };
+  await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+  const setting = await page.evaluate(async () => (await chrome.storage.local.get("settings")).settings.composeHtml);
+  expect(a.mode === "html" && /<p>Body of/.test(a.html), "an HTML draft opens as HTML: " + JSON.stringify(a).slice(0, 200));
+  expect(b.mode === "text" && b.text.startsWith("plain words\nsecond line"), "a plain-text draft opens as text with its own text: " + JSON.stringify(b));
+  expect(c.mode === "text", "the recorded format wins: " + JSON.stringify(c));
+  expect(setting === false, "opening drafts leaves the default alone: " + setting);
+  // saving records the draft's format under its csid
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
+  await page.locator("#c-text").focus(); await page.keyboard.type("text body");
+  await page.keyboard.press("Control+s"); await page.waitForTimeout(500);
+  const csid = msgOf(saves(calls).pop())?.message?.csid;
+  const rec = await page.evaluate(k => chrome.storage.local.get("draftFormats").then(x => x.draftFormats?.[k]), csid);
+  expect(rec === "text", "a save records the format: " + JSON.stringify({ csid, rec }));
+}, { settings: { composeHtml: false } });
+
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
   await folder(page, "Draft");

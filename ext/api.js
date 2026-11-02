@@ -200,7 +200,7 @@ export async function body(msgId) {
   if (!res?.message) throw new ApiError("body: message not returned", r[0]);
   // Attachment metadata lives on the message; simpleBody carries it only for some messages.
   const attachments = res.message.attachments?.length ? res.message.attachments : (res.simpleBody?.attachments || []);
-  return { message: res.message, html: res.simpleBody?.html || "", attachments, ms: r.ms };
+  return { message: res.message, html: res.simpleBody?.html || "", text: typeof res.simpleBody?.text === "string" ? res.simpleBody.text : "", attachments, ms: r.ms };
 }
 
 // Full RFC 822 source. Yahoo's attachment download links cannot be fetched, so attachment

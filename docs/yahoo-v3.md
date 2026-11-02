@@ -145,6 +145,8 @@ An attachment of another message is forwarded by reference, copied server-side w
 
 Draft saves refer to the parts of the draft's previous save the same way (`messageReference` to the previous draft id), so a large attachment is uploaded once rather than on every autosave. Not yet verified live: whether a save that replaces draft X may copy parts out of X. The client treats an error or HTTP 206 on such a save as a refusal and saves again with every file uploaded; sends always upload.
 
+Not yet verified: what `simplebody/full` returns for a message saved as plain text (whether `simpleBody.text` is set and `html` empty, and the value of `headers.mimeType`). The client reads either as a sign of a plain-text draft, after its own record of the format (by `csid`) for drafts it saved.
+
 `GET .../content/simplebody/full` returns attachment metadata on `message.attachments`; `simpleBody.attachments` is present only for some messages. Each entry has `partId`, `filename`, `size`, `type`, `subtype`, `disposition`, `contentId`, `downloadUrl`, `thumbnailUrl` (server-rendered previews for images and PDFs, cookie-authenticated).
 
 Person search: `(from:("addr") OR to:("addr"))`; `fromEmail:(...)` also exists.
