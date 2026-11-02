@@ -22,7 +22,7 @@ The extension's Content Security Policy (in `ext/manifest.json`) makes the brows
 
 | Data | Where | Why |
 |---|---|---|
-| Settings (layout, theme and contrast, sizes, fonts, intervals, pane sizes, expanded folders) | the extension's local storage | so your choices persist |
+| Settings: layout, theme, palettes and contrast, text and row size, pane sizes, expanded folders, writing font, size and HTML or plain text, when images load, whether dark mode shows messages in their original colours, and the new-mail check, mark-read and undo-send intervals | the extension's local storage | so your choices persist |
 | The latest release number and when it was checked | the extension's local storage | to ask GitHub once a day, or an hour later after a failed check |
 | Address book: names, addresses, how many messages you sent to or received from each, last date, and whether you hid it from suggestions | the extension's IndexedDB | address suggestions while writing; built from the headers of your own Inbox and Sent |
 | Yahoo session values and the mailbox id | the extension's session storage, cleared when the browser closes | to call Yahoo without reloading its page |

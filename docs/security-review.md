@@ -20,12 +20,12 @@ Anyone who can send the user an email (body HTML, subject, names, attachments, f
 ## Checked and found sound
 
 - The reader frame runs no scripts, cannot submit forms or navigate itself, and popups from it have no opener or referrer.
-- Links to extension pages from a message are blocked by the browser.
+- Links in a message keep their target only when it is an absolute http, https, mailto or tel address, so none can open an extension page (a relative link would resolve to one); in-message anchors scroll the message.
 - Remote images from non-Yahoo hosts are blocked by the Content Security Policy, which the reader frame inherits.
 - The attachment sandbox checks the sender of every message in both directions, allows only http, https and mailto links back out, and range-checks page requests.
 - Every place names, addresses, subjects, filenames and folder names reach the page goes through escaping.
 - Search values are URL-encoded and stripped of quote and grouping characters.
 - The header-rewriting rule applies only to this extension's own requests to Yahoo's mail hosts.
 - ZIP listings are bounds-checked and spreadsheet previews are capped.
-- The CodeQL and library-check workflows have read-only permissions and no untrusted triggers.
+- The library-check workflow has read-only permissions; CodeQL also writes its results to code scanning (`security-events: write`). Neither has an untrusted trigger.
 - `connect-src` includes `api.github.com` for the daily release check (`ext/update.js`) and nothing else outside Yahoo. The request sends no cookies or referrer, the answer is accepted only as a `vX.Y.Z` tag and used only for the version comparison, and the download link in Settings is fixed rather than taken from the response. No host permission is needed, because the API allows cross-origin reads.

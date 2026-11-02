@@ -25,7 +25,7 @@ Single purpose description:
 
 Permission justifications:
 
-- `storage`: Keeps the user's settings (layout, theme and contrast, sizes, fonts, intervals) and address book on this computer, and, for the browser session only, the Yahoo session values that Yahoo's own web page uses, so the extension does not reload Yahoo's page for every request, and a message being printed, until the print page has read it.
+- `storage`: Keeps the user's settings (layout, theme and contrast, sizes, fonts, intervals) and the time of the last release check on this computer, and, for the browser session only, the Yahoo session values that Yahoo's own web page uses, so the extension does not reload Yahoo's page for every request, and a message being printed, until the print page has read it.
 - `declarativeNetRequest`: Yahoo's mail servers accept requests only when they come from mail.yahoo.com. One rule, registered by the extension at start-up and shipped in its code, sets the Origin and Referer headers to https://mail.yahoo.com on the extension's own requests to Yahoo's mail hosts. The rule is limited to requests the extension itself initiates (initiatorDomains is the extension's own ID), to XHR/fetch requests only, and to mail.yahoo.com and its subdomains. It changes nothing on any web page the user visits.
 - Host permission `https://mail.yahoo.com/*`: All mailbox operations (folders, message lists, search, reading, moving, deleting, drafts and sending) go to Yahoo's mail API on this host, with the user's existing Yahoo sign-in.
 - Host permission `https://*.mail.yahoo.com/*`: Yahoo serves message source (used to show attachments), attachment thumbnails and images embedded in messages from subdomains of mail.yahoo.com (apis.mail.yahoo.com, cloud-apis.mail.yahoo.com).
