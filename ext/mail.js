@@ -780,7 +780,7 @@ async function openCard(anchor, email, name) {
   const me = email.toLowerCase() === $("account").textContent.toLowerCase();
   const when = s => s ? new Date(s * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "never";
   card.innerHTML = `<div class="card-head"><b>${esc(c?.name || name || email)}</b><span>${esc(email)}</span></div>
-    <div class="card-stats">${me ? "This is you." : c ? `You wrote ${plural(c.sent, "time")} · they wrote ${plural(c.received, "time")}<br>Last exchange ${when(c.last)}` : "Not in your address book yet."}</div>
+    <div class="card-stats">${me ? "This is you." : c ? `Last exchange ${when(c.last)}` : "Not in your address book yet."}</div>
     <div class="card-actions"><button data-c="write">Write</button><button data-c="search">Find all from</button><button data-c="copy">Copy address</button></div>
     <div class="card-recent"><i>loading recent messages...</i></div>`;
   const r = anchor.getBoundingClientRect();
@@ -1759,7 +1759,6 @@ function renderAddressBook() {
   const day = t => t ? new Date(t * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
   $("ab-list").innerHTML = shown.length ? shown.map(c => `<div class="ab-item${c.hidden ? " off" : ""}" data-email="${esc(c.email)}">
       <span class="ab-who"><span class="ab-name">${esc(c.name || c.email)}</span>${c.name ? `<span class="ab-mail">${esc(c.email)}</span>` : ""}</span>
-      <span class="ab-stats" title="${c.sent} sent to, ${c.received} received from">↑${c.sent} ↓${c.received}</span>
       <span class="ab-last" title="Last message">${day(c.last)}</span>
       <button class="ab-eye" title="${c.hidden ? "Hidden from suggestions. Click to show again" : "Suggested when writing. Click to hide"}">${c.hidden ? EYE_OFF : EYE}</button></div>`).join("")
     : `<div class="ab-empty">${abTab === "hidden" && !q ? "No hidden addresses. Hide one here, or with × in the address suggestions while writing." : q ? `No address matches “${esc(q)}”.` : "No addresses collected yet."}</div>`;

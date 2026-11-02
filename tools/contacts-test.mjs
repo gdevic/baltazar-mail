@@ -23,9 +23,9 @@ for (const e of machine) if (!machineAddress(e)) { fail++; console.log("FAIL sho
 for (const e of person) if (machineAddress(e)) { fail++; console.log("FAIL should keep:", e); }
 // The rule applies only to addresses never written to, and never overrides the user's choice.
 const cases = [
-  [{ email: "noreply@example.com", sent: 0 }, true], [{ email: "noreply@example.com", sent: 2 }, false],
-  [{ email: "noreply@example.com", sent: 0, hidden: false }, false], [{ email: "jane.doe@gmail.com", sent: 0 }, false],
-  [{ email: "jane.doe@gmail.com", sent: 5, hidden: true }, true],
+  [{ email: "noreply@example.com", lastSent: 0 }, true], [{ email: "noreply@example.com", lastSent: 1700000000 }, false],
+  [{ email: "noreply@example.com", hidden: false }, false], [{ email: "jane.doe@gmail.com" }, false],
+  [{ email: "jane.doe@gmail.com", lastSent: 1700000000, hidden: true }, true],
 ];
 for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("FAIL isHidden", JSON.stringify(e), "want", want); }
 // Scans walk newest-first and stop at the bookmark; a future-dated message never moves it.

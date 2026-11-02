@@ -144,13 +144,13 @@ scenario("a previewed file's type comes from its name, not the sender", async ({
 // ---------- address book ----------
 scenario("the address book survives a repeated full build and a second tab", async (h, expect) => {
   const { page } = h;
-  const counts = () => page.evaluate(async () => { const c = await import("./contacts.js"); return (await c.all()).reduce((n, e) => n + e.sent + e.received, 0); });
+  const counts = () => page.evaluate(async () => { const c = await import("./contacts.js"); return JSON.stringify((await c.all()).sort((a, b) => a.email.localeCompare(b.email))); });
   await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
   const first = await counts();
-  // a full build again (as after an interrupted first build) must not count the same mail twice
+  // a full build again (as after an interrupted first build) leaves the same entries
   await page.evaluate(async () => { const c = await import("./contacts.js"); await c.sync({ inbox: "1", sent: "2", full: true }); });
   const again = await counts();
-  expect(first > 0 && again === first, "a second full build counts each message once: " + JSON.stringify({ first, again }));
+  expect(first.length > 2 && again === first && !/"(sent|received)"/.test(again), "a second full build leaves the same entries, without counts: " + JSON.stringify({ first, again }).slice(0, 400));
   // another tab hides an address; this tab then records mail to it
   const other = await h.ctx.newPage(); await other.goto(`chrome-extension://${h.extId}/mail.html`); await other.waitForSelector("#rows .row", { timeout: 15000 });
   await other.evaluate(async () => { const c = await import("./contacts.js"); await c.hide("s2@x.com"); });

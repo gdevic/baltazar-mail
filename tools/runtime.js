@@ -533,6 +533,7 @@ const { launch } = require("./harness");
   await page.waitForSelector("#settings-ab:not(.hidden) .ab-item");
   ab.mainHidden = await page.locator("#settings-main").isHidden();
   ab.rows = await page.locator("#ab-list .ab-item").count();
+  ab.noCounts = await page.locator("#ab-list").evaluate(l => !l.querySelector(".ab-stats") && !/[↑↓]/.test(l.textContent));
   ab.focus = await page.evaluate(() => document.activeElement.id);
   await page.keyboard.type("x.com");
   ab.filtered = await page.locator("#ab-list .ab-item").count();
@@ -650,7 +651,7 @@ const { launch } = require("./harness");
   expect(results.empty.archive === "No messages in Archive." && results.empty.parent === "No messages in Travel.\nIts 1 subfolder holds 12 messages." && results.empty.gone === 0, "empty folder: " + JSON.stringify(results.empty));
   {
     const ab = results.ab, hidN = Number(ab.hiddenCount);
-    expect(/^\d+ addresses learned from Inbox and Sent/.test(ab.summary) && ab.mainHidden && ab.rows >= 5 && ab.focus === "ab-filter" && ab.paletteInline && ab.filtered >= 2 && ab.bulkText.startsWith("Hide ") &&
+    expect(/^\d+ addresses learned from Inbox and Sent/.test(ab.summary) && ab.mainHidden && ab.noCounts && ab.rows >= 5 && ab.focus === "ab-filter" && ab.paletteInline && ab.filtered >= 2 && ab.bulkText.startsWith("Hide ") &&
       hidN >= ab.filtered - 1 && ab.offRows === ab.filtered && /^Show (all )?\d+ again$/.test(ab.hiddenTabBulk) && Number(ab.afterEye) === hidN - 1 && ab.filterCleared === "" && ab.backOnMain &&
       new RegExp(`· ${hidN - 1} hidden from suggestions`).test(ab.summaryAfter) && ab.closed, "address book: " + JSON.stringify(ab));
   }
@@ -691,7 +692,7 @@ const { launch } = require("./harness");
       f.back.sel === f.before.sel && f.back.reader === f.before.reader, "per-folder selection and reader: " + JSON.stringify(f));
   }
   expect(results.vDownload === "report.pdf:true" && results.rawFetches === 1 && !/^chrome-extension/.test(results.rawOrigin || ""), "bytes: " + JSON.stringify([results.vDownload, results.rawFetches, results.rawOrigin]));
-  expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
+  expect(results.card.head.includes("s2@x.com") && /^Last exchange /.test(results.card.stats) && !/wrote|\d+ times?/.test(results.card.stats) && results.card.recent >= 1 && results.cardClosed, "contact card: " + JSON.stringify(results.card));
   expect(/^Version 99\.0\.0 is available\. Download it from GitHub\. Checked daily with GitHub; no data about you is sent\.$/.test(results.update.note) &&
     results.update.href === "https://github.com/gdevic/baltazar-mail/releases/latest" && results.update.dot === 1 && /^Baltazar Mail \d+\.\d+\.\d+$/.test(results.update.top) && results.update.calls === 1 && !results.update.cookie &&
     results.update.url === "https://api.github.com/repos/gdevic/baltazar-mail/releases/latest", "update notice: " + JSON.stringify(results.update));

@@ -255,12 +255,11 @@ body.dragging iframe { pointer-events: none; }
 .ab-seg button.on { background: var(--sel); color: var(--fg); }
 .ab-seg i { font-style: normal; color: var(--fg3); font-size: calc(11 * var(--fu)); margin-left: 2px; }
 #ab-list { height: min(52vh, 420px); overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
-.ab-item { display: grid; grid-template-columns: 1fr auto 82px 26px; gap: 10px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: calc(12 * var(--fu)); }
+.ab-item { display: grid; grid-template-columns: 1fr 82px 26px; gap: 10px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: calc(12 * var(--fu)); }
 .ab-item:hover { background: var(--bg2); }
 .ab-who { min-width: 0; display: flex; flex-direction: column; }
 .ab-name, .ab-mail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ab-mail { color: var(--fg3); font-size: calc(11 * var(--fu)); }
-.ab-stats { color: var(--fg3); font-size: calc(11 * var(--fu)); font-family: var(--mono); white-space: nowrap; }
 .ab-last { color: var(--fg3); font-size: calc(11 * var(--fu)); text-align: right; white-space: nowrap; }
 .ab-eye { width: 24px; height: 22px; border: 1px solid transparent; border-radius: 4px; background: none; color: var(--fg2); cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
 .ab-eye:hover { border-color: var(--line); color: var(--fg); }

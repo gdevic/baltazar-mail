@@ -2,8 +2,8 @@ import * as api from "./api.js";
 import { noBidi } from "./text.js";
 
 // Address book built from the user's own Inbox and Sent headers, kept in IndexedDB.
-// One entry per lowercase address: counts of messages sent to and received from it, the display
-// names seen, and the last time it was used.
+// One entry per lowercase address: the display names seen, when mail last went either way, and
+// when the user last wrote to it. Nothing is counted; recency is all the ranking needs.
 
 const DB = "baltazar-mail", STORE = "contacts", META = "meta";
 let db = null;
@@ -88,7 +88,7 @@ const machineMemo = new Map();
 const isMachine = email => { let m = machineMemo.get(email); if (m === undefined) machineMemo.set(email, m = machineAddress(email)); return m; };
 
 // hidden: true or false once the user decides; unset, a machine sender never written to is hidden.
-export const isHidden = e => e.hidden ?? (!e.sent && isMachine(e.email));
+export const isHidden = e => e.hidden ?? (!e.lastSent && isMachine(e.email));
 
 // A display name is only as good as whoever wrote it. Names are kept by source, best first: the
 // user's own (recipients of mail they sent), the person's own (the From of mail they sent), and
@@ -121,9 +121,9 @@ async function record(m, direction, pending) {
   for (const list of lists) for (const a of list || []) {
     const email = (a.email || "").trim().toLowerCase();
     if (!email || !email.includes("@") || own.has(email)) continue;
-    const e = pending.get(email) || { email, nameBy: {}, sent: 0, received: 0, last: 0, lastSent: 0 };   // what this scan adds
+    const e = pending.get(email) || { email, nameBy: {}, last: 0, lastSent: 0 };   // what this scan adds
     noteName(e, a.name, direction === "sent" ? "mine" : list === h.from ? "self" : "others");
-    if (direction === "sent") { e.sent++; e.lastSent = Math.max(e.lastSent, when); } else e.received++;
+    if (direction === "sent") e.lastSent = Math.max(e.lastSent, when);
     e.last = Math.max(e.last, when);
     pending.set(email, e);
   }
@@ -135,8 +135,8 @@ async function flush(pending) {
   const adds = new Map(pending); pending.clear();
   await updateRows([...adds.keys()], (stored, email) => {
     const d = adds.get(email);
-    const e = stored || { email, name: "", nameBy: {}, sent: 0, received: 0, last: 0, lastSent: 0 };
-    e.sent = (e.sent || 0) + d.sent; e.received = (e.received || 0) + d.received;
+    const e = stored || { email, name: "", nameBy: {}, last: 0, lastSent: 0 };
+    delete e.sent; delete e.received;            // no message counts are kept
     e.last = Math.max(e.last || 0, d.last); e.lastSent = Math.max(e.lastSent || 0, d.lastSent);
     for (const [src, names] of Object.entries(d.nameBy)) for (const [n, c] of Object.entries(names)) for (let i = 0; i < c; i++) noteName(e, n, src);
     e.name = bestName(e);
@@ -144,10 +144,14 @@ async function flush(pending) {
   });
 }
 
-// A full build counts every message again, so it starts from zero; the user's hide choices stay.
-async function resetCounts() {
+// A full build reads every message again, so it starts from nothing; the user's hide choices stay.
+async function resetRows() {
   const emails = [...(await loadAll()).keys()];
-  await updateRows(emails, stored => stored && Object.assign(stored, { sent: 0, received: 0, last: 0, lastSent: 0, nameBy: {}, names: undefined, name: "" }));
+  await updateRows(emails, stored => {
+    if (!stored) return stored;
+    for (const k of ["sent", "received", "names"]) delete stored[k];
+    return Object.assign(stored, { last: 0, lastSent: 0, nameBy: {}, name: "" });
+  });
 }
 
 async function getMeta(key) { const r = await tx(META, "readonly", s => s.get(key)); return r ? r.value : null; }
@@ -156,7 +160,7 @@ async function setMeta(key, value) { await tx(META, "readwrite", s => s.put({ ke
 // One message of a newest-first scan: whether to stop, whether to record it, and the bookmark (the
 // newest date recorded). A date more than a day ahead (a sender's wrong clock) never moves the
 // bookmark, or every later scan would stop at its first message; incremental scans pass over such
-// a message, so only a full scan counts it, once.
+// a message, so only a full scan records it, once.
 export function scanStep(when, newest, { full, newestSeen, now }) {
   if (when > now + 86400) return { stop: false, record: full, newest };
   if (!full && when <= newestSeen) return { stop: true, record: false, newest };
@@ -194,7 +198,7 @@ export async function sync({ inbox, sent, full = false, progress } = {}) {
   await loadAll();
   const built = await getMeta("built");
   const doFull = full || !built;
-  if (doFull) await resetCounts();
+  if (doFull) await resetRows();
   let n = 0;
   if (sent) n += await scanFolder(sent, "sent", doFull, progress);
   if (inbox) n += await scanFolder(inbox, "received", doFull, progress);
@@ -212,21 +216,20 @@ export async function noteSent(recipients) {
   await flush(pending);
 }
 
-// Recency first, frequency second: a correspondent used recently outranks a frequent old one,
-// but frequent correspondents stay above strangers of similar age.
+// Recency ranks: the last exchange either way, and above it the last time the user wrote to the
+// person, so people the user writes to stay above senders of similar age.
 function score(e, now) {
-  const days = Math.max(0, (now - e.last) / 86400);
-  const weight = e.sent * 3 + e.received;
-  return weight * Math.exp(-days / 120) + (e.sent ? 0.5 : 0) - (e.hidden === undefined && isMachine(e.email) ? 1e6 : 0);
+  const fade = t => t ? Math.exp(-Math.max(0, (now - t) / 86400) / 120) : 0;
+  return fade(e.last) + (e.lastSent ? 0.5 + 2 * fade(e.lastSent) : 0) - (e.hidden === undefined && isMachine(e.email) ? 1e6 : 0);
 }
 
-// Addresses the user never wants suggested (newsletters and the like). Still counted, never shown.
+// Addresses the user never wants suggested (newsletters and the like). Still recorded, never shown.
 export async function hide(email, hidden = true) { await hideMany([email], hidden); }
 
 // Every entry, for the address book manager.
 export async function all() {
   await loadAll();
-  return [...cache.values()].map(e => ({ name: e.name, email: e.email, sent: e.sent || 0, received: e.received || 0, last: e.last || 0, hidden: isHidden(e) }));
+  return [...cache.values()].map(e => ({ name: e.name, email: e.email, last: e.last || 0, hidden: isHidden(e) }));
 }
 
 export async function hideMany(emails, hidden = true) {
@@ -256,7 +259,7 @@ export async function suggest(query, limit = 8, exclude = new Set()) {
     }
     rows.push(e);
   }
-  rows.sort((a, b) => (q ? score(b, now) - score(a, now) : b.last - a.last) || b.sent - a.sent);
+  rows.sort((a, b) => (q ? score(b, now) - score(a, now) : b.last - a.last) || (b.lastSent || 0) - (a.lastSent || 0));
   return rows.slice(0, limit).map(e => ({ name: e.name, email: e.email }));
 }
 
@@ -265,5 +268,5 @@ export async function count() { await loadAll(); return cache.size; }
 export async function lookup(email) {
   await loadAll();
   const e = cache.get(String(email || "").toLowerCase());
-  return e ? { name: e.name, email: e.email, sent: e.sent, received: e.received, last: e.last, lastSent: e.lastSent, hidden: isHidden(e) } : null;
+  return e ? { name: e.name, email: e.email, last: e.last, lastSent: e.lastSent, hidden: isHidden(e) } : null;
 }
