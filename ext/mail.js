@@ -75,7 +75,7 @@ function syncSettingsForm() {
   $("textpct").value = settings.textPct;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
   $("undosend").value = settings.undoSendSec;
-  if (!$("composeFont").options.length) compose.fillFonts($("composeFont"), "(default)");
+  if (!$("composeFont").options.length) compose.fillFonts($("composeFont"));
   // a font saved as a bare name (or an older list) shows as its entry
   $("composeFont").value = compose.fontEntry(settings.composeFont)?.[1] || compose.DEFAULT_FONT; $("composeSize").value = String(settings.composeSize);
 }

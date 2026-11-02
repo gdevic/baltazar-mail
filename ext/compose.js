@@ -389,9 +389,7 @@ export function fontEntry(value) {
   const f = firstFamily(value);
   return FONTS.find(([, v]) => v === value) || FONTS.find(([n, v]) => firstFamily(v) === f || n.toLowerCase() === f) || null;
 }
-export function fillFonts(sel, defaultLabel = "") {
-  sel.replaceChildren(...FONTS.map(([n, v], i) => new Option(i === 0 && defaultLabel ? `${n} ${defaultLabel}` : n, v)));
-}
+export function fillFonts(sel) { sel.replaceChildren(...FONTS.map(([n, v]) => new Option(n, v))); }
 // The Font and Size boxes always show what applies at the caret (or selection start).
 let fontRange = null, byKeys = false;
 function saveRange() { const s = getSelection(); fontRange = s.rangeCount && $("c-editor").contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null; }

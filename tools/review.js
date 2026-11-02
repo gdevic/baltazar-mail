@@ -732,7 +732,7 @@ scenario("every formatting tool does what it says, and can be undone", async ({ 
 scenario("font choices show one name and carry a fallback", async ({ page, calls }, expect) => {
   const s = await page.evaluate(() => [...document.querySelectorAll("#composeFont option")].map(o => [o.textContent, o.value]));
   const labels = s.map(x => x[0]);
-  expect(labels[0] === "Helvetica (default)" && labels.every(l => !l.includes(",")), "short names in Settings: " + JSON.stringify(labels));
+  expect(labels[0] === "Helvetica" && labels.every(l => !l.includes(",") && !l.includes("default")), "short names in Settings: " + JSON.stringify(labels));
   expect(s.every(([, v]) => /,\s*(sans-serif|serif|monospace|cursive)$/.test(v)), "every choice ends in a generic family: " + JSON.stringify(s.map(x => x[1])));
   // a font saved earlier as a bare name is shown as its entry
   expect(await page.inputValue("#composeFont") === s.find(x => x[0] === "Georgia")[1], "a saved bare name maps to its entry: " + await page.inputValue("#composeFont"));
