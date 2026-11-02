@@ -358,6 +358,8 @@ async function setNewMail(on) {
 }
 
 // ---------- list ----------
+// Shown on a row under the pointer and on selected rows, just before the date.
+const TRASH_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v5M9.2 6.5v5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // mode: "fresh" (new view), "refresh" (same view, keep cursor and marks by id, same depth), "more" (next page).
 // focusId: after a refresh, put the cursor on this message and open it (undo of a move).
 async function loadList(mode = "fresh", focusId = null) {
@@ -378,7 +380,7 @@ async function loadList(mode = "fresh", focusId = null) {
   const shown = mode === "fresh" ? { messages: state.messages, selected: state.selected, anchor: state.anchor, marked: new Set(state.marked), more: state.more, elsewhere: state.elsewhere } : null;
   if (mode === "fresh") { state.messages = []; state.selected = -1; state.anchor = -1; state.marked.clear(); state.more = false; state.loading = true; renderList(); }
   else if (mode === "more" && !state.messages.length) return;
-  status(mode === "more" ? "loading more…" : "loading…");
+  status(mode === "more" ? "loading more..." : "loading...");
   let r, other = null;
   try {
     // Searches Yahoo can answer in one query page normally; compound ones (AND between words,
@@ -515,10 +517,13 @@ function renderList() {
     const who = outgoing ? h.to?.[0] : h.from?.[0];
     el.innerHTML = `<span class="st" title="Star / unstar (s)"></span><span class="fl"></span><span class="fr" data-email="${esc(who?.email || "")}" data-name="${esc(who?.name || "")}">${esc(who?.name || who?.email || "")}</span>` +
       `<span class="sb">${subjectHtml(h.subject)}${showFolder ? `<em>${esc(m.folder?.name || "")}</em>` : ""}</span>` +
-      `<span class="dt">${fmtDate(h.date)}</span>`;
+      `<span class="dt"><span class="tr" title="Delete (Del)">${TRASH_ICON}</span>${fmtDate(h.date)}</span>`;
     paintFlags(el, m);
     el.onclick = e => {
       if (e.target.classList.contains("st")) { e.stopPropagation(); run(() => doSetStarred([m.id], !m.flags?.flagged)); return; }
+      // The trash icon deletes every selected row when it is one of them, else only its own row,
+      // leaving the selection as it is.
+      if (e.target.closest(".tr")) { e.stopPropagation(); if (state.marked.has(m.id)) runAction("delete"); else run(() => doDelete([m.id])); return; }
       if (e.shiftKey) { markRange(state.anchor < 0 ? i : state.anchor, i); select(i, false); return; }
       if (e.ctrlKey || e.metaKey) { toggleMark(i); select(i, false); return; }
       clearMarks(); select(i);
@@ -776,8 +781,8 @@ async function openCard(anchor, email, name) {
   const when = s => s ? new Date(s * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "never";
   card.innerHTML = `<div class="card-head"><b>${esc(c?.name || name || email)}</b><span>${esc(email)}</span></div>
     <div class="card-stats">${me ? "This is you." : c ? `You wrote ${plural(c.sent, "time")} · they wrote ${plural(c.received, "time")}<br>Last exchange ${when(c.last)}` : "Not in your address book yet."}</div>
-    <div class="card-actions"><button data-c="write">Write</button><button data-c="search">All mail</button><button data-c="copy">Copy address</button></div>
-    <div class="card-recent"><i>loading recent messages…</i></div>`;
+    <div class="card-actions"><button data-c="write">Write</button><button data-c="search">Find all from</button><button data-c="copy">Copy address</button></div>
+    <div class="card-recent"><i>loading recent messages...</i></div>`;
   const r = anchor.getBoundingClientRect();
   card.classList.remove("hidden");
   card.style.left = Math.max(4, Math.min(r.left, innerWidth - card.offsetWidth - 8)) + "px";
@@ -883,7 +888,7 @@ async function open(i, how = "user") {
   if (!(await compose.close(true))) return;
   state.openId = m.id;
   clearTimeout(markReadTimer);
-  status("fetching body…");
+  status("fetching body...");
   let r;
   try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) { messageGone(m.id); return; } showReaderError(e, "fetching the message"); return; }
   if (state.openId !== m.id) return;
@@ -1013,7 +1018,7 @@ async function startCompose(mode) {
   hideReaderForCompose(true);
   try {
     if (mode === "new") { await compose.open({ mode, myEmail: me }); return; }
-    status("preparing…");
+    status("preparing...");
     const html = await inlineYahooParts(body.html, body.message);
     if (seq !== composeSeq) return;
     body.html = html;
@@ -1026,7 +1031,7 @@ async function editDraft(i) {
   const m = state.messages[i]; if (!m) return;
   const seq = ++composeSeq;              // a later click on another draft wins
   if (!(await compose.close(true))) return;
-  status("loading draft…");
+  status("loading draft...");
   let r;
   try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) messageGone(m.id); else handleError(e, "draft"); return; }
   if (seq !== composeSeq) return;
@@ -1037,7 +1042,7 @@ async function editDraft(i) {
   const atts = r.attachments.filter(a => a.disposition !== "inline" && a.partId);
   let files = [];
   if (atts.length) {
-    status(`loading the draft's ${plural(atts.length, "attachment")}…`);
+    status(`loading the draft's ${plural(atts.length, "attachment")}...`);
     try {
       const parsed = await viewer.parsedMessage(m.id);
       files = atts.map(a => {
@@ -1062,7 +1067,7 @@ function scheduleSend(job) {
   const fire = async () => {
     const i = pendingSends.indexOf(entry); if (i >= 0) pendingSends.splice(i, 1);
     showUndo();
-    status(`sending…`);
+    status(`sending...`);
     try {
       const r = await job.run(); status(`sent: ${job.label.replace(/^send /, "")}`, r.ms);
       await loadFolders(true).catch(() => {}); await actOnChanges().catch(() => {});
@@ -1127,7 +1132,7 @@ function printableImages(html, allowed) {
 async function printMessages() {
   const ids = state.marked.size ? targetIds() : (currentBody ? [currentBody.message.id] : []);
   if (!ids.length) { status("open or select a message to print"); return; }
-  status(`preparing ${plural(ids.length, "message")} for printing…`);
+  status(`preparing ${plural(ids.length, "message")} for printing...`);
   const messages = [];
   for (const id of ids) {
     let r;
@@ -1244,7 +1249,7 @@ const failedOf = res => (Array.isArray(res) ? res : [res]).flatMap(r => r?.faile
 // off the list so the older entries stay reachable.
 async function undoOrRedo(from, to, step, words) {
   const e = from.pop(); if (!e) return;
-  status(`${words[0]}: ${e.label}…`);
+  status(`${words[0]}: ${e.label}...`);
   let ok = false;
   try {
     const failed = failedOf(await e[step]());
@@ -1398,25 +1403,40 @@ function showContextMenu(x, y) {
   const outgoing = ["SENT", "DRAFT"].includes(folderType(state.byId.get(state.view.folderId)));
   const people = byIds(ids).map(m => (outgoing ? m.headers?.to?.[0] : m.headers?.from?.[0]) || {});
   const who = people[0]?.email && people.every(p => (p.email || "").toLowerCase() === people[0].email.toLowerCase()) ? people[0] : null;
+  // Reply and Forward answer the row that was clicked; drafts are edited, not answered.
+  const answerable = folderType(state.byId.get(state.view.folderId)) !== "DRAFT";
+  const whoTitle = who && (who.name ? `${who.name} <${who.email}>` : who.email);
+  // [action, label, shortcut, tooltip]; null is a separator
   const items = [
-    ...(who ? [["about", outgoing ? "About recipient" : "About sender", who.name ? `${who.name} <${who.email}>` : who.email], null] : []),
-    ["read", (first.flags?.read ? "Mark unread" : "Mark read") + n],
-    ["star", (first.flags?.flagged ? "Unstar" : "Star") + n], null,
-    ["archive", "Archive" + n], ["move", "Move to…" + n], ["delete", "Delete" + n], null,
-    ["spam", (spamLabel(ids)) + n],
+    ...(answerable ? [["reply", "Reply", "r"], ["replyAll", "Reply all", "a"], ["forward", "Forward", "f"], null] : []),
+    ["archive", "Archive" + n, "e"], ["move", "Move..." + n, "v"], ["spam", spamLabel(ids) + n, "!"], ["delete", "Delete" + n, "Del"], null,
+    ["read", (first.flags?.read ? "Mark unread" : "Mark read") + n, "u"],
+    ["star", (first.flags?.flagged ? "Unstar" : "Star") + n, "s"],
+    ...(who ? [null, ["find", outgoing ? "Find all to" : "Find all from", "", whoTitle],
+      ["about", outgoing ? "About recipient..." : "About sender...", "", whoTitle]] : []),
   ];
   const ctx = $("ctx");
-  ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}"${it[2] ? ` title="${esc(it[2])}"` : ""}>${esc(it[1])}</div>` : "<hr>").join("");
+  ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}"${it[3] ? ` title="${esc(it[3])}"` : ""}><span>${esc(it[1])}</span>${it[2] ? `<kbd>${esc(it[2])}</kbd>` : ""}</div>` : "<hr>").join("");
   ctx.classList.remove("hidden");
   ctx.style.left = Math.min(x, innerWidth - ctx.offsetWidth - 4) + "px";
   ctx.style.top = Math.min(y, innerHeight - ctx.offsetHeight - 4) + "px";
   ctx.onclick = e => {
     const a = e.target.closest("[data-act]"); hideContextMenu(); if (!a) return;
-    if (a.dataset.act === "about") openCard({ getBoundingClientRect: () => ({ left: x, top: y, bottom: y }) }, who.email, who.name || "");
-    else runAction(a.dataset.act);
+    const act = a.dataset.act;
+    if (act === "about") openCard({ getBoundingClientRect: () => ({ left: x, top: y, bottom: y }) }, who.email, who.name || "");
+    else if (act === "find") doSearch(`${outgoing ? "to" : "from"}:${who.email}`, true);
+    else if (act === "reply" || act === "replyAll" || act === "forward") answerRow(state.selected, act);
+    else runAction(act);
   };
 }
 function hideContextMenu() { $("ctx").classList.add("hidden"); }
+// Reply or forward a row from the menu: the row is opened first, as the composer answers the
+// open message.
+async function answerRow(i, mode) {
+  const m = state.messages[i]; if (!m) return;
+  if (state.openId !== m.id || currentBody?.message?.id !== m.id) await open(i);
+  if (state.openId === m.id) startCompose(mode);
+}
 document.addEventListener("mousedown", e => { if (!e.target.closest("#ctx")) hideContextMenu(); });
 window.addEventListener("blur", hideContextMenu);
 
@@ -1953,7 +1973,7 @@ async function syncContacts(full = false) {
     contacts.setOwnAddresses(own);
     const first = !(await contacts.isBuilt());
     const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, full,
-      progress: first ? (fid, seen) => status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}…`) : null });
+      progress: first ? (fid, seen) => status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}...`) : null });
     if (first || n) status(`address book: ${await contacts.count()} addresses${n ? ` (+${n} messages scanned)` : ""}`);
   } catch (e) { status(`address book: ${e.message}`); }
   finally { contactsBusy = false; }

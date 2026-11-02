@@ -174,7 +174,7 @@ async function show(i) {
   meta("");
   $("v-prev").disabled = $("v-next").disabled = items.length < 2;
   const body = $("v-body");
-  body.innerHTML = center("Loading…");
+  body.innerHTML = center("Loading...");
   const stale = () => msgId !== id || index !== at || !isOpen();
   const ctx = { a, k, body, stale, meta };
   const bytes = async () => (await fetchBlob(a)).arrayBuffer();
@@ -228,7 +228,7 @@ async function show(i) {
 const RAW_VIEW_MAX = 100 * 1024;
 async function showRaw(ctx, raw, text) {
   const { a, body, stale, meta } = ctx;
-  body.innerHTML = center("Loading…");
+  body.innerHTML = center("Loading...");
   meta(text != null ? "as text" : "as binary");
   try {
     if (text != null) await sandboxed(ctx, { kind: "text", text: text.replace(/[\x00-\x08\x0b\x0e-\x1a\x1c-\x1f\x7f]/g, "\u00b7"), ext: "txt" });

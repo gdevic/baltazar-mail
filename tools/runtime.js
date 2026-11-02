@@ -316,7 +316,7 @@ const { launch } = require("./harness");
   await printPage.close();
   await page.bringToFront();
 
-  // printing more than session storage holds says so instead of hanging at "preparing…"
+  // printing more than session storage holds says so instead of hanging at "preparing..."
   await page.evaluate(() => { const s = chrome.storage.session; s.realSet = s.set; s.set = async () => { throw new Error("QUOTA_BYTES quota exceeded"); }; });
   await page.locator("#list").focus(); await page.keyboard.press("p");
   await page.waitForSelector("#notice:not(.hidden)", { timeout: 4000 }).catch(() => {});

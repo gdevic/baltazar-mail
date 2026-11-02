@@ -116,7 +116,7 @@ Save (draft) and send are one inner request, `SaveMessage`, with `payloadType: "
         "folder": { "id": "<Draft folder id>" }, "flags": { "spam": "false", "read": "true" },
         "inReplyTo": { "messageReference": { "id": "<orig id>" }, "replied": true, "forwarded": false },
         "attachments": [ { "disposition": "attachment", "multipartName": "multipart://<encoded filename>" } ] },
-      "simpleBody": { "html": "<div>…</div>" } } },
+      "simpleBody": { "html": "<div>...</div>" } } },
     { "contentType": "<mime>", "partName": "<encoded filename>", "payloadReference": "multipart://<encoded filename>" }
   ] }
 ```

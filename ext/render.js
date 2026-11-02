@@ -159,7 +159,7 @@
     addPages(pages);
     root.focus();
     if (pageState.next > total) { pageState.more.remove(); return; }
-    pageState.more.textContent = "Loading more pages…";
+    pageState.more.textContent = "Loading more pages...";
     pageState.io = new IntersectionObserver(([entry]) => {
       if (!entry.isIntersecting || pageState.busy) return;
       pageState.busy = true;

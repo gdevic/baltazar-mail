@@ -9,7 +9,9 @@ const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 const server = http.createServer((req, res) => {
   const p = path.normalize(path.join(ROOT, req.url.split("?")[0]));
   if (!p.startsWith(ROOT + path.sep) || !fs.existsSync(p)) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { "content-type": types[path.extname(p)] || "application/octet-stream" });
+  // Pages get the extension's own CSP, as they do when installed.
+  const csp = path.extname(p) === ".html" ? { "content-security-policy": JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8")).content_security_policy.extension_pages } : {};
+  res.writeHead(200, { "content-type": types[path.extname(p)] || "application/octet-stream", ...csp });
   fs.createReadStream(p).pipe(res);
 });
 
@@ -121,7 +123,9 @@ const folders = [
   await page.waitForFunction(() => document.getElementById("list-title").textContent === "Sent");
   const sentRows = await page.locator("#rows .row").count();
   await page.locator("#rows .row").first().click({ button: "right" });
-  const sentMenuFirst = await page.locator("#ctx div").first().textContent();
+  // menu entries as "label|shortcut", separators as "---"
+  const menu = () => page.locator("#ctx").evaluate(c => [...c.children].map(e => e.tagName === "HR" ? "---" : `${e.querySelector("span").textContent}|${e.querySelector("kbd")?.textContent || ""}`));
+  const sentMenu = await menu();
   await page.keyboard.press("Escape"); await page.mouse.click(5, 5);
   await page.keyboard.press("?");
   const helpVisible = await page.locator("#help").isVisible();
@@ -138,7 +142,7 @@ const folders = [
   await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo") && document.querySelectorAll("#rows .row").length === 95);
   const afterUndo = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
   await page.locator("#rows .row").nth(3).click({ button: "right" });
-  const ctxItems = await page.locator("#ctx div").allTextContents();
+  const ctxItems = await menu();
   // About sender opens the contact card where the menu was; Esc closes it; hovering a list sender does not
   const rowFrom = await page.locator("#rows .row").nth(3).locator(".fr").getAttribute("data-email");
   const menuBox = await page.locator("#ctx").boundingBox();
@@ -146,6 +150,7 @@ const folders = [
   await page.waitForSelector("#card:not(.hidden)", { timeout: 4000 }).catch(() => {});
   const cardBox = await page.locator("#card").boundingBox();
   const aboutCard = { email: await page.locator("#card .card-head span").textContent().catch(() => ""), rowFrom, nearMenu: !!cardBox && Math.abs(cardBox.x - menuBox.x) < 40 && Math.abs(cardBox.y - menuBox.y) < 40 };
+  aboutCard.find = await page.locator('#card [data-c="search"]').textContent().catch(() => "");
   await page.keyboard.press("Escape");
   aboutCard.closed = await page.locator("#card").isHidden();
   await page.locator("#rows .row").nth(5).locator(".fr").hover(); await page.waitForTimeout(800);
@@ -177,9 +182,10 @@ const folders = [
   expect(selectedText.endsWith("2 selected"), "two selected");
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
   expect(afterUndo.rows === 95, "undo restored rows");
-  expect(sentMenuFirst === "About recipient", "Sent rows offer About recipient: " + sentMenuFirst);
-  expect(ctxItems[0] === "About sender" && !ctxItems.includes("Open") && ctxItems.length === 7 && ctxItems.includes("Spam"), "context menu items: " + JSON.stringify(ctxItems));
-  expect(aboutCard.email === aboutCard.rowFrom && aboutCard.nearMenu && aboutCard.closed && aboutCard.noHover, "About sender card: " + JSON.stringify(aboutCard));
+  expect(sentMenu.slice(-2).join() === "Find all to|,About recipient...|", "Sent rows find and describe the recipient: " + JSON.stringify(sentMenu));
+  expect(/^Reply\|r,Reply all\|a,Forward\|f,---,Archive\|e,Move\.\.\.\|v,Spam\|!,Delete\|Del,---,Mark (un)?read\|u,(Star|Unstar)\|s,---,Find all from\|,About sender\.\.\.\|$/.test(ctxItems.join()),
+    "context menu items, in order, with shortcuts: " + JSON.stringify(ctxItems));
+  expect(aboutCard.email === aboutCard.rowFrom && aboutCard.nearMenu && aboutCard.closed && aboutCard.noHover && aboutCard.find === "Find all from", "About sender card: " + JSON.stringify(aboutCard));
   expect(moveChoices[0] === "Projects", "move picker filter");
   expect(mutations.includes("messages.move:2") && mutations.includes("messages.readFlagUpdate:1"), "mutation calls");
   await page.keyboard.press(",");
@@ -230,6 +236,55 @@ const folders = [
   await page.locator("#folder-list .folder", { hasText: /^▸Work/ }).locator(".tw").click();
   const tree = await page.locator("#folder-list .folder").evaluateAll(els => els.map(e => `${e.querySelector(".nm").textContent}@${parseInt(e.style.paddingLeft)}`));
   await page.locator("#folder-list .folder", { hasText: /^▾Work/ }).locator(".tw").click();
+  // The trash icon: shown on the row under the pointer, the cursor row and marked rows; it deletes its row,
+  // or the whole selection when it is one of the selected rows.
+  const trash = {};
+  const shown = () => page.locator("#rows .row .tr").evaluateAll(ts => ts.slice(0, 6).map(t => getComputedStyle(t).visibility === "visible" ? 1 : 0).join(""));
+  const undoNow = () => page.locator("#st-undo").textContent();
+  await page.locator("#list").focus(); await page.keyboard.press("Home"); await page.keyboard.press("Escape");
+  await page.locator("#rows .row").nth(4).hover();
+  trash.hover = await shown();
+  await page.keyboard.press("j"); await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
+  await page.mouse.move(2, 2);
+  trash.marked = await shown();
+  trash.before = await page.locator("#rows .row").count();
+  await page.locator("#rows .row").nth(2).locator(".tr").click();
+  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  trash.two = { rows: await page.locator("#rows .row").count(), undo: await undoNow() };
+  await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  // a row outside the selection: only that row goes, and the selection and cursor stay
+  await page.keyboard.press("Escape"); await page.keyboard.press("Home");
+  await page.keyboard.press("j"); await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
+  const selState = () => page.evaluate(() => ({ marked: [...document.querySelectorAll("#rows .row.marked .fr")].map(e => e.dataset.email).join(), cursor: document.querySelector("#rows .row.sel .fr")?.dataset.email }));
+  const selBefore = await selState();
+  await page.locator("#rows .row").nth(5).hover(); const sel5 = await page.locator("#rows .row").nth(5).locator(".fr").getAttribute("data-email");
+  await page.locator("#rows .row").nth(5).locator(".tr").click();
+  await page.waitForFunction(() => /Undo: delete 1/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  trash.one = { rows: await page.locator("#rows .row").count(), undo: await undoNow(), gone: !(await page.locator(`#rows .row .fr[data-email="${sel5}"]`).count()), selBefore, selAfter: await selState() };
+  // the icon sits right beside the date
+  trash.gap = await page.locator("#rows .row").nth(1).evaluate(r => { const t = r.querySelector(".tr").getBoundingClientRect(), d = r.querySelector(".dt"); const range = document.createRange(); range.selectNodeContents(d.lastChild); return Math.round(range.getBoundingClientRect().left - t.right); });
+  await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  // The toolbar's order, with Delete between separators; the menu's Reply and Find all from
+  // (the mock's body is always message 1, the top row)
+  const menuActs = {};
+  menuActs.toolbar = await page.locator("#toolbar").evaluate(t => [...t.children].map(e => e.classList.contains("sep") ? "|" : e.classList.contains("sp") ? "_" : e.textContent).join(" "));
+  await page.locator("#rows .row").nth(0).click({ button: "right" });
+  menuActs.rowFrom = await page.locator("#rows .row").nth(0).locator(".fr").getAttribute("data-email");
+  await page.locator("#ctx div[data-act=reply]").click();
+  await page.waitForSelector("#compose:not(.hidden)", { timeout: 5000 }).catch(() => {});
+  menuActs.reply = { title: await page.locator("#c-title").textContent(), to: await page.locator("#c-to").textContent() };
+  await page.locator("#c-discard").click().catch(() => {}); await page.waitForTimeout(500);
+  await page.locator("#rows .row").nth(0).click({ button: "right" });
+  await page.locator("#ctx div", { hasText: "Reply all" }).click();
+  await page.waitForSelector("#compose:not(.hidden)", { timeout: 5000 }).catch(() => {});
+  menuActs.replyAll = await page.locator("#c-title").textContent();
+  await page.locator("#c-discard").click().catch(() => {}); await page.waitForTimeout(500);
+  await page.locator("#rows .row").nth(0).click({ button: "right" });
+  await page.locator("#ctx div", { hasText: "Find all from" }).click();
+  await page.waitForTimeout(800);
+  menuActs.find = { term: await page.inputValue("#search") };
+  await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+  await page.locator("#search").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(600);
   // Keys: Backspace deletes in the list, a symbol typed with Alt (Option, AltGr) still counts, Alt
   // with a letter does not; on a Mac the shortcuts are labelled with the Command key.
   const keys = {};
@@ -295,6 +350,13 @@ const folders = [
   expectEnd(keys.headerBackspace.rows === keys.before2 - 1 && keys.searchBackspace, "Backspace deletes outside text fields: " + JSON.stringify(keys));
   expectEnd(!/allow-scripts/.test(keys.sandbox.attr) && keys.sandbox.pwned === null, "the reader's sandbox runs no script: " + JSON.stringify(keys.sandbox));
   expectEnd(imageHosts.includes("ecp.yusercontent.com") && !imageHosts.some(h => /yahoo\.com$/.test(h)), "the reader loads images only from Yahoo's proxy: " + JSON.stringify([...new Set(imageHosts)]));
+  expectEnd(trash.hover === "100010" && trash.marked === "011000" && trash.two.rows === trash.before - 2 && /Undo: delete 2/.test(trash.two.undo) &&
+    trash.one.rows === trash.before - 1 && trash.one.gone && trash.one.selBefore.marked.split(",").length === 2 &&
+    trash.one.selAfter.marked === trash.one.selBefore.marked && trash.one.selAfter.cursor === trash.one.selBefore.cursor && trash.gap >= 10 && trash.gap <= 16, "the row trash icon shows on hover and selection and deletes: " + JSON.stringify(trash));
+  expectEnd(menuActs.toolbar === "Archive Move... Spam | Delete | Mark read Star _ Undo Redo" || menuActs.toolbar === "Archive Move... Spam | Delete | Mark unread Star _ Undo Redo",
+    "toolbar order: " + menuActs.toolbar);
+  expectEnd(menuActs.reply.title === "Reply" && menuActs.replyAll === "Reply all" && menuActs.reply.to.includes(menuActs.rowFrom) && menuActs.find.term === `from:${menuActs.rowFrom}`,
+    "the menu's Reply answers the clicked row and Find all from searches its sender: " + JSON.stringify(menuActs));
   expectEnd(keys.pc.send === "Send (Ctrl+Enter)" && keys.mac.send === "Send (⌘Enter)" && !/Ctrl/.test(keys.mac.help) && /⌘Z/.test(keys.mac.help) && /⌘-click/.test(keys.mac.help),
     "Mac shortcut labels: " + JSON.stringify([keys.pc, keys.mac]));
   expectEnd(persisted.layout.includes("horizontal") && persisted.theme === "light" && persisted.bg === roles("sky", 7).bg && persisted.folderW !== "230px" && persisted.listH !== "40%",
@@ -310,7 +372,7 @@ const folders = [
   await browser.close();
   server.close();
   // Expected: images outside Yahoo's proxy refused by the reader's CSP, scripts refused by the sandbox.
-  const real = errors.filter(e => !e.includes("img-src 'none'") && !e.includes(`"img-src https://*.yusercontent.com data:"`) && !e.includes("the 'allow-scripts' permission is not set") && !e.includes("ERR_TUNNEL_CONNECTION_FAILED") && !e.includes("net::ERR_"));
+  const real = errors.filter(e => !e.includes("img-src 'none'") && !e.includes(`"img-src https://*.yusercontent.com data:"`) && !(e.includes("cloud-apis.mail.yahoo.com/z.png") && e.includes("img-src 'self' data: blob: https://*.yusercontent.com")) && !e.includes("the 'allow-scripts' permission is not set") && !e.includes("ERR_TUNNEL_CONNECTION_FAILED") && !e.includes("net::ERR_"));
   if (real.length) { console.error("FAILED:", real); process.exit(1); }
   console.log("PASS");
 })().catch(e => { console.error(e); process.exit(1); });

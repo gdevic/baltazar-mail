@@ -41,11 +41,13 @@
     <div id="list-head"><span id="list-title"></span><span id="list-count"></span></div>
     <div id="toolbar">
       <button data-act="archive" title="Archive (e)">Archive</button>
-      <button data-act="delete" title="Delete (# or Del)">Delete</button>
-      <button data-act="move" title="Move to folder (v)">Move…</button>
-      <button data-act="read" title="Mark read / unread (u)">Read</button>
-      <button data-act="star" title="Star / unstar (s)">Star</button>
+      <button data-act="move" title="Move to folder (v)">Move...</button>
       <button data-act="spam" title="Spam / not spam (!)">Spam</button>
+      <span class="sep"></span>
+      <button data-act="delete" title="Delete (# or Del)">Delete</button>
+      <span class="sep"></span>
+      <button data-act="read" title="Mark read / unread (u)">Mark read</button>
+      <button data-act="star" title="Star / unstar (s)">Star</button>
       <span class="sp"></span>
       <button data-act="undo" title="Undo (z)" disabled>Undo</button>
       <button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button>
@@ -159,7 +161,7 @@
     <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>
     <label><input type="number" id="undosend" min="0" max="60" step="1" style="width:60px"> seconds to hold a message before sending, so it can be undone (0: send at once)</label>
     <b>Address book</b>
-    <div class="ab-row"><span id="ab-summary">Learned from your Inbox and Sent headers.</span><button id="ab-open">Manage…</button></div>
+    <div class="ab-row"><span id="ab-summary">Learned from your Inbox and Sent headers.</span><button id="ab-open">Manage...</button></div>
     <p id="update-note" class="hidden"></p>
     <p><button id="settings-close">Close</button> <button id="settings-reset">Reset pane sizes</button></p>
    </div>
@@ -192,7 +194,7 @@
 </div>
 <div id="movebox" class="hidden">
   <div id="movebox-box">
-    <input id="move-filter" placeholder="Move to folder…" autocomplete="off">
+    <input id="move-filter" placeholder="Move to folder..." autocomplete="off">
     <div id="move-list"></div>
   </div>
 </div>
