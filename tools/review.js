@@ -541,6 +541,7 @@ scenario("a discarded draft leaves the Drafts list", async ({ page, calls }, exp
 });
 
 scenario("opening a message that no longer exists drops its row quietly", async ({ page, goneElsewhere }, expect) => {
+  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // its status would cover ours
   goneElsewhere.add("MSG1_2");     // removed elsewhere after the list loaded
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(1000);
   const rows = await subjects(page), n = await notice(page), st = await page.locator("#st-msg").textContent();
@@ -649,6 +650,22 @@ scenario("a draft opens in the format it was saved in, whatever the default", as
   const rec = await page.evaluate(k => chrome.storage.local.get("draftFormats").then(x => x.draftFormats?.[k]), csid);
   expect(rec === "text", "a save records the format: " + JSON.stringify({ csid, rec }));
 }, { settings: { composeHtml: false } });
+
+scenario("Tab from the subject goes to the message, past the toolbar", async ({ page }, expect) => {
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.locator("#c-subject").focus(); await page.keyboard.type("Hello");
+  await page.keyboard.press("Tab");
+  const html = await page.evaluate(() => document.activeElement.id);
+  await page.keyboard.type("typed after Tab");
+  const typed = await page.locator("#c-editor").innerText();
+  // the same in plain text
+  page.once("dialog", d => d.accept());
+  await page.selectOption("#c-mode", "text");
+  await page.waitForTimeout(200);
+  await page.locator("#c-subject").focus(); await page.keyboard.press("Tab");
+  const text = await page.evaluate(() => document.activeElement.id);
+  expect(html === "c-editor" && typed.includes("typed after Tab") && text === "c-text", "Tab lands in the editor: " + JSON.stringify({ html, text }));
+});
 
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };

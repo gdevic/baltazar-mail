@@ -119,6 +119,9 @@ export function init(h) {
   $("c-files").onchange = () => { addFiles([...$("c-files").files]); $("c-files").value = ""; };
   $("c-mode").onchange = () => switchMode($("c-mode").value);
   $("c-cc-toggle").onclick = () => { $("c-cc-row").classList.toggle("hidden"); $("c-bcc-row").classList.toggle("hidden"); };
+  // The formatting tools are for the mouse (and Ctrl+B, Ctrl+I, Ctrl+U): Tab goes from the
+  // subject straight into the message.
+  for (const el of $("c-toolbar").querySelectorAll("button, select, input")) el.tabIndex = -1;
   for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); }; }
   // Picked with the mouse, the caret goes back to the text; stepped through with the keys, the box
   // keeps focus so the next key steps again.
