@@ -236,6 +236,16 @@ const folders = [
   await page.locator("#folder-list .folder", { hasText: /^▸Work/ }).locator(".tw").click();
   const tree = await page.locator("#folder-list .folder").evaluateAll(els => els.map(e => `${e.querySelector(".nm").textContent}@${parseInt(e.style.paddingLeft)}`));
   await page.locator("#folder-list .folder", { hasText: /^▾Work/ }).locator(".tw").click();
+  // Ctrl-click adds single rows to the selection, starting from the row already selected
+  const marks = () => page.evaluate(() => [...document.querySelectorAll("#rows .row")].map((r, i) => r.classList.contains("marked") ? i : -1).filter(i => i >= 0).join());
+  const ctrlSel = {};
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(300);
+  await page.locator("#rows .row").nth(3).click({ modifiers: ["Control"] });
+  await page.locator("#rows .row").nth(5).click({ modifiers: ["Control"] });
+  ctrlSel.three = { marks: await marks(), count: await page.locator("#list-count").textContent() };
+  await page.locator("#rows .row").nth(3).click({ modifiers: ["Control"] });
+  ctrlSel.untoggled = await marks();
+  await page.locator("#list").focus(); await page.keyboard.press("Escape");
   // The trash icon: shown on the row under the pointer, the cursor row and marked rows; it deletes its row,
   // or the whole selection when it is one of the selected rows.
   const trash = {};
@@ -356,6 +366,7 @@ const folders = [
   expectEnd(keys.headerBackspace.rows === keys.before2 - 1 && keys.searchBackspace, "Backspace deletes outside text fields: " + JSON.stringify(keys));
   expectEnd(!/allow-scripts/.test(keys.sandbox.attr) && keys.sandbox.pwned === null, "the reader's sandbox runs no script: " + JSON.stringify(keys.sandbox));
   expectEnd(imageHosts.includes("ecp.yusercontent.com") && !imageHosts.some(h => /yahoo\.com$/.test(h)), "the reader loads images only from Yahoo's proxy: " + JSON.stringify([...new Set(imageHosts)]));
+  expectEnd(ctrlSel.three.marks === "0,3,5" && /3 selected/.test(ctrlSel.three.count) && ctrlSel.untoggled === "0,5", "Ctrl-click selects single rows: " + JSON.stringify(ctrlSel));
   expectEnd(trash.hover === "100010" && trash.marked === "011000" && trash.two.rows === trash.before - 2 && /Undo: delete 2/.test(trash.two.undo) &&
     trash.one.rows === trash.before - 1 && trash.one.gone && trash.one.selBefore.marked.split(",").length === 2 &&
     trash.one.selAfter.marked === trash.one.selBefore.marked && trash.one.selAfter.cursor === trash.one.selBefore.cursor && trash.gap >= 10 && trash.gap <= 16 && trash.near.rows === trash.before - 1, "the row trash icon shows on hover and selection and deletes: " + JSON.stringify(trash));

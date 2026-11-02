@@ -525,7 +525,11 @@ function renderList() {
       // leaving the selection as it is.
       if (e.target.closest(".tr")) { e.stopPropagation(); if (state.marked.has(m.id)) runAction("delete"); else run(() => doDelete([m.id])); return; }
       if (e.shiftKey) { markRange(state.anchor < 0 ? i : state.anchor, i); select(i, false); return; }
-      if (e.ctrlKey || e.metaKey) { toggleMark(i); select(i, false); return; }
+      // Ctrl/⌘-click adds a row to the selection, which starts with the row already selected
+      if (e.ctrlKey || e.metaKey) {
+        if (!state.marked.size && state.selected >= 0 && state.selected !== i) toggleMark(state.selected);
+        toggleMark(i); select(i, false); return;
+      }
       clearMarks(); select(i);
       if (folderType(state.byId.get(state.view.folderId)) === "DRAFT") editDraft(i); else open(i);
     };
