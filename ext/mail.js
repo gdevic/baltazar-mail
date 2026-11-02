@@ -883,9 +883,17 @@ async function open(i, how = "user") {
   clearTimeout(markReadTimer);
   status("fetching body…");
   let r;
-  try { r = await api.body(m.id); } catch (e) { showReaderError(e, "fetching the message"); return; }
+  try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) { messageGone(m.id); return; } showReaderError(e, "fetching the message"); return; }
   if (state.openId !== m.id) return;
   try { await renderMessage(m, r, how); } catch (e) { showReaderError(e, "rendering the message"); }
+}
+
+// A message removed elsewhere (another device, or a draft already discarded) leaves the list
+// quietly; the list is refreshed in case more changed.
+function messageGone(id) {
+  if (state.openId === id) clearReader();
+  removeLocal([id]);
+  loadList("refresh").finally(() => status("that message no longer exists; the list was refreshed"));
 }
 
 function showReaderError(e, what) {
@@ -1018,7 +1026,7 @@ async function editDraft(i) {
   if (!(await compose.close(true))) return;
   status("loading draft…");
   let r;
-  try { r = await api.body(m.id); } catch (e) { handleError(e, "draft"); return; }
+  try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) messageGone(m.id); else handleError(e, "draft"); return; }
   if (seq !== composeSeq) return;
   // Each save replaces the draft, so its inline images and attachments must travel again with
   // it: images as embedded data, attachments as files cut out of its source. If they cannot be
@@ -1971,6 +1979,8 @@ compose.init({
   status, notify, clearNotice, folderByType, settings: () => settings,
   saveSetting: (k, v) => { settings[k] = v; saveSettings(); },
   onClose: () => { hideReaderForCompose(false); $("list").focus(); if (folderType(state.byId.get(state.view.folderId)) === "DRAFT") loadList("refresh"); },
+  // a discarded draft's rows go at once; the refresh on close ran before the delete
+  onDiscarded: ids => { removeLocal(ids); if (folderType(state.byId.get(state.view.folderId)) === "DRAFT") loadList("refresh"); },
   scheduleSend,
 });
 $("more-btn").onclick = () => loadList("more");

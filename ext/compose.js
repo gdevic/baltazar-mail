@@ -10,7 +10,7 @@ const $ = id => document.getElementById(id);
 const fmt = a => a?.name ? `${a.name} <${a.email}>` : (a?.email || "");
 const fmtList = l => (l || []).map(fmt).join(", ");
 
-let hooks = null;          // { status, notify, clearNotice, folderByType, settings, onClose, onSent, scheduleSend }
+let hooks = null;          // { status, notify, clearNotice, folderByType, settings, saveSetting, onClose, onDiscarded(ids), scheduleSend }
 // Composer problems share one notice, cleared once the message saves, sends or closes.
 const warn = (text, err) => hooks.notify(text, { key: "compose", err, what: "compose" });
 let saveError = null;      // the error of the last failed draft save, for the notice's report
@@ -213,6 +213,7 @@ export async function open(opts) {
     case "draft": {
       draft.csid = m.csid || draft.csid;
       draft.savedId = m.id;
+      draft.openedFrom = m.id;      // the row it came from, which a later save replaces
       draft.files = withFiles([], opts.files || []);
       (opts.files || []).forEach((f, i) => { if (draft.files.includes(f) && opts.partIds?.[i]) stored.set(f, { messageId: m.id, partId: opts.partIds[i] }); });
       to = h.to || []; cc = h.cc || []; bcc = h.bcc || []; subject = h.subject || "";
@@ -713,5 +714,10 @@ async function discard() {
   close(false);
   await saved();
   const id = mine.savedId;
-  if (id) { try { await api.deleteForever([id]); hooks.status("draft discarded"); } catch (e) { warn(`The saved draft could not be deleted: ${e.message}`, e); } }
+  if (!id) return;
+  try {
+    await api.deleteForever([id]);
+    hooks.status("draft discarded");
+    hooks.onDiscarded([...new Set([id, mine.openedFrom].filter(Boolean))]);
+  } catch (e) { warn(`The saved draft could not be deleted: ${e.message}`, e); }
 }

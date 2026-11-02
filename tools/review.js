@@ -529,6 +529,29 @@ scenario("polling does not redraw folders or recount Starred for every change", 
 }, { settings: { pollSec: 5 } });
 
 // ---------- compose ----------
+scenario("a discarded draft leaves the Drafts list", async ({ page, calls }, expect) => {
+  await folder(page, "Draft");
+  await page.locator("#rows .row").first().click();
+  await page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 });
+  page.once("dialog", d => d.accept());
+  await page.click("#c-discard");
+  await page.waitForTimeout(1500);
+  const rows = await subjects(page), del = calls.filter(c => c.name === "messages.delete").length;
+  expect(del === 1 && !rows.includes("Subject 3-1"), "the draft is deleted and gone from the list: " + JSON.stringify({ del, rows: rows.slice(0, 3) }));
+});
+
+scenario("opening a message that no longer exists drops its row quietly", async ({ page, goneElsewhere }, expect) => {
+  goneElsewhere.add("MSG1_2");     // removed elsewhere after the list loaded
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(1000);
+  const rows = await subjects(page), n = await notice(page), st = await page.locator("#st-msg").textContent();
+  expect(!rows.includes("Subject 1-2") && !n && /no longer exists/.test(st), "row dropped, said in the status line: " + JSON.stringify({ n, st }));
+  await folder(page, "Draft");
+  goneElsewhere.add("MSG3_2");
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(1000);
+  const drafts = await subjects(page), n2 = await notice(page);
+  expect(!drafts.includes("Subject 3-2") && !n2, "the same for a draft: " + JSON.stringify({ n2, drafts: drafts.slice(0, 3) }));
+}, { allow: /EC-4007|status of 404/ });
+
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
   await folder(page, "Draft");

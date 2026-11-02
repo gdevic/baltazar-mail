@@ -96,6 +96,8 @@ async function launch(opts = {}) {
     else if (uri.endsWith("/accounts")) responses = [{ id: top.id, httpCode: 200, response: { result: { accounts } } }];
     else if (uri.includes("/content/simplebody/full")) {
       const id = uri.match(/@\.id==(MSG[^/]+)/)[1];
+      // a message that no longer exists, as Yahoo answers it
+      if (goneElsewhere.has(id)) return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses: [{ id: top.id, httpCode: 404, response: { error: { code: "EC-4007" } } }], status: {} }, error: null }) });
       const message = msg(Number(id.split("_")[1]), id.split("_")[0].slice(3));
       message.attachments = [
         { partId: "2", filename: "report.pdf", size: 52000, disposition: "attachment", type: "application", subtype: "pdf", contentId: "<rep@x>", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf", textExtractionUrl: "https://cloud-apis.mail.yahoo.com/text/2?appid=x" },
@@ -157,6 +159,7 @@ async function launch(opts = {}) {
       for (const q of envelope?.requests || []) {
         const id = decodeURIComponent(q.uri || "").match(/id:\(([^)]+)\)/)?.[1], f = q.payload?.message?.flags;
         if (id && f) mock.flags.set(id, { ...mock.flags.get(id), ...f });
+        if (id && q.method === "DELETE") goneElsewhere.add(id);   // deleted for good, as on the server
       }
       responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 })); }
     else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)).map(m => mock.flags.has(m.id) ? { ...m, flags: { ...m.flags, ...mock.flags.get(m.id) } } : m), query: {} } } }]; }

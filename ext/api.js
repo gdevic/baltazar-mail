@@ -144,6 +144,9 @@ function first(r) {
   return x.response.result;
 }
 
+// Yahoo's answer for a message that no longer exists (removed elsewhere, or already deleted).
+export const isGone = e => e instanceof ApiError && (e.detail?.httpCode === 404 || e.detail?.response?.error?.code === "EC-4007");
+
 // Every folder with a string id, a name and a types list, whatever shape Yahoo sent.
 export function normalizeFolders(list) {
   return (Array.isArray(list) ? list : []).filter(f => f && f.id != null).map(f => ({
