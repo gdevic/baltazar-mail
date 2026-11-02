@@ -552,21 +552,41 @@ scenario("opening a message that no longer exists drops its row quietly", async 
   expect(!drafts.includes("Subject 3-2") && !n2, "the same for a draft: " + JSON.stringify({ n2, drafts: drafts.slice(0, 3) }));
 }, { allow: /EC-4007|status of 404/ });
 
-scenario("the quoted original shows under the reply, sized to its content", async ({ page, mock }, expect) => {
-  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html = "<p>Original message.</p>" + "<p>more text in the original</p>".repeat(60); };
+scenario("the quoted original is part of the reply and can be answered inline", async ({ page, calls, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html = "<p>First question?</p><p>Second question?</p>"; };
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
   await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.waitForTimeout(300);
+  const r = await page.evaluate(() => ({ inEditor: !!document.querySelector("#c-editor .ymq blockquote"), frame: !!document.querySelector("#c-quote iframe"),
+    caretAtTop: getSelection().anchorNode && document.getElementById("c-editor").firstChild?.contains(getSelection().anchorNode) }));
+  expect(r.inEditor && !r.frame && r.caretAtTop, "the quote is in the editor, the caret above it: " + JSON.stringify(r));
+  await page.keyboard.type("Top note.");
+  // answer between the quoted paragraphs
+  await page.locator("#c-editor blockquote p", { hasText: "First question?" }).click(); await page.keyboard.press("End");
+  await page.keyboard.press("Enter"); await page.keyboard.type("Inline answer.");
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+  const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
+  const at = s => html.indexOf(s);
+  expect(at("Top note.") >= 0 && at("Top note.") < at("First question?") && at("First question?") < at("Inline answer.") && at("Inline answer.") < at("Second question?") &&
+    (html.match(/First question\?/g) || []).length === 1, "the sent message has the answer between the questions, quoted once: " + html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));
+  const outside = await page.evaluate(h => { const d = new DOMParser().parseFromString(h, "text/html"); const t = [...d.querySelectorAll("*")].find(e => e.childElementCount === 0 && e.textContent.includes("Inline answer.")) || null;
+    return { found: !!t, quoted: !!t?.closest("blockquote"), second: !!d.evaluate("//blockquote[contains(., 'Second question?')]", d, null, 9, null).singleNodeValue }; }, html);
+  expect(outside.found && !outside.quoted && outside.second, "Enter inside the quote splits it: the answer is not quoted, the rest still is: " + JSON.stringify(outside));
+});
+
+scenario("a quote from Spam keeps its images out of the app but sends them", async ({ page, calls, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id.startsWith("MSG6_")) body.html = '<p>Spam text</p><img src="https://ecp.yusercontent.com/t-quote.png" width="5" height="5"><div style="width:9px;height:9px;background:url(https://ecp.yusercontent.com/t-qbg.png)">b</div>'; };
+  await folder(page, "Spam");
+  await page.locator("#rows .row").first().click(); await page.waitForTimeout(600);
+  await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
   await page.waitForTimeout(800);
-  const r = await page.evaluate(() => {
-    const ed = document.getElementById("c-editor").getBoundingClientRect(), f = document.querySelector("#c-quote iframe"), fr = f?.getBoundingClientRect(), body = document.getElementById("c-body");
-    return { shown: !!f && f.offsetParent !== null, label: document.getElementById("c-quote-toggle").textContent, gap: fr ? Math.round(fr.top - ed.bottom) : null,
-      frameH: fr ? Math.round(fr.height) : 0, contentH: f?.contentDocument?.documentElement.scrollHeight ?? -1, scrolls: body ? body.scrollHeight > body.clientHeight : false, editorH: Math.round(ed.height) };
-  });
-  expect(r.shown && r.label === "Hide quoted text", "expanded when the reply opens: " + JSON.stringify(r));
-  expect(r.gap !== null && r.gap >= 0 && r.gap < 60 && r.editorH >= 100, "the quote starts right under the text: " + JSON.stringify(r));
-  expect(r.contentH > 0 && Math.abs(r.frameH - r.contentH) <= 2 && r.scrolls, "the frame fits its content and the whole column scrolls: " + JSON.stringify(r));
-  await page.click("#c-quote-toggle"); await page.waitForTimeout(200);
-  expect(await page.locator("#c-quote").isHidden() && await page.locator("#c-quote-toggle").textContent() === "Show quoted text", "the toggle still hides it");
+  const loaded = mock.images.filter(i => /t-q/.test(i.url)).map(i => i.url.split("/").pop());
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+  const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
+  expect(!loaded.length, "no image of the Spam quote loads while writing: " + JSON.stringify(loaded));
+  expect(/src="https:\/\/ecp\.yusercontent\.com\/t-quote\.png"/.test(html) && /url\(https:\/\/ecp\.yusercontent\.com\/t-qbg\.png\)/.test(html) && !/data-held/.test(html), "the sent quote has them back: " + html.slice(0, 400));
 });
 
 scenario("the font size box sets the size it shows", async ({ page }, expect) => {
@@ -685,7 +705,7 @@ scenario("a plain-text reply quotes names and structure as text", async ({ page,
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
   await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
   await page.waitForTimeout(300);
-  const text = await page.frameLocator("#c-quote iframe").locator("pre").textContent();
+  const text = await page.inputValue("#c-text");
   expect(/O'Brien "AT&T" <ob@x\.ie> wrote:/.test(text) && !/&#39;|&quot;|&amp;/.test(text), "the header reads as text: " + JSON.stringify(text.split("\n")[0]));
   expect(text.includes("the doc <https://example.com/doc>") && !text.includes("https://example.com/ <https://example.com/>"), "links keep their address once: " + JSON.stringify(text));
   expect(/> • one\n> • two/.test(text) && /> 1\. first/.test(text) && /> a\tb/.test(text), "bullets, numbers and cells survive: " + JSON.stringify(text));

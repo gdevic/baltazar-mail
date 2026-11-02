@@ -334,9 +334,10 @@ const { launch } = require("./harness");
     const imgs = await spamPrint.evaluate(() => [...document.querySelector(".msg .body").shadowRoot.querySelectorAll("img")].map(i => (i.getAttribute("src") || "").slice(0, 30)));
     await spamPrint.close(); await page.bringToFront();
     await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
-    const quoteCsp = await page.locator("#c-quote iframe").evaluate(f => (f.srcdoc.match(/img-src[^;"]*/) || [""])[0]);
+    // the quote is in the editor; any image it has that could load is held back
+    const quoteLive = await page.locator("#c-editor").evaluate(ed => [...ed.querySelectorAll("img[src]")].map(i => i.getAttribute("src")).filter(s => !/^(data:|cid:)/.test(s)));
     await page.keyboard.press("Escape"); await page.waitForSelector("#compose", { state: "hidden" }).catch(() => {});
-    results.spamImages = { printImgs: imgs, quoteCsp };
+    results.spamImages = { printImgs: imgs, quoteLive };
     await page.locator("#folder-list .folder", { hasText: back }).first().click(); await page.waitForTimeout(700);
     await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
   }
@@ -708,7 +709,7 @@ const { launch } = require("./harness");
   expect(results.print.header.visible && results.print.header.onTop && results.print.remote.length > 0, "a message's styles cannot hide or cover the printed header: " + JSON.stringify(results.print));
   expect(/^Could not print 1 message: too much.*QUOTA_BYTES/.test(results.printQuota), "a print too large for the hand-off says so: " + results.printQuota);
   const si = results.spamImages;
-  expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteCsp.trim() === "img-src data:", "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
+  expect(si.printImgs.length > 0 && si.printImgs.every(s => s.startsWith("data:")) && si.quoteLive.length === 0, "a Spam message prints and quotes without remote images: " + JSON.stringify(si));
   expect(results.colorScheme === "dark" && results.keepTab === false, "dark palettes set a dark color-scheme; the tab is not discarded: " + JSON.stringify({ cs: results.colorScheme, keep: results.keepTab }));
   const fk = results.frameKeys;
   expect(fk.focus === "r-body" && fk.before === 1 && fk.pageDown === 1 && fk.k === 0, "shortcuts reach the app from the message frame: " + JSON.stringify(fk));

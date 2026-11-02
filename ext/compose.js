@@ -118,7 +118,6 @@ export function init(h) {
   $("c-attach").onclick = () => $("c-files").click();
   $("c-files").onchange = () => { addFiles([...$("c-files").files]); $("c-files").value = ""; };
   $("c-mode").onchange = () => switchMode($("c-mode").value);
-  $("c-quote-toggle").onclick = () => toggleQuote();
   $("c-cc-toggle").onclick = () => { $("c-cc-row").classList.toggle("hidden"); $("c-bcc-row").classList.toggle("hidden"); };
   for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); }; }
   // Picked with the mouse, the caret goes back to the text; stepped through with the keys, the box
@@ -151,6 +150,18 @@ export function init(h) {
   });
   ed.addEventListener("click", e => { ed.querySelectorAll("img.sel").forEach(i => i.classList.remove("sel")); if (e.target.tagName === "IMG") e.target.classList.add("sel"); });
   ed.addEventListener("keydown", e => { const sel = ed.querySelector("img.sel"); if (sel && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); sel.remove(); dirty = true; } });
+  // Enter inside the quoted original splits the quote, so what is typed next is the user's own
+  // text between quoted parts, not more quoted text.
+  ed.addEventListener("keydown", e => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    const sel = getSelection(); if (!sel.rangeCount || !sel.isCollapsed) return;
+    const node = sel.anchorNode, start = node.nodeType === 1 ? node : node.parentElement;
+    let bq = start?.closest("blockquote"); if (!bq || !ed.contains(bq)) return;
+    for (let up = bq.parentElement?.closest("blockquote"); up && ed.contains(up); up = up.parentElement?.closest("blockquote")) bq = up;
+    e.preventDefault();
+    splitQuote(bq, sel);
+    dirty = true;
+  });
   c.addEventListener("input", () => { dirty = true; });
   c.addEventListener("dragover", e => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); c.classList.add("drop"); } });
   c.addEventListener("dragleave", () => c.classList.remove("drop"));
@@ -186,6 +197,7 @@ export async function open(opts) {
   const primary = accounts.find(a => a.isPrimary) || accounts[0] || { email: me, sendingName: "" };
   const m = opts.message, h = m?.headers || {};
   // images: whether the quoted message's remote images may load, as decided in the reader
+  // quoteHtml and quoteText hold the original of a reply or forward until it goes into the editor
   draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true, images: opts.images !== false };
   let to = [], cc = [], bcc = [], subject = "", bodyHtml = "";
   const mine = new Set(accounts.map(a => a.email.toLowerCase()).concat([me.toLowerCase()]));
@@ -239,12 +251,17 @@ export async function open(opts) {
   $("c-cc-row").classList.toggle("hidden", !copies); $("c-bcc-row").classList.toggle("hidden", !copies);
   $("c-subject").value = subject;
   const sig = fromAcct.signatureActive && fromAcct.signature ? `<div><br></div><div><br></div><div class="ymsig">${fromAcct.signature}</div>` : "<div><br></div>";
+  const sigText = fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "";
   setMode(hooks.settings().composeHtml !== false);
   applyDefaultFont();
-  $("c-editor").innerHTML = editorSafe(bodyHtml || sig);
+  // A reply or forward has the original under the signature, in the editor, so it can be answered
+  // inline. Like a reopened draft it is cleaned strictly; its remote images are held back when the
+  // reader would not load them.
+  const quote = draft.quoteHtml, quoteText = draft.quoteText;
+  draft.quoteHtml = draft.quoteText = "";
+  $("c-editor").innerHTML = editorSafe(bodyHtml || (quote ? `${sig}<div><br></div>${quote}` : sig), { images: draft.images });
   syncFontControls();
-  $("c-text").value = bodyHtml ? toText(bodyHtml) : (fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "");
-  renderQuote(true);
+  $("c-text").value = bodyHtml ? toText(bodyHtml) : quoteText ? `${sigText}\n\n${quoteText}` : sigText;
   renderFiles();
   $("compose").classList.remove("hidden");
   dirty = false;
@@ -277,7 +294,7 @@ export async function close(save = true) {
   }
   clearInterval(autosaveTimer);
   hideSuggest();
-  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null;
+  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null;
   hooks.clearNotice("compose");
   hooks.onClose();
   return true;
@@ -411,6 +428,24 @@ function format(cmd) {
   exec(cmd);
 }
 
+// Splits blockquote bq at the caret: the part after the caret becomes a second quote, with an
+// empty line of the user's own between them that takes the caret. Empty halves are dropped.
+function splitQuote(bq, sel) {
+  const r = sel.getRangeAt(0).cloneRange();
+  r.setEndAfter(bq.lastChild || bq);
+  const rest = r.extractContents();
+  const line = document.createElement("div");
+  line.appendChild(document.createElement("br"));
+  const second = bq.cloneNode(false);
+  second.appendChild(rest);
+  bq.after(line);
+  if (second.textContent.trim() || second.querySelector("img")) line.after(second);
+  if (!bq.textContent.trim() && !bq.querySelector("img")) bq.remove();
+  const c = document.createRange();
+  c.setStart(line, 0); c.collapse(true);
+  sel.removeAllRanges(); sel.addRange(c);
+}
+
 // Images pasted, dropped or picked are placed at the caret as data: URLs; on save/send they
 // become inline attachments referenced by cid:.
 function placeCaretAt(x, y) {
@@ -447,6 +482,7 @@ function dataImage(src) {
 
 function extractInline(html, taken = new Set()) {
   const doc = new DOMParser().parseFromString(html, "text/html");
+  releaseImages(doc.body);
   const inline = [];
   let n = 0;
   // A Yahoo part address that could not be inlined would show recipients the mailbox id, and
@@ -473,7 +509,29 @@ function extractInline(html, taken = new Set()) {
 // and no ids, names or classes that could collide with the app's own, apart from the quote and
 // signature markers.
 const KEEP_CLASSES = new Set(["ymq", "ymsig"]);
-function editorSafe(html) {
+// Attributes that make a picture load; held back (renamed) while the reader's rule says no images.
+const IMAGE_ATTRS = ["src", "srcset", "poster", "background", "href", "xlink:href", "style"];
+const HELD = "data-held-";
+function holdImages(root) {
+  for (const el of root.querySelectorAll("*")) {
+    for (const a of IMAGE_ATTRS) {
+      const v = el.getAttribute(a); if (v == null) continue;
+      const loads = a === "style" ? /url\(|image-set\(|\\/i.test(v)
+        : a === "href" || a === "xlink:href" ? el.namespaceURI === "http://www.w3.org/2000/svg" && el.localName !== "a"
+        : !/^(data:|cid:)/i.test(v.trim());
+      if (loads) { el.setAttribute(HELD + a.replace(":", "-"), v); el.removeAttribute(a); }
+    }
+  }
+}
+// The attributes held back, put back for saving and sending.
+function releaseImages(root) {
+  for (const el of root.querySelectorAll("*")) for (const a of IMAGE_ATTRS) {
+    const k = HELD + a.replace(":", "-"), v = el.getAttribute(k);
+    if (v != null) { el.setAttribute(a, v); el.removeAttribute(k); }
+  }
+}
+
+function editorSafe(html, { images = true } = {}) {
   const frag = globalThis.DOMPurify.sanitize(html, { RETURN_DOM_FRAGMENT: true, SANITIZE_NAMED_PROPS: true,
     FORBID_TAGS: ["style", "link", "meta", "form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["id", "name", "ping"] });
   for (const el of frag.querySelectorAll("[class]")) {
@@ -488,44 +546,12 @@ function editorSafe(html) {
     for (const p of ["position", "z-index", "inset", "top", "right", "bottom", "left"]) el.style.removeProperty(p);
     if (!el.getAttribute("style")?.trim()) el.removeAttribute("style");
   }
+  if (!images) holdImages(frag);
   const box = document.createElement("div");
   box.appendChild(frag);
   return box.innerHTML;
 }
 
-// The quoted original is the sender's HTML, so it is shown in a sandboxed frame like the reader,
-// with the reader's image policy: its styles and element ids cannot reach the app's own page. It
-// runs no script; like the reader it shares the app's origin, so the app can size it to its
-// content and it reads as part of the message, below the reply. It is shown expanded.
-let quoteSizer = null;
-function fitQuote(frame) {
-  const doc = frame.contentDocument;
-  if (doc?.documentElement) frame.style.height = doc.documentElement.scrollHeight + "px";
-}
-function renderQuote(expanded) {
-  const has = !!draft.quoteHtml;
-  $("c-quote-wrap").classList.toggle("hidden", !has);
-  quoteSizer?.disconnect(); quoteSizer = null;
-  if (!has) { $("c-quote").replaceChildren(); return; }
-  const frame = document.createElement("iframe");
-  frame.setAttribute("sandbox", "allow-same-origin");
-  frame.addEventListener("load", () => {
-    fitQuote(frame);
-    // images arriving later, and a narrower window, change the height
-    frame.contentDocument?.addEventListener("load", () => fitQuote(frame), true);
-    quoteSizer = new ResizeObserver(() => fitQuote(frame));
-    quoteSizer.observe($("c-quote"));
-  });
-  frame.referrerPolicy = "no-referrer";
-  frame.title = "Quoted text";
-  frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:${draft.images ? " https://*.yusercontent.com" : ""}; media-src 'none'">` +
-    `<style>body{margin:0;font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif;color:#333;word-wrap:break-word}pre{white-space:pre-wrap;font:inherit}img{max-width:100%;height:auto}</style>` +
-    (draft.html ? draft.quoteHtml : `<pre>${esc(draft.quoteText)}</pre>`);
-  $("c-quote").replaceChildren(frame);
-  $("c-quote").classList.toggle("hidden", !expanded);
-  $("c-quote-toggle").textContent = expanded ? "Hide quoted text" : "Show quoted text";
-}
-function toggleQuote() { renderQuote($("c-quote").classList.contains("hidden")); }
 
 function withoutStyleSheets(html) {
   const tpl = document.createElement("template");
@@ -654,10 +680,10 @@ function collect(upload = false) {
   if (draft.html) {
     // Images in the quoted original travel as new inline parts too, so recipients see them.
     const f = defaultFont();
-    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML.replaceAll(CARET_HOLD, "")}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : ""), new Set(draft.files.map(x => x.name)));
+    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML.replaceAll(CARET_HOLD, "")}</div>`, new Set(draft.files.map(x => x.name)));
     d.html = html;
     d.inline = inline;
-  } else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");
+  } else d.text = $("c-text").value;
   return d;
 }
 
@@ -714,7 +740,7 @@ async function send() {
   if (!sentId || !d.draftFolderId) { warn("Not sent: the Sent or Drafts folder was not found."); return; }
   const snapshot = { ...draft, d, editorHtml: draft.html ? $("c-editor").innerHTML : null, ownText: draft.html ? null : $("c-text").value };
   clearInterval(autosaveTimer);
-  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; $("c-quote").replaceChildren(); draft = null; dirty = false;
+  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; dirty = false;
   hooks.clearNotice("compose");
   hooks.onClose();
   hooks.scheduleSend({
@@ -735,7 +761,7 @@ async function reopenFrom(snap) {
     return;
   }
   await loadAccounts();
-  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, quoteHtml: snap.quoteHtml, quoteText: snap.quoteText, html: snap.html, images: snap.images };
+  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, html: snap.html, images: snap.images };
   $("c-title").textContent = "Message not sent";
   $("c-from").value = snap.d.from.email;
   fields.to.set(snap.d.to); fields.cc.set(snap.d.cc); fields.bcc.set(snap.d.bcc);
@@ -746,7 +772,7 @@ async function reopenFrom(snap) {
   applyDefaultFont();
   if (snap.html) $("c-editor").innerHTML = editorSafe(snap.editorHtml || "");
   else $("c-text").value = snap.ownText ?? "";
-  renderQuote(true); renderFiles();
+  renderFiles();
   $("compose").classList.remove("hidden");
   dirty = true;
   clearInterval(autosaveTimer);
