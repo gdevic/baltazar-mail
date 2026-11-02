@@ -56,7 +56,7 @@ Description:
 >
 > Reading: a three-column or stacked layout with resizable panes, sixteen light and dark palettes in different hues with a contrast slider, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their hues and leaving images untouched. A Starred view collects flagged mail from every folder.
 >
-> Mailbox: mark messages read or unread, star, archive, move, delete or report them as spam, one at a time or as a selection, with multi-level undo and redo.
+> Mailbox: mark messages read or unread, star, archive, move, delete or report them as spam, one at a time or as a selection, with multi-level undo and redo. Folders can be created, renamed, moved and nested, empty ones deleted, and Trash and Spam emptied, all from a right-click menu.
 >
 > Search: limited to the open folder and its subfolders, with matches elsewhere listed below, and simple operators to narrow it down.
 >
