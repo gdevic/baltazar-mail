@@ -233,9 +233,9 @@ const folders = [
   // Start-up clears a toolbar dot left by an earlier load and keeps the tab from being discarded.
   const startup = await page.evaluate(() => ({ icon: JSON.stringify((window.iconCalls || [])[0] || null), tab: JSON.stringify(window.tabUpdates || []) }));
   // Subfolders sit under their own parent; one without a parent folder is still listed.
-  await page.locator("#folder-list .folder", { hasText: /^▸Work/ }).locator(".tw").click();
+  await page.locator("#folder-list .folder").filter({ has: page.locator('.tw[data-tw="closed"]') }).filter({ has: page.locator(".nm", { hasText: /^Work$/ }) }).locator(".tw").click();
   const tree = await page.locator("#folder-list .folder").evaluateAll(els => els.map(e => `${e.querySelector(".nm").textContent}@${parseInt(e.style.paddingLeft)}`));
-  await page.locator("#folder-list .folder", { hasText: /^▾Work/ }).locator(".tw").click();
+  await page.locator("#folder-list .folder").filter({ has: page.locator('.tw[data-tw="open"]') }).filter({ has: page.locator(".nm", { hasText: /^Work$/ }) }).locator(".tw").click();
   // Ctrl-click adds single rows to the selection, starting from the row already selected
   const marks = () => page.evaluate(() => [...document.querySelectorAll("#rows .row")].map((r, i) => r.classList.contains("marked") ? i : -1).filter(i => i >= 0).join());
   const ctrlSel = {};

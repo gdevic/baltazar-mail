@@ -295,6 +295,64 @@ export function deleteForever(ids) {
   return perMessage("messages.delete", ids, (id, i) => ({ id: `UnifiedDeleteMessage_${i}`, method: "DELETE", uri: q(`id:(${id})`) }));
 }
 
+// ---------- folders ----------
+// A folder's name is its whole path ("Projects/FPGA", "Inbox/Receipts"); creating, renaming and
+// moving all set it (verified 2026-11-02, as are deleting and emptying).
+const FOLDER_ID = /^[0-9]{1,12}$/, ACCT_ID = /^[0-9]{1,6}$/, TASK_ID = /^[A-Za-z0-9_-]{1,40}$/;
+function checkFolder(id) { if (!FOLDER_ID.test(String(id))) throw new ApiError(`refusing malformed folder id ${JSON.stringify(String(id).slice(0, 20))}`); }
+async function one(name, req) {
+  const r = await batch(name, [req]);
+  const x = r.find(y => y.id === req.id) || r[0], code = x?.httpCode ?? 0;
+  if (code < 200 || code >= 300) throw new ApiError(`${name}: HTTP ${code} ${JSON.stringify(x?.response?.error || "").slice(0, 120)}`, x);
+  return { result: x.response?.result, ms: r.ms };
+}
+const FOLDERS = "/ws/v3/mailboxes/@.id==<mb>/folders";
+export function createFolder(name, acctId = "1") {
+  if (!ACCT_ID.test(String(acctId))) throw new ApiError("refusing malformed account id");
+  return one("folders.create", { id: "CreateFolders", method: "PUT", uri: FOLDERS, payloadType: "embedded", payload: { folder: { types: ["USER"], acctId: String(acctId), name } } });
+}
+// Renaming and moving are one call: the folder gets its new path.
+export function renameFolder(id, name) {
+  checkFolder(id);
+  return one("folders.rename", { id: `RenameFolders00_${id}`, method: "POST", uri: `${FOLDERS}/${id}`, payloadType: "embedded", payload: { folder: { name } } });
+}
+// Deleting a folder that is already gone answers EC-4001; the caller checks the folder list.
+export function deleteFolder(id) {
+  checkFolder(id);
+  return one("folders.delete", { id: "DeleteFolders", method: "DELETE", uri: `${FOLDERS}/@.id==${id}` });
+}
+// Every message in a folder, permanently deleted: a background task, like marking a folder read.
+export async function emptyFolder(id, total, acctId = "1") {
+  checkFolder(id);
+  if (!ACCT_ID.test(String(acctId))) throw new ApiError("refusing malformed account id");
+  const n = Math.max(1, Math.min(1000000, Number(total) || 0));
+  const r = await one("messages.delete", { id: "UnifiedDeleteMessage_0", method: "DELETE", uri: `${q(`folderId:${id} count:${n} acctId:${acctId}`)}&async=true` });
+  await follow(r.result?.task, "emptying the folder");
+  return r;
+}
+// Follows a background task until Yahoo reports it done.
+// Returns the finished task, whose completed field counts the messages it changed.
+async function follow(task, what) {
+  if (!task || task.status === "COMPLETED") return task || null;
+  if (!TASK_ID.test(String(task.id))) throw new ApiError("unexpected task id");
+  for (let i = 0; i < 60; i++) {
+    await new Promise(ok => setTimeout(ok, i < 5 ? 1000 : 3000));
+    const s = (await one("task.status", { id: "TaskStatus", method: "GET", uri: `/ws/v3/mailboxes/@.id==<mb>/tasks/@.id==${task.id}` })).result?.task;
+    if (s?.status === "COMPLETED") return s;
+    if (s?.status === "FAILED") throw new ApiError(`Yahoo could not finish ${what}`);
+  }
+  throw new ApiError(`${what} is taking too long; Yahoo is still working on it`);
+}
+// Marking a folder read is a background task on Yahoo's side (HTTP 202 and a task id), followed
+// until it completes, as Yahoo's client does.
+export async function markFolderRead(id, unread, acctId = "1") {
+  checkFolder(id);
+  if (!ACCT_ID.test(String(acctId))) throw new ApiError("refusing malformed account id");
+  const n = Math.max(1, Math.min(100000, Number(unread) || 0));
+  const r = await one("messages.readFlagUpdate", { id: "UnifiedUpdateMessage_0", method: "POST", uri: `${q(`folderId:${id} count:${n} offset:0 is:unread acctId:${acctId}`)}&async=true`, payloadType: "embedded", payload: { message: { flags: { read: true } } } });
+  return { ...r, task: await follow(r.result?.task, "marking the folder read") };
+}
+
 // ---------- accounts, drafts, send ----------
 export async function accounts() {
   const r = await batch("accounts.get", [{ id: "GetAccounts", uri: "/ws/v3/mailboxes/@.id==<mb>/accounts", method: "GET" }]);

@@ -162,7 +162,7 @@ async function launch(opts = {}) {
         if (id && q.method === "DELETE") goneElsewhere.add(id);   // deleted for good, as on the server
       }
       responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 })); }
-    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)).map(m => mock.flags.has(m.id) ? { ...m, flags: { ...m.flags, ...mock.flags.get(m.id) } } : m), query: {} } } }]; }
+    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)).map(m => mock.flags.has(m.id) ? { ...m, flags: { ...m.flags, ...mock.flags.get(m.id) } } : m).filter(m => !/\bis:unread\b/.test(q) || !m.flags?.read), query: {} } } }]; }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 

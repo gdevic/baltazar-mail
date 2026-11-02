@@ -83,6 +83,17 @@ Body: `simpleBody.html` (server-sanitised HTML, remote images rewritten through 
 
 Folder: `id` (small decimal string; 1 Inbox, 3 Sent, 4 Trash and 371 seen in this capture; the rest to be read from the folder list), `name`, `types[]` (`INBOX`, `SENT`, `TRASH`, `SYNC`, `INVISIBLE`, custom), `unread`, `total`, `size`, `uidNext`, `uidValidity`, `highestModSeq`, `acctId`. The captured mailbox reports 217 folders, most of which carry `SYNC` or `INVISIBLE` types and are filtered out of the list query.
 
+## Folders (verified 2026-11-02, from the web client)
+
+A folder's `name` is its whole path, segments joined with `/`. Subfolders of a system folder use its name as the first segment (`Inbox/Receipts`, type `USER`); Yahoo's client offers Inbox as a parent.
+
+- Create: `folders.create`, PUT `.../mailboxes/@.id==<mb>/folders`, payload `{"folder":{"types":["USER"],"acctId":"1","name":"Parent/New"}}`. HTTP 201; the result is the new folder (`id`, `name`, `types`, `unread`, `total`, `acctId`, ...).
+- Rename and move are one call: `folders.rename`, POST `.../folders/<id>` (no `@.id==`), inner id `RenameFolders00_<id>`, payload `{"folder":{"name":"<new path>"}}`. HTTP 200 with the updated folder. Moving to the top level drops the parent segments.
+- Mark a folder read: `messages.readFlagUpdate`, POST `.../messages/@.select==q?q=folderId:<id> count:<unread> offset:0 is:unread acctId:<acct>&async=true`, payload `{"message":{"flags":{"read":true}}}`. HTTP 202 with `result.task` (`id` like `t182533`, `status` `PENDING`); `task.status`, GET `.../tasks/@.id==<taskId>`, reports `PENDING` until `COMPLETED`.
+- Delete a folder: `folders.delete`, DELETE `.../folders/@.id==<id>`, inner id `DeleteFolders`. HTTP 204. Yahoo's client deletes a subfolder before its parent. A folder that is already gone answers HTTP 400 `EC-4001` with `validationErrors: ["ID"]`; Yahoo's own folder list lagged a deletion in testing, and its client sent the same delete again and got that error.
+- Empty a folder (Trash, Spam): `messages.delete`, DELETE `.../messages/@.select==q?q=folderId:<id> count:<total> acctId:<acct>&async=true`. HTTP 202 with a task, followed with `task.status` as above (270 messages took about 5 s).
+- Folder ids are decimal strings; new folders got five-digit ids (33003 and up).
+
 ## New-mail detection
 
 No push channel exists. The UI calls `mailbox.sync` periodically (10 calls in a short session) and compares each folder's `highestModSeq` and `unread` to the last seen values; on a change it re-runs `messageGroups.getList` for the visible folder. At 164 ms per poll this is cheap enough to run every 15 to 30 s.

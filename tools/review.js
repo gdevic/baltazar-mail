@@ -161,6 +161,283 @@ scenario("the address book survives a repeated full build and a second tab", asy
   await other.close();
 }, { settings: { pollSec: 600 } });
 
+// ---------- folder management ----------
+// Folder calls are answered here and change the mock's folder list, as Yahoo would.
+function folderServer(h) {
+  const ops = [];
+  let next = 90;
+  h.mock.handler = ({ name, top }) => {
+    const ok = (result = {}) => ({ responses: [{ id: top.id, httpCode: 200, response: { result } }] });
+    const id = (top.uri.match(/folders\/(?:@\.id==)?(\d+)/) || [])[1];
+    if (name === "folders.create") { if (top.method !== "PUT" || !top.payload.folder.acctId) return { error: { code: "EC-4000", message: "bad create" } }; const f = { id: String(next++), name: top.payload.folder.name, types: ["USER"], unread: 0, total: 0, highestModSeq: 1, acctId: top.payload.folder.acctId }; h.folders.push(f); ops.push(["create", f.name]); return { responses: [{ id: top.id, httpCode: 201, response: { result: f } }] }; }
+    if (name === "folders.rename") { const f = h.folders.find(x => x.id === id); const from = f.name; for (const x of h.folders) if (x.name === from || x.name.startsWith(from + "/")) x.name = top.payload.folder.name + x.name.slice(from.length); ops.push(["rename", id, top.payload.folder.name]); return ok(); }
+    if (name === "folders.delete") {
+      const at = h.folders.findIndex(x => x.id === id);
+      // Yahoo answers EC-4001 for a folder it no longer has; staleDelete makes it also refuse once
+      // while still listing the folder, as its list can lag
+      if (at < 0 || h.mock.staleDelete?.has(id)) { h.mock.staleDelete?.delete(id); ops.push(["refused", id]); return { responses: [{ id: top.id, httpCode: 400, response: { error: { code: "EC-4001", validationErrors: ["ID"] } } }] }; }
+      h.folders.splice(at, 1); ops.push(["delete", id]); return { responses: [{ id: top.id, httpCode: 204, response: {} }] };
+    }
+    if (name === "messages.delete" && /async=true/.test(top.uri)) { const qs = decodeURIComponent(top.uri); const fid = qs.match(/folderId:(\d+)/)[1]; h.folders.find(x => x.id === fid).total = 0; ops.push(["empty", fid, /count:\d+/.test(qs) && /acctId:\d/.test(qs)]); return { responses: [{ id: top.id, httpCode: 202, response: { result: { task: { id: "t8", status: "PENDING" } } } }] }; }
+    // as Yahoo does: 202 with a task, then the task completes on the second status check
+    if (name === "messages.readFlagUpdate" && /async=true/.test(top.uri)) { const qs = decodeURIComponent(top.uri); const fid = qs.match(/folderId:(\d+)/)[1]; h.folders.find(x => x.id === fid).unread = 0; ops.push(["read", fid, /is:unread/.test(qs) && /acctId:\d/.test(qs)]); return { responses: [{ id: top.id, httpCode: 202, response: { result: { task: { id: "t9", status: "PENDING" } } } }] }; }
+    if (name === "task.status") { ops.push(["task"]); const done = ops.filter(o => o[0] === "task").length % 2 === 0; return ok({ task: { id: "t9", status: done ? "COMPLETED" : "PENDING", ...(done ? { completed: h.mock.markNone ? 0 : 3 } : {}) } }); }
+  };
+  return ops;
+}
+const menuOf = async (page, target) => { await target.click({ button: "right" }); await page.waitForTimeout(150); const items = await page.locator("#ctx").evaluate(c => c.classList.contains("hidden") ? [] : [...c.children].map(e => e.tagName === "HR" ? "---" : e.textContent)); return items; };
+const pickMenu = async (page, label) => { await page.locator("#ctx div", { hasText: label }).first().click(); await page.waitForTimeout(150); };
+const folderRow = (page, name) => page.locator("#folder-list .folder").filter({ has: page.locator(".nm", { hasText: new RegExp(`^${name}$`) }) });
+const answer = async (page, text) => { await page.locator("#prompt-input").fill(text); await page.keyboard.press("Enter"); await page.waitForTimeout(700); };
+
+scenario("folder menus offer what fits each folder", async ({ page }, expect) => {
+  const menus = {};
+  menus.user = await menuOf(page, folderRow(page, "Projects")); await page.keyboard.press("Escape");
+  menus.inbox = await menuOf(page, folderRow(page, "Inbox")); await page.keyboard.press("Escape");
+  menus.trash = await menuOf(page, folderRow(page, "Trash")); await page.keyboard.press("Escape");
+  menus.spam = await menuOf(page, folderRow(page, "Spam")); await page.keyboard.press("Escape");
+  menus.draft = await menuOf(page, folderRow(page, "Draft")); await page.keyboard.press("Escape");
+  menus.starred = await menuOf(page, folderRow(page, "Starred")); await page.keyboard.press("Escape");
+  menus.pane = await menuOf(page, page.locator(".folders-head")); await page.keyboard.press("Escape");
+  menus.draggable = await page.locator("#folder-list .folder").evaluateAll(fs => fs.some(f => f.draggable));
+  expect(menus.user.join("|") === "Move...|Rename...|Create subfolder...|---|Mark all read|---|Delete", "a user folder's menu: " + menus.user.join("|"));
+  expect(menus.inbox.join("|") === "Create subfolder...|---|Mark all read" && menus.starred.join("|") === "Mark all read" && !menus.draft.length, "system folders: " + JSON.stringify([menus.inbox, menus.starred, menus.draft]));
+  expect(menus.trash.join("|") === "Mark all read|---|Empty Trash..." && menus.spam.join("|") === "Mark all read|---|Empty Spam...", "Trash and Spam: " + JSON.stringify([menus.trash, menus.spam]));
+  expect(menus.pane.join("|") === "New folder...|---|Expand all|Collapse all", "the Folders heading: " + menus.pane.join("|"));
+  expect(!menus.draggable, "folders cannot be dragged");
+});
+
+scenario("the Folders heading opens and closes only the first level", async (h, expect) => {
+  const { page } = h, r = {};
+  h.folders.push({ id: "96", name: "Projects/FPGA/Boards", types: ["USER"], unread: 0, total: 1, highestModSeq: 1 });
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(900);
+  const names = () => page.locator("#folder-list .folder .nm").allTextContents();
+  const head = page.locator(".folders-head");
+  r.before = await names(); r.twBefore = await head.locator(".tw").getAttribute("data-tw");
+  await head.click(); await page.waitForTimeout(200);
+  r.open = await names(); r.twOpen = await head.locator(".tw").getAttribute("data-tw");
+  await folderRow(page, "FPGA").locator(".tw").click(); await page.waitForTimeout(200);
+  r.deeper = await names();
+  await head.click(); await page.waitForTimeout(200);
+  r.closed = await names();
+  await head.click(); await page.waitForTimeout(200);
+  r.reopened = await names();
+  r.kbItems = await page.locator("#folder-list .folder").evaluateAll(fs => fs.some(f => f.classList.contains("folders-head")));
+  const has = (l, n) => l.includes(n);
+  expect(r.twBefore === "closed" && has(r.before, "Projects") && !has(r.before, "FPGA"), "first-level folders always show: " + JSON.stringify(r.before));
+  expect(r.twOpen === "open" && has(r.open, "FPGA") && has(r.open, "2025") && !has(r.open, "Boards"), "opening shows one level, not deeper: " + JSON.stringify(r.open));
+  expect(has(r.deeper, "Boards") && !has(r.closed, "FPGA") && has(r.closed, "Projects") && has(r.reopened, "FPGA") && !has(r.reopened, "Boards"), "closing and reopening returns to one level: " + JSON.stringify(r));
+  expect(!r.kbItems, "the heading is not a folder");
+}, { settings: { pollSec: 600 } });
+
+scenario("create, rename, move and delete folders", async (h, expect) => {
+  const { page } = h, ops = folderServer(h), r = {};
+  await menuOf(page, page.locator(".folders-head")); await pickMenu(page, "New folder...");
+  await answer(page, "Hobbies");
+  r.created = await folderRow(page, "Hobbies").count();
+  await menuOf(page, folderRow(page, "Hobbies")); await pickMenu(page, "Create subfolder...");
+  await answer(page, "Ideas");
+  await menuOf(page, folderRow(page, "Hobbies")); await pickMenu(page, "Create subfolder...");
+  await page.locator("#prompt-input").fill("ideas"); await page.keyboard.press("Enter"); await page.waitForTimeout(200);
+  r.duplicate = await page.locator("#prompt-err").textContent();
+  await page.locator("#prompt-input").fill("A/B"); await page.keyboard.press("Enter"); await page.waitForTimeout(200);
+  r.slash = await page.locator("#prompt-err").textContent();
+  await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+  r.dialogClosed = await page.locator("#promptbox").isHidden();
+  r.sub = await folderRow(page, "Ideas").count();
+  await menuOf(page, folderRow(page, "Ideas")); await pickMenu(page, "Rename...");
+  r.renameValue = await page.inputValue("#prompt-input");
+  await answer(page, "Plans");
+  await menuOf(page, folderRow(page, "Plans")); await pickMenu(page, "Move...");
+  r.targets = await page.locator("#move-list div").allTextContents();
+  await page.locator("#move-list div", { hasText: /^Folders$/ }).click(); await page.waitForTimeout(700);
+  await menuOf(page, folderRow(page, "Plans")); await pickMenu(page, "Move...");
+  await page.locator("#move-filter").fill("Hobb"); await page.keyboard.press("Enter"); await page.waitForTimeout(700);
+  r.tree = await page.locator("#folder-list .folder .nm").allTextContents();
+  // not empty: refused with a notice, nothing deleted
+  await menuOf(page, folderRow(page, "Projects")); await pickMenu(page, "Delete"); await page.waitForTimeout(500);
+  r.notEmpty = await page.locator("#notice").textContent();
+  // empty with an empty subfolder: both go, innermost first
+  let asked = ""; page.once("dialog", d => { asked = d.message(); d.accept(); });
+  await menuOf(page, folderRow(page, "Hobbies")); await pickMenu(page, "Delete"); await page.waitForTimeout(900);
+  r.asked = asked; r.gone = await folderRow(page, "Hobbies").count() + await folderRow(page, "Plans").count();
+  r.ops = ops;
+  const ids = Object.fromEntries(ops.filter(o => o[0] === "create").map((o, i) => [o[1], String(90 + i)]));
+  expect(r.created === 1 && r.sub === 1 && r.dialogClosed, "a new folder and a subfolder appear: " + JSON.stringify(r));
+  expect(/already exists/.test(r.duplicate) && /cannot contain \//.test(r.slash), "names are checked in the dialog: " + JSON.stringify([r.duplicate, r.slash]));
+  expect(r.renameValue === "Ideas" && r.targets[0] === "Folders" && !r.targets.includes("Hobbies") && !r.targets.some(t => /Plans/.test(t)), "rename starts from the name; Move offers the top level, not the current parent or the folder itself: " + JSON.stringify(r.targets));
+  expect(JSON.stringify(ops.slice(0, 5)) === JSON.stringify([["create", "Hobbies"], ["create", "Hobbies/Ideas"], ["rename", ids["Hobbies/Ideas"], "Hobbies/Plans"], ["rename", ids["Hobbies/Ideas"], "Plans"], ["rename", ids["Hobbies/Ideas"], "Hobbies/Plans"]]), "the calls: " + JSON.stringify(ops));
+  expect(/is not empty/.test(r.notEmpty) && !ops.some(o => o[0] === "delete" && o[1] === "31"), "a folder with mail is not deleted: " + r.notEmpty);
+  expect(/Hobbies.*1 empty subfolder/.test(r.asked) && JSON.stringify(ops.filter(o => o[0] === "delete")) === JSON.stringify([["delete", ids["Hobbies/Ideas"]], ["delete", ids.Hobbies]]) && r.gone === 0, "an empty folder goes with its empty subfolder: " + JSON.stringify(r));
+}, { settings: { pollSec: 600 } });
+
+scenario("folders under Inbox nest there and can be chosen as a parent", async (h, expect) => {
+  const { page } = h, ops = folderServer(h), r = {};
+  await menuOf(page, folderRow(page, "Inbox")); await pickMenu(page, "Create subfolder...");
+  await answer(page, "Receipts");
+  r.tree = await page.locator("#folder-list .folder").evaluateAll(fs => fs.slice(0, 4).map(f => `${({ open: "▾", closed: "▸" })[f.querySelector(".tw").dataset.tw] || ""}${f.querySelector(".nm").textContent}@${parseInt(f.style.paddingLeft)}`));
+  await menuOf(page, folderRow(page, "Travel")); await pickMenu(page, "Move...");
+  r.targets = await page.locator("#move-list div").allTextContents();
+  await page.keyboard.press("Escape");
+  expect(ops[0]?.[1] === "Inbox/Receipts" && r.tree.join() === "▾Inbox@8,Receipts@20,Starred@8,Draft@8", "a subfolder of Inbox sits under it: " + JSON.stringify([ops, r.tree]));
+  // Travel is already at the top level, so that choice is left out
+  expect(r.targets[0] === "Inbox" && !r.targets.includes("Folders") && !r.targets.some(t => /^Travel/.test(t)), "Inbox is offered as a parent: " + JSON.stringify(r.targets));
+}, { settings: { pollSec: 600 } });
+
+scenario("a folder delete Yahoo refuses while its list lags is tried again", async (h, expect) => {
+  const { page } = h, ops = folderServer(h);
+  h.folders.push({ id: "95", name: "Lag", types: ["USER"], unread: 0, total: 0, highestModSeq: 1 });
+  h.mock.staleDelete = new Set(["95"]);
+  await page.locator("#folder-list .folder").first().click(); await page.waitForTimeout(400);
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(800);
+  page.once("dialog", d => d.accept());
+  await menuOf(page, folderRow(page, "Lag")); await pickMenu(page, "Delete"); await page.waitForTimeout(3500);
+  const gone = !(await folderRow(page, "Lag").count()), notice = await page.locator("#notice").isVisible();
+  expect(JSON.stringify(ops) === JSON.stringify([["refused", "95"], ["delete", "95"]]) && gone && !notice, "the second try deletes it, with no error shown: " + JSON.stringify({ ops, gone, notice }));
+}, { settings: { pollSec: 600 } });
+
+scenario("Mark all read on Spam falls back when Yahoo's task changes nothing, and shows at once", async (h, expect) => {
+  const { page } = h, ops = folderServer(h);
+  h.folders.find(f => f.id === "6").unread = 2;
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(900);
+  h.mock.markNone = true;
+  // Yahoo's counts trail the change: the folder list keeps saying 2 unread
+  const keep = h.folders.find(f => f.id === "6");
+  Object.defineProperty(keep, "unread", { get: () => 2, set: () => {}, configurable: true });
+  const before = h.calls.length;
+  await menuOf(page, folderRow(page, "Spam")); await pickMenu(page, "Mark all read"); await page.waitForTimeout(3500);
+  const perMessage = h.calls.slice(before).filter(c => c.name === "messages.readFlagUpdate" && !/async=true/.test(JSON.stringify(c.envelope))).length;
+  const bold = await folderRow(page, "Spam").evaluate(e => e.classList.contains("unread"));
+  expect(perMessage > 0, "the unread messages are marked one by one: " + JSON.stringify(ops));
+  expect(!bold, "Spam shows read at once");
+}, { settings: { pollSec: 600 } });
+
+scenario("double-clicking a folder opens and closes its subfolders", async ({ page }, expect) => {
+  const names = () => page.locator("#folder-list .folder .nm").allTextContents();
+  const before = await names();
+  await folderRow(page, "Projects").locator(".nm").dblclick(); await page.waitForTimeout(400);
+  const open = await names(), title = await page.locator("#list-title").textContent();
+  await folderRow(page, "Projects").locator(".nm").dblclick(); await page.waitForTimeout(400);
+  const closed = await names();
+  expect(!before.includes("FPGA") && open.includes("FPGA") && !closed.includes("FPGA") && /Projects/.test(title), "double-click toggles and the folder is open: " + JSON.stringify({ before, open, closed, title }));
+});
+
+scenario("Mark all read on Starred marks the starred unread mail, not the open list", async (h, expect) => {
+  const { page } = h; folderServer(h);
+  let asked = 0;
+  const prev = h.mock.handler;
+  h.mock.handler = a => {
+    const qs = decodeURIComponent(a.top.uri || "");
+    if (a.name === "messageGroups.getList" && /is:flagged/.test(qs) && /is:unread/.test(qs)) {
+      asked++;
+      const left = ["MSG31_1", "MSG31_2"].filter(id => !h.mock.flags.get(id)?.read);
+      return { responses: [{ id: a.top.id, httpCode: 200, response: { result: { messages: left.map(id => ({ id, flags: { read: false, flagged: true }, headers: {}, folder: { id: "31" } })), query: {} } } }] };
+    }
+    return prev(a);
+  };
+  const before = h.calls.length;
+  await menuOf(page, folderRow(page, "Starred")); await pickMenu(page, "Mark all read"); await page.waitForTimeout(1500);
+  const marked = h.calls.slice(before).filter(c => c.name === "messages.readFlagUpdate").flatMap(c => c.envelope.requests.map(r => decodeURIComponent(r.uri).match(/id:\(([^)]+)\)/)?.[1]));
+  expect(asked >= 2 && JSON.stringify(marked.sort()) === JSON.stringify(["MSG31_1", "MSG31_2"]), "only the starred unread messages are marked: " + JSON.stringify({ asked, marked }));
+}, { settings: { pollSec: 600 } });
+
+scenario("Mark all read stops and says so when Yahoo keeps messages unread", async (h, expect) => {
+  const { page } = h; const ops = folderServer(h);
+  h.folders.find(f => f.id === "6").unread = 2;
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(900);
+  h.mock.markNone = true;
+  const prev = h.mock.handler;
+  h.mock.handler = a => {
+    const qs = decodeURIComponent(a.top.uri || "");
+    if (a.name === "messageGroups.getList" && /folderId:6 is:unread/.test(qs)) return { responses: [{ id: a.top.id, httpCode: 200, response: { result: { messages: [{ id: "MSG6_1", flags: { read: false }, headers: {}, folder: { id: "6" } }], query: {} } } }] };
+    return prev(a);
+  };
+  const before = h.calls.length;
+  await menuOf(page, folderRow(page, "Spam")); await pickMenu(page, "Mark all read"); await page.waitForTimeout(4000);
+  const tries = h.calls.slice(before).filter(c => c.name === "messages.readFlagUpdate" && !/async=true/.test(JSON.stringify(c.envelope))).length;
+  const notice = await page.locator("#notice").textContent();
+  expect(tries === 1 && /kept 1 message unread/.test(notice), "one try, then a notice: " + JSON.stringify({ tries, notice, ops }));
+}, { settings: { pollSec: 600 }, allow: /mark all read/ });
+
+scenario("folder actions use fresh records after a poll", async (h, expect) => {
+  const { page } = h, ops = folderServer(h);
+  h.folders.find(f => f.id === "1").highestModSeq++;
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(1200);
+  const inbox = await menuOf(page, folderRow(page, "Inbox")); await page.keyboard.press("Escape");
+  await menuOf(page, folderRow(page, "Travel")); await pickMenu(page, "Rename...");
+  await answer(page, "travel");
+  const err = await page.locator("#promptbox").isHidden() ? "" : await page.locator("#prompt-err").textContent();
+  await page.keyboard.press("Escape");
+  expect(inbox[0] === "Create subfolder...", "Inbox keeps Create subfolder after a poll: " + JSON.stringify(inbox));
+  expect(!err && ops.some(o => o[0] === "rename" && o[2] === "travel"), "a case-only rename is allowed: " + JSON.stringify({ err, ops }));
+}, { settings: { pollSec: 600 } });
+
+scenario("folders of a linked account stay apart, and an orphan can move to the top level", async (h, expect) => {
+  const { page } = h; folderServer(h);
+  h.folders.push({ id: "70", acctId: "2", name: "Inbox", types: ["INBOX"], unread: 0, total: 1, highestModSeq: 1 },
+    { id: "71", acctId: "1", name: "Inbox/Receipts", types: ["USER"], unread: 0, total: 1, highestModSeq: 1 },
+    { id: "72", acctId: "1", name: "Ghost/Child", types: ["USER"], unread: 0, total: 1, highestModSeq: 1 });
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(1200);
+  await page.locator(".folders-head").click({ button: "right" }); await pickMenu(page, "Expand all"); await page.waitForTimeout(300);
+  const receipts = await folderRow(page, "Receipts").count();
+  await menuOf(page, folderRow(page, "Ghost/Child")); await pickMenu(page, "Move...");
+  const targets = await page.locator("#move-list div").allTextContents(); await page.keyboard.press("Escape");
+  expect(receipts === 1, "an Inbox subfolder shows once, under its own account's Inbox: " + receipts);
+  expect(targets[0] === "Folders", "a folder whose parent does not exist can move to the top level: " + JSON.stringify(targets));
+}, { settings: { pollSec: 600 } });
+
+scenario("the name dialog: input-method Enter, focus kept inside, backdrop drags", async ({ page }, expect) => {
+  const r = {};
+  await page.locator(".folders-head").click({ button: "right" }); await pickMenu(page, "New folder...");
+  await page.locator("#prompt-input").fill("Half");
+  await page.locator("#prompt-input").evaluate(i => i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true })));
+  r.afterIme = await page.locator("#promptbox").isVisible();
+  const focusOrder = [];
+  for (let i = 0; i < 4; i++) { await page.keyboard.press("Tab"); focusOrder.push(await page.evaluate(() => document.activeElement.id)); }
+  await page.keyboard.press("Shift+Tab"); focusOrder.push(await page.evaluate(() => document.activeElement.id));
+  const box = await page.locator("#prompt-input").boundingBox();
+  await page.mouse.move(box.x + 5, box.y + 5); await page.mouse.down(); await page.mouse.move(5, 5); await page.mouse.up();
+  r.afterDrag = await page.locator("#promptbox").isVisible();
+  await page.mouse.click(5, 5);
+  r.afterBackdrop = await page.locator("#promptbox").isHidden();
+  expect(r.afterIme, "Enter while composing does not submit");
+  expect(focusOrder.every(id => ["prompt-input", "prompt-cancel", "prompt-ok"].includes(id)), "Tab stays in the dialog: " + focusOrder.join());
+  expect(r.afterDrag && r.afterBackdrop, "a drag out of the input keeps it open; a click on the backdrop closes it: " + JSON.stringify(r));
+});
+
+scenario("the contact card finds mail from the person and opens a recent message in its folder", async (h, expect) => {
+  const { page } = h, r = {};
+  await folder(page, "Sent");
+  await page.locator("#rows .row").first().click({ button: "right" }); await pickMenu(page, "About recipient...");
+  await page.waitForSelector("#card .card-recent [data-id]", { timeout: 5000 }).catch(() => {});
+  const items = page.locator("#card .card-recent [data-id]");
+  r.n = await items.count();
+  r.want = await items.nth(2).getAttribute("data-id");
+  await items.nth(2).click(); await page.waitForTimeout(1500);
+  r.title = await page.locator("#list-title").textContent();
+  r.sel = await page.locator("#rows .row.sel").evaluate(e => e.id).catch(() => "");
+  r.selIndex = await page.evaluate(() => [...document.querySelectorAll("#rows .row")].findIndex(x => x.classList.contains("sel")));
+  r.subject = await page.locator("#r-subject").textContent();
+  await page.locator("#rows .row").first().click({ button: "right" }); await pickMenu(page, "About sender...");
+  await page.waitForSelector("#card:not(.hidden)", { timeout: 4000 }).catch(() => {});
+  await page.locator('#card [data-c="search"]').click(); await page.waitForTimeout(800);
+  r.search = await page.inputValue("#search");
+  expect(r.n >= 3 && r.title === "Inbox" && r.selIndex === 2 && r.subject === "Subject 1-3", "the message is highlighted and open in its folder: " + JSON.stringify(r));
+  expect(/^from:s1@x\.com$/.test(r.search), "the card's Find all from searches mail from the person: " + r.search);
+}, { settings: { pollSec: 600 } });
+
+scenario("Empty Trash and Mark all read", async (h, expect) => {
+  const { page } = h, ops = folderServer(h), r = {};
+  let asked = ""; page.once("dialog", d => { asked = d.message(); d.accept(); });
+  await menuOf(page, folderRow(page, "Trash")); await pickMenu(page, "Empty Trash..."); await page.waitForTimeout(3000);
+  r.asked = asked;
+  await menuOf(page, folderRow(page, "Inbox")); await pickMenu(page, "Mark all read"); await page.waitForTimeout(3500);
+  r.unreadRows = await page.locator("#rows .row.unread").count();
+  r.inboxCount = await folderRow(page, "Inbox").locator(".ct").textContent();
+  expect(/Permanently delete all 1 message in Trash/.test(r.asked) && ops.some(o => o[0] === "empty" && o[1] === "4" && o[2]), "Trash is emptied after a confirmation: " + JSON.stringify([r.asked, ops]));
+  expect(ops.some(o => o[0] === "read" && o[1] === "1" && o[2]) && ops.filter(o => o[0] === "task").length === 4 && r.unreadRows === 0, "Inbox is marked read through Yahoo's task, rows included: " + JSON.stringify([ops, r]));
+}, { settings: { pollSec: 600 } });
+
 // ---------- dark reader ----------
 scenario("darkenHtml golden values, and crafted styles stay fast", async ({ page }, expect) => {
   const r = await page.evaluate(async () => {

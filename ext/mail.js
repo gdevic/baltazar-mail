@@ -175,6 +175,8 @@ const FAILED = {
   mark: "Could not change whether the messages are read.", star: "Could not change the stars.",
   move: "Could not move the messages.", archive: "Could not archive the messages.", delete: "Could not delete the messages.",
   spam: "Could not mark the messages as spam.", notspam: "Could not mark the messages as not spam.",
+  create: "Could not create the folder.", rename: "Could not rename the folder.", "move folder": "Could not move the folder.",
+  "delete folder": "Could not delete the folder.", empty: "Could not empty the folder.", "mark all read": "Could not mark the folder read.",
 };
 // A request that never reached Yahoo fails with the browser's bare "Failed to fetch".
 const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? "Yahoo could not be reached; check the connection." : e.message;
@@ -202,9 +204,12 @@ function renderFolders() {
     return x.length - y.length;
   };
   const user = visible.filter(f => !folderType(f)).sort(byPath);
-  const userNames = new Set(user.map(f => f.name));
+  // A user folder whose path starts with a system folder's name ("Inbox/Receipts") nests under it.
+  const userNames = new Set([...user, ...sys].map(f => f.name));
   const hasChildren = new Set();
   for (const f of user) { const p = f.name.split("/"); for (let i = 1; i < p.length; i++) hasChildren.add(p.slice(0, i).join("/")); }
+  const under = new Map(sys.map(s => [s, user.filter(u => u.name.startsWith(s.name + "/") && (u.acctId || "1") === (s.acctId || "1"))]));
+  const nested = new Set([...under.values()].flat());
   const frag = document.createDocumentFragment();
   const add = (f, depth, twisty, label = folderName(f).split("/").pop()) => {
     const el = document.createElement("div");
@@ -212,11 +217,14 @@ function renderFolders() {
       (state.view.kind === "folder" && state.view.folderId === f.id ? " active" : "");
     el.dataset.id = f.id;
     el.style.paddingLeft = `${8 + depth * 12}px`;
-    el.innerHTML = `<span class="tw">${twisty}</span><span class="nm" title="${esc(folderName(f))}">${esc(label)}</span><span class="ct"></span>`;
+    el.innerHTML = `${twistyHtml(twisty)}<span class="nm" title="${esc(folderName(f))}">${esc(label)}</span><span class="ct"></span>`;
     el.onclick = e => {
-      if (e.target.classList.contains("tw") && twisty) { toggleExpand(f.name); return; }
+      if (e.target.closest(".tw") && twisty) { toggleExpand(f.name); return; }
       openFolder(f.id);
     };
+    el.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); showFolderMenu(f, e.clientX, e.clientY); };
+    // a double click opens or closes a folder's subfolders (the first click has opened the folder)
+    el.ondblclick = e => { if (twisty && !e.target.closest(".tw")) toggleExpand(f.name); };
     const droppable = !["DRAFT", "SENT"].includes(folderType(f));
     el.ondragover = e => { if (droppable && e.dataTransfer.types.includes(DRAG_TYPE)) { e.preventDefault(); el.classList.add("drop"); } };
     el.ondragleave = () => el.classList.remove("drop");
@@ -238,6 +246,7 @@ function renderFolders() {
     el.style.paddingLeft = "8px";
     el.innerHTML = `<span class="tw"></span><span class="nm" title="Starred messages in all folders (g *)">Starred</span><span class="ct"></span>`;
     el.onclick = () => openStarred();
+    el.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); showFolderMenu(null, e.clientX, e.clientY); };
     el.ondragover = e => { if (e.dataTransfer.types.includes(DRAG_TYPE)) { e.preventDefault(); el.classList.add("drop"); } };
     el.ondragleave = () => el.classList.remove("drop");
     el.ondrop = e => {
@@ -249,27 +258,278 @@ function renderFolders() {
     };
     frag.appendChild(el);
   };
-  for (const f of sys) {
-    if (filter && !folderName(f).toLowerCase().includes(filter)) { if (f === folderByType("INBOX")) addStarred(); continue; }
-    add(f, 0, "");
-    if (f === folderByType("INBOX")) addStarred();
-  }
-  for (const f of user) {
+  const twisty = f => hasChildren.has(f.name) ? (state.expanded.has(f.name) ? "open" : "closed") : "";
+  const addUser = f => {
     const parts = f.name.split("/");
-    if (filter) { if (folderName(f).toLowerCase().includes(filter)) add(f, 0, ""); continue; }
+    if (filter) { if (folderName(f).toLowerCase().includes(filter)) add(f, 0, ""); return; }
     // Only ancestors that are shown folders nest and collapse it; a missing or hidden parent
     // stays part of the name, so the folder is never out of reach.
     const shown = [];
     for (let i = 1; i < parts.length; i++) if (userNames.has(parts.slice(0, i).join("/"))) shown.push(i);
-    if (shown.some(i => !state.expanded.has(parts.slice(0, i).join("/")))) continue;
-    const kids = hasChildren.has(f.name);
-    add(f, shown.length, kids ? (state.expanded.has(f.name) ? "▾" : "▸") : "", parts.slice(shown.at(-1) || 0).join("/"));
+    if (shown.some(i => !state.expanded.has(parts.slice(0, i).join("/")))) return;
+    add(f, shown.length, twisty(f), parts.slice(shown.at(-1) || 0).join("/"));
+  };
+  for (const f of sys) {
+    if (filter && !folderName(f).toLowerCase().includes(filter)) { for (const u of under.get(f)) addUser(u); if (f === folderByType("INBOX")) addStarred(); continue; }
+    add(f, 0, filter ? "" : twisty(f));
+    for (const u of under.get(f)) addUser(u);
+    if (f === folderByType("INBOX")) addStarred();
   }
+  // "Folders" heads the user's own folders: its menu creates top-level folders, and its toggle
+  // opens or closes the first level of subfolders. It holds no mail and opens nothing.
+  if (!filter) {
+    const tops = user.filter(f => !nested.has(f) && !userNames.has(parentPath(f)) && hasChildren.has(f.name));
+    const open = tops.some(f => state.expanded.has(f.name));
+    const head = document.createElement("div");
+    head.className = "folders-head";
+    head.innerHTML = `${twistyHtml(tops.length ? (open ? "open" : "closed") : "")}<span class="nm" title="Your folders. Right-click for New folder...">Folders</span>`;
+    head.onclick = () => { if (tops.length) setFirstLevel(!open, tops); };
+    head.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); showFolderMenu("head", e.clientX, e.clientY); };
+    frag.appendChild(head);
+  }
+  for (const f of user) if (!nested.has(f)) addUser(f);
   list.innerHTML = "";
   list.appendChild(frag);
   updateFolderCounts();
   const items = list.querySelectorAll(".folder");
   if (state.kbFolder >= 0 && items[state.kbFolder]) items[state.kbFolder].classList.add("kb");
+}
+
+// The expand toggle: a chevron that points down when open; data-tw carries the state.
+const CHEVRON = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 1.8 6.8 5 3.5 8.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const twistyHtml = state => `<span class="tw"${state ? ` data-tw="${state}"` : ""}>${state ? CHEVRON : ""}</span>`;
+
+// ---------- folder management ----------
+// User folders can be moved, renamed, given subfolders and deleted when empty; system folders
+// offer what fits them (Mark all read, Empty Trash and Spam). Folders are never moved by dragging.
+// Folders are compared by id (a poll replaces every folder record) and paths only within one
+// account, as a linked account can have folders of the same names.
+const managed = f => !!f && !folderType(f);
+const acctOf = f => String(f?.acctId || folderByType("INBOX")?.acctId || "1");
+const sameAcct = (a, b) => acctOf(a) === acctOf(b);
+// Folders may also live under Inbox, as in Yahoo's own client.
+const canParent = f => managed(f) || f.id === folderByType("INBOX")?.id;
+const leafName = f => f.name.split("/").pop();
+const parentPath = f => f.name.split("/").slice(0, -1).join("/");
+const parentOf = f => state.folders.find(p => p.name === parentPath(f) && sameAcct(p, f))?.id ?? "";
+const subfolders = f => state.folders.filter(x => x.name.startsWith(f.name + "/") && sameAcct(x, f));
+// Where a folder may go: user folders and Inbox of its account, never itself or anything inside it.
+const parentChoices = f => state.folders.filter(p => canParent(p) && sameAcct(p, f) && !isHidden(p) && p.id !== f.id && !p.name.startsWith(f.name + "/"))
+  .sort((a, b) => (managed(a) ? 1 : 0) - (managed(b) ? 1 : 0) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+// f: a folder, null for Starred, or "head" for the Folders heading.
+function showFolderMenu(f, x, y) {
+  if (f && f !== "head") f = state.byId.get(f.id) || f;
+  const t = f === "head" ? "" : f ? folderType(f) : "STARRED";
+  const markRead = ["mark-read", "Mark all read"];
+  const items = f === "head" ? [["new", "New folder..."], null, ["expand", "Expand all"], ["collapse", "Collapse all"]]
+    : managed(f) ? [["move", "Move..."], ["rename", "Rename..."], ["sub", "Create subfolder..."], null, markRead, null, ["delete", "Delete"]]
+    : t === "TRASH" ? [markRead, null, ["empty", "Empty Trash..."]]
+    : t === "BULK" ? [markRead, null, ["empty", "Empty Spam..."]]
+    : t === "DRAFT" ? []
+    : t === "INBOX" && f.id === folderByType("INBOX")?.id ? [["sub", "Create subfolder..."], null, markRead]
+    : [markRead];
+  if (!items.length) return;
+  openMenu(x, y, items, act => {
+    if (act === "new") createFolderIn(null);
+    else if (act === "expand") setExpandedAll(true);
+    else if (act === "collapse") setExpandedAll(false);
+    else if (act === "move") openMovePicker([], f);
+    else if (act === "rename") renameFolderAsk(f);
+    else if (act === "sub") createFolderIn(f);
+    else if (act === "delete") deleteFolderAsk(f);
+    else if (act === "empty") emptyFolderAsk(f);
+    else if (act === "mark-read") markAllRead(f);
+  });
+}
+
+// The Folders toggle: the top-level folders open to show their own subfolders and nothing deeper,
+// or close; folders under Inbox keep their state.
+function setFirstLevel(open, tops) {
+  const userPaths = new Set(state.folders.filter(managed).map(f => f.name));
+  state.expanded = new Set([...state.expanded].filter(n => !userPaths.has(n) || n.startsWith(folderByType("INBOX")?.name + "/")));
+  if (open) for (const f of tops) state.expanded.add(f.name);
+  saveSettings(); renderFolders();
+}
+
+function setExpandedAll(open) {
+  state.expanded = new Set(open ? state.folders.filter(f => subfolders(f).length).map(f => f.name) : []);
+  saveSettings(); renderFolders();
+}
+
+// A folder name is one path segment: not empty, no "/", not taken by a sibling.
+function checkFolderName(name, parent, except = null, acct = except ? acctOf(except) : acctOf(null)) {
+  if (!name) return "Enter a name.";
+  if (name.includes("/")) return "A folder name cannot contain /.";
+  const full = parent ? `${parent}/${name}` : name;
+  if (state.folders.some(f => f.id !== except?.id && acctOf(f) === acct && f.name.toLowerCase() === full.toLowerCase())) return `A folder named "${full}" already exists.`;
+  return "";
+}
+
+async function createFolderIn(parent) {
+  const where = parent ? parent.name : "";
+  const acct = acctOf(parent);
+  const name = await askName(parent ? `New folder in "${folderName(parent)}"` : "New folder", "", n => checkFolderName(n, where, null, acct));
+  if (name == null) return;
+  await folderOp("create", () => api.createFolder(where ? `${where}/${name}` : name, acct), `created folder "${name}"`);
+  if (parent) { state.expanded.add(parent.name); saveSettings(); renderFolders(); }
+}
+
+async function renameFolderAsk(f) {
+  const name = await askName(`Rename "${folderName(f)}"`, leafName(f), n => n === leafName(f) ? "" : checkFolderName(n, parentPath(f), f));
+  if (name == null || name === leafName(f)) return;
+  const to = parentPath(f) ? `${parentPath(f)}/${name}` : name;
+  await folderOp("rename", () => api.renameFolder(f.id, to), `renamed to "${name}"`, () => renamePaths(f.name, to));
+}
+
+async function moveFolder(f, target) {
+  const to = target === TOP_LEVEL ? leafName(f) : `${target.name}/${leafName(f)}`;
+  const err = checkFolderName(leafName(f), target === TOP_LEVEL ? "" : target.name, f);
+  if (err) { notify(`Could not move the folder: ${err}`); return; }
+  await folderOp("move folder", () => api.renameFolder(f.id, to), `moved "${leafName(f)}" to ${target === TOP_LEVEL ? "Folders" : `"${folderName(target)}"`}`, () => renamePaths(f.name, to));
+  if (target !== TOP_LEVEL) { state.expanded.add(target.name); saveSettings(); renderFolders(); }
+}
+
+// Expanded subtrees follow a renamed or moved folder.
+function renamePaths(from, to) {
+  state.expanded = new Set([...state.expanded].map(n => n === from ? to : n.startsWith(from + "/") ? to + n.slice(from.length) : n));
+  saveSettings();
+}
+
+// A folder is deleted only when it and every folder inside it hold no messages; its subfolders
+// go with it, innermost first.
+async function deleteFolderAsk(f) {
+  try { await loadFolders(true); } catch (e) { handleError(e, "delete folder"); return; }
+  f = state.byId.get(f.id); if (!f) return;
+  const tree = [f, ...subfolders(f)];
+  const full = tree.filter(x => (x.total || 0) > 0);
+  if (full.length) {
+    const n = full.reduce((s, x) => s + x.total, 0);
+    notify(`"${folderName(f)}" is not empty: ${full.length > 1 || full[0] !== f ? `it and its subfolders hold` : "it holds"} ${plural(n, "message")}. Move or delete them first.`);
+    return;
+  }
+  const subs = tree.length - 1;
+  if (!confirm(`Delete the folder "${folderName(f)}"${subs ? ` and its ${plural(subs, "empty subfolder")}` : ""}?`)) return;
+  const order = tree.sort((a, b) => b.name.split("/").length - a.name.split("/").length);
+  await folderOp("delete folder", async () => { for (const x of order) await deleteOne(x.id); }, `deleted folder "${leafName(f)}"`, () => {
+    if (state.view.kind === "folder" && tree.some(x => x.id === state.view.folderId)) openFolder(inboxId());
+  });
+}
+
+// Yahoo's folder list can lag a deletion: a refused delete counts as done when the folder is no
+// longer listed, and one that still is gets a second try after a moment.
+async function deleteOne(id) {
+  try { await api.deleteFolder(id); return; } catch (e) {
+    await new Promise(ok => setTimeout(ok, 1500));
+    await loadFolders(true);
+    if (!state.byId.has(id)) return;
+    try { await api.deleteFolder(id); } catch (e2) { await loadFolders(true); if (state.byId.has(id)) throw e2; }
+  }
+}
+
+async function emptyFolderAsk(f) {
+  try { await loadFolders(true); } catch (e) { handleError(e, "empty"); return; }
+  f = state.byId.get(f.id); if (!f) return;
+  if (!f.total) { status(`${folderName(f)} is already empty`); return; }
+  if (!confirm(`Permanently delete all ${plural(f.total, "message")} in ${folderName(f)}? This cannot be undone.`)) return;
+  await folderOp("empty", () => api.emptyFolder(f.id, f.total, f.acctId || "1"), `emptied ${folderName(f)}`, () => {
+    if (state.view.kind === "folder" && state.view.folderId === f.id) { clearReader(); loadList("fresh"); }
+  });
+}
+
+// Yahoo marks a folder read as a background task. When the task reports that it changed nothing
+// while the folder still counts unread mail, the unread messages are found and marked one by one.
+// Yahoo's folder counts can trail the change, so the folder shows read at once and the counts are
+// read again a few seconds later.
+// Marks unread messages read a page at a time until none are left; a page that comes back
+// unchanged, or that Yahoo refuses in part, stops it with an error.
+async function markEachRead(page) {
+  let prev = "";
+  for (let i = 0; i < 50; i++) {
+    const ids = (await page()).messages.map(m => m.id).filter(api.isMessageId);
+    if (!ids.length) return;
+    const key = ids.join();
+    if (key === prev) throw new Error(`Yahoo kept ${plural(ids.length, "message")} unread`);
+    prev = key;
+    const r = await api.setRead(ids, true);
+    if (r.failed?.length) throw new Error(`Yahoo did not mark ${plural(r.failed.length, "message")} read`);
+  }
+}
+
+async function markAllRead(f) {
+  try {
+    if (f) {
+      if (!f.unread) { status(`${folderName(f)} has no unread mail`); return; }
+      const r = await api.markFolderRead(f.id, f.unread, f.acctId || "1");
+      // Yahoo's bulk task can finish having changed nothing (seen on Spam); what is still unread
+      // is then marked message by message.
+      if (r.task && !Number(r.task.completed)) await markEachRead(() => api.query(`folderId:${f.id} is:unread`, 100));
+    } else {
+      // Starred is a search across folders: every starred unread message, not only those loaded
+      await markEachRead(() => api.search(`${STARRED_Q} is:unread`, null, 100, 0, true));
+    }
+  } catch (e) { handleError(e, "mark all read"); return; }
+  const here = !f || (state.view.kind === "folder" && state.view.folderId === f.id);
+  for (const m of state.messages) if (here || m.folder?.id === f.id) m.flags = { ...m.flags, read: true };
+  if (f) { const live = state.byId.get(f.id); if (live) live.unread = 0; }
+  renderList(); updateFolderCounts();
+  status(`marked ${f ? folderName(f) : "Starred"} read`);
+  setTimeout(() => loadFolders(true).catch(() => {}), 4000);
+}
+
+// Runs one folder change, then reloads the folder list; failures go to the notice bar.
+async function folderOp(what, call, done, after) {
+  try {
+    await call();
+    after?.();
+    await loadFolders(true);
+    status(done);
+  } catch (e) { handleError(e, what); try { await loadFolders(true); } catch { /* the next poll retries */ } }
+}
+
+// A dialog closes on a click on its backdrop only when the press also began there, so a text
+// selection dragged out of the input does not close it.
+function backdropCloses(el, close) {
+  let down = null;
+  el.onmousedown = e => { down = e.target; };
+  el.onclick = e => { if (e.target === el && down === el) close(); down = null; };
+}
+// Tab and Shift+Tab stay among a dialog's own controls.
+function trapFocus(box) {
+  box.addEventListener("keydown", e => {
+    if (e.key !== "Tab") return;
+    const items = [...box.querySelectorAll("input, button, [tabindex]")].filter(x => !x.disabled && x.offsetParent);
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement), n = items.length;
+    e.preventDefault(); e.stopPropagation();
+    items[(i + (e.shiftKey ? n - 1 : 1)) % n].focus();
+  });
+}
+
+// ---------- name dialog ----------
+// Resolves with the trimmed name, or null when cancelled; check returns an error to show, or "".
+let promptDone = null;
+function askName(title, value, check) {
+  return new Promise(resolve => {
+    $("prompt-title").textContent = title;
+    const input = $("prompt-input"), err = $("prompt-err");
+    input.value = value; err.textContent = "";
+    $("promptbox").classList.remove("hidden");
+    input.focus(); input.select();
+    const finish = v => { $("promptbox").classList.add("hidden"); promptDone = null; $("list").focus(); resolve(v); };
+    const ok = () => { const v = input.value.trim(), e = check(v); if (e) { err.textContent = e; input.focus(); return; } finish(v); };
+    promptDone = () => finish(null);
+    input.oninput = () => { err.textContent = ""; };
+    input.onkeydown = e => {
+      if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); ok(); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(null); }
+      e.stopPropagation();
+    };
+    $("prompt-ok").onclick = ok;
+    $("prompt-cancel").onclick = () => finish(null);
+    backdropCloses($("promptbox"), () => finish(null));
+    trapFocus($("promptbox-box"));
+  });
 }
 
 // Patch counts in place so the tree (and any focus in its filter) is not rebuilt for a flag change.
@@ -794,7 +1054,7 @@ async function openCard(anchor, email, name) {
   card.onclick = async e => {
     const b = e.target.closest("[data-c]"); if (!b) return;
     if (b.dataset.c === "write") { closeCard(); await startCompose("new"); compose.addRecipient({ name: c?.name || name || "", email }); }
-    else if (b.dataset.c === "search") { closeCard(); searchPerson(email); }
+    else if (b.dataset.c === "search") { closeCard(); findFrom(email); }
     else if (b.dataset.c === "copy") { await navigator.clipboard.writeText(email).catch(() => {}); b.textContent = "Copied"; }
   };
   const q = personQuery(email);
@@ -804,13 +1064,40 @@ async function openCard(anchor, email, name) {
   const recent = card.querySelector(".card-recent");
   recent.innerHTML = res.messages.length ? res.messages.map(m => {
     const out = (m.headers.from?.[0]?.email || "").toLowerCase() !== email.toLowerCase();
-    return `<div title="${esc(plainSubject(m.headers.subject))}"><span class="dir">${out ? "→" : "←"}</span><span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
+    return `<div data-id="${esc(m.id)}" title="${esc(plainSubject(m.headers.subject))}"><span class="dir">${out ? "→" : "←"}</span><span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
   }).join("") : "<i>No messages found.</i>";
-  recent.onclick = () => { closeCard(); searchPerson(email); };
+  recent.onclick = e => {
+    const row = e.target.closest("[data-id]"), m = row && res.messages.find(x => x.id === row.dataset.id);
+    closeCard();
+    if (m) goToMessage(m, email); else searchPerson(email);
+  };
+}
+
+// Opens a message's folder with the message highlighted and open in the reader, loading further
+// pages of the folder until it turns up; failing that, the person's search shows it.
+const GO_TO_PAGES = 10;
+async function goToMessage(m, email) {
+  const fid = m.folder?.id;
+  if (!fid || !state.byId.has(fid)) { searchPerson(email); return; }
+  await openFolder(fid);
+  const v = state.view;
+  let i = state.messages.findIndex(x => x.id === m.id);
+  for (let n = 0; i < 0 && state.more && n < GO_TO_PAGES && state.view === v; n++) {
+    await loadList("more");
+    i = state.messages.findIndex(x => x.id === m.id);
+  }
+  if (state.view !== v) return;            // the user went elsewhere meanwhile
+  if (i < 0) { status(`that message is further back in ${folderName(state.byId.get(fid))}; showing the search`); searchPerson(email); return; }
+  clearMarks(); select(i);
+  $("list").focus();
+  if (folderType(state.byId.get(fid)) === "DRAFT") editDraft(i); else open(i);
 }
 
 // Only address characters reach the query: quotes, parentheses and backslashes would end the term.
-const personQuery = email => { const e = String(email).replace(/["()\\\s]/g, ""); return `(from:("${e}") OR to:("${e}"))`; };
+const bareAddress = email => String(email).replace(/["()\\\s]/g, "");
+const personQuery = email => { const e = bareAddress(email); return `(from:("${e}") OR to:("${e}"))`; };
+// All mail from (or to) one address, in every folder.
+const findFrom = (email, field = "from") => doSearch(`${field}:${bareAddress(email)}`, true);
 async function searchPerson(email) {
   leaveView();
   state.prevView = state.view;
@@ -1419,19 +1706,21 @@ function showContextMenu(x, y) {
     ...(who ? [null, ["find", outgoing ? "Find all to" : "Find all from", "", whoTitle],
       ["about", outgoing ? "About recipient..." : "About sender...", "", whoTitle]] : []),
   ];
+  openMenu(x, y, items, act => {
+    if (act === "about") openCard({ getBoundingClientRect: () => ({ left: x, top: y, bottom: y }) }, who.email, who.name || "");
+    else if (act === "find") findFrom(who.email, outgoing ? "to" : "from");
+    else if (act === "reply" || act === "replyAll" || act === "forward") answerRow(state.selected, act);
+    else runAction(act);
+  });
+}
+// A context menu at (x, y). items: [action, label, shortcut, tooltip], or null for a separator.
+function openMenu(x, y, items, onPick) {
   const ctx = $("ctx");
   ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}"${it[3] ? ` title="${esc(it[3])}"` : ""}><span>${esc(it[1])}</span>${it[2] ? `<kbd>${esc(it[2])}</kbd>` : ""}</div>` : "<hr>").join("");
   ctx.classList.remove("hidden");
   ctx.style.left = Math.min(x, innerWidth - ctx.offsetWidth - 4) + "px";
   ctx.style.top = Math.min(y, innerHeight - ctx.offsetHeight - 4) + "px";
-  ctx.onclick = e => {
-    const a = e.target.closest("[data-act]"); hideContextMenu(); if (!a) return;
-    const act = a.dataset.act;
-    if (act === "about") openCard({ getBoundingClientRect: () => ({ left: x, top: y, bottom: y }) }, who.email, who.name || "");
-    else if (act === "find") doSearch(`${outgoing ? "to" : "from"}:${who.email}`, true);
-    else if (act === "reply" || act === "replyAll" || act === "forward") answerRow(state.selected, act);
-    else runAction(act);
-  };
+  ctx.onclick = e => { const a = e.target.closest("[data-act]"); hideContextMenu(); if (a) onPick(a.dataset.act); };
 }
 function hideContextMenu() { $("ctx").classList.add("hidden"); }
 // Reply or forward a row from the menu: the row is opened first, as the composer answers the
@@ -1445,30 +1734,43 @@ document.addEventListener("mousedown", e => { if (!e.target.closest("#ctx")) hid
 window.addEventListener("blur", hideContextMenu);
 
 // ---------- move picker ----------
-let moveTargets = [], moveKb = 0, moveIds = [];
-function openMovePicker(ids) {
-  if (!ids.length) return;
-  moveIds = ids;
+// Picks a folder for messages, or a new parent for a folder (move.folder), with TOP_LEVEL first.
+let moveTargets = [], moveKb = 0, moveIds = [], moveFolderOf = null;
+const TOP_LEVEL = { id: "", name: "Folders" };
+function openMovePicker(ids, folder = null) {
+  if (!ids.length && !folder) return;
+  moveIds = ids; moveFolderOf = folder;
   $("movebox").classList.remove("hidden");
   $("move-filter").value = "";
+  $("move-filter").placeholder = folder ? `Move "${folderName(folder)}" into...` : "Move to folder...";
   renderMoveList();
   $("move-filter").focus();
 }
 function renderMoveList() {
   const filter = $("move-filter").value.toLowerCase();
-  const cur = state.view.kind === "folder" ? state.view.folderId : null;
-  moveTargets = state.folders.filter(f => !isHidden(f) && f.id !== cur && !f.types.includes("DRAFT"))
-    .filter(f => !filter || folderName(f).toLowerCase().includes(filter))
-    .sort((a, b) => (folderType(b) ? 1 : 0) - (folderType(a) ? 1 : 0) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const byName = (a, b) => (folderType(b) ? 1 : 0) - (folderType(a) ? 1 : 0) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  if (moveFolderOf) {
+    const f = moveFolderOf;
+    const here = t => t === TOP_LEVEL ? !parentPath(f) : t.id === parentOf(f);
+    moveTargets = [TOP_LEVEL, ...parentChoices(f)].filter(t => !here(t) && (!filter || t.name.toLowerCase().includes(filter)));
+  } else {
+    const cur = state.view.kind === "folder" ? state.view.folderId : null;
+    moveTargets = state.folders.filter(f => !isHidden(f) && f.id !== cur && !f.types.includes("DRAFT"))
+      .filter(f => !filter || folderName(f).toLowerCase().includes(filter)).sort(byName);
+  }
   moveKb = 0;
-  $("move-list").innerHTML = moveTargets.map((f, i) => `<div data-i="${i}" class="${i === moveKb ? "kb" : ""}">${esc(folderName(f))}</div>`).join("");
+  $("move-list").innerHTML = moveTargets.map((f, i) => `<div data-i="${i}" class="${i === moveKb ? "kb" : ""}">${esc(f === TOP_LEVEL ? f.name : folderName(f))}</div>`).join("");
 }
 function closeMovePicker() { $("movebox").classList.add("hidden"); $("list").focus(); }
-function pickMove(f) { const ids = moveIds; closeMovePicker(); run(() => doMove(ids, f.id)); }
+function pickMove(t) {
+  const ids = moveIds, folder = moveFolderOf; closeMovePicker();
+  if (folder) moveFolder(folder, t); else run(() => doMove(ids, t.id));
+}
 function wireMovePicker() {
   $("move-filter").oninput = renderMoveList;
   $("move-list").onclick = e => { const d = e.target.closest("[data-i]"); if (d) pickMove(moveTargets[Number(d.dataset.i)]); };
-  $("movebox").onclick = e => { if (e.target.id === "movebox") closeMovePicker(); };
+  backdropCloses($("movebox"), closeMovePicker);
+  trapFocus($("movebox-box"));
   $("move-filter").onkeydown = e => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -1601,7 +1903,7 @@ async function doSearch(term, everywhere = false) {
 
 // ---------- keyboard ----------
 let pendingG = false;
-const modals = ["help", "settings", "movebox"];
+const modals = ["help", "settings", "movebox", "promptbox"];
 // On a Mac, shortcuts shown as Ctrl+X are labelled as the Command key the user presses.
 const IS_MAC = /^mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
 function macLabels() {
@@ -1622,6 +1924,7 @@ function onKey(e) {
     if (e.key === "Escape") {
       e.preventDefault();
       if (openModal === "movebox") closeMovePicker();
+      else if (openModal === "promptbox") promptDone?.();
       else if (openModal === "settings" && addressBookEscape()) {}
       else $(openModal).classList.add("hidden");
     }
