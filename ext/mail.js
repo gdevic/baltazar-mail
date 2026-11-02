@@ -49,8 +49,12 @@ function applyLayout() {
   if (wasDark !== darkApp() && currentBody && state.openId) showBody();
   $("app").classList.toggle("horizontal", settings.layout === "horizontal");
   const r = document.documentElement.style;
-  r.setProperty("--folder-w", settings.folderW + "px");
-  r.setProperty("--list-w", settings.listW + "px");
+  // Saved pane sizes are kept, but shown no wider than the window allows: the reader keeps 300 px.
+  const room = Math.max(0, innerWidth - 10);
+  const folderW = Math.max(120, Math.min(settings.folderW, Math.round(room * 0.3)));
+  const listW = settings.layout === "horizontal" ? settings.listW : Math.max(200, Math.min(settings.listW, room - folderW - 300));
+  r.setProperty("--folder-w", folderW + "px");
+  r.setProperty("--list-w", listW + "px");
   r.setProperty("--list-h", settings.listH + "%");
   // Text size, as a percentage of the 13px design size, scales every text in the interface
   // together. Row height is relative to the text: 100% is 1.7 lines of it (22 px at normal
@@ -852,7 +856,7 @@ const darkApp = () => document.documentElement.dataset.theme === "dark";
 function showBody(images = bodyImages) {
   bodyImages = images;
   const look = !darkApp() ? "light" : settings.readerOriginal ? "dim" : "dark";
-  setFrame(bodyDoc(look === "dark" ? darkenHtml(currentBody.html) : currentBody.html, images, look));
+  setFrame(bodyDoc(look === "dark" ? darkenHtml(currentBody.html) : currentBody.html, images, look), look === "dark" ? DARK.bg : "#fff");
 }
 function syncDarkButton() {
   const b = $("r-dark");
@@ -902,10 +906,11 @@ function showReaderError(e, what) {
 // Yahoo's image proxy and data: URLs, so mail cannot make a request that carries Yahoo cookies.
 const READER_SANDBOX = "allow-same-origin allow-popups allow-popups-to-escape-sandbox";
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " "]);
-function setFrame(doc) {
+function setFrame(doc, bg = "#fff") {
   const old = $("r-body");
   const f = document.createElement("iframe");
   f.id = "r-body";
+  f.style.background = bg;
   f.setAttribute("sandbox", READER_SANDBOX);
   f.setAttribute("referrerpolicy", "no-referrer");
   f.addEventListener("load", () => {
@@ -939,7 +944,8 @@ async function renderMessage(m, r, how = "user") {
   $("r-date").textContent = toDate(h.date)?.toLocaleString() || "";
   $("r-folder").textContent = noBidi(r.message.folder?.name);
   const auto = autoImages(r.message);
-  const hasImg = /<img\b/i.test(r.html);
+  // images, and anything else that loads a picture: CSS backgrounds, SVG images, posters
+  const hasImg = /<img\b|url\(|\bbackground\s*=|<image\b|\bposter\s*=|image-set\(/i.test(r.html);
   $("r-images").classList.toggle("hidden", !hasImg || auto);
   viewer.renderStrip(r.message, r.attachments, id => state.openId === id);
   if (auto) { const inlined = await inlineYahooParts(r.html, r.message); if (state.openId !== m.id) return; r.html = inlined; }
@@ -965,11 +971,13 @@ async function loadImages() {
   if (!currentBody) return;
   const id = state.openId;
   currentBody.html = await inlineYahooParts(currentBody.html, currentBody.message);
-  if (state.openId === id) showBody(true);
+  if (state.openId === id) { showBody(true); $("r-images").classList.add("hidden"); }
 }
 
+const READER_EMPTY = "Select a message to read it. Press ? for keyboard shortcuts.";
 function clearReader() {
   state.openId = null; currentBody = null;
+  $("reader-empty").textContent = READER_EMPTY;
   $("r-attach").classList.add("hidden");
   clearTimeout(markReadTimer);
   $("reader-empty").classList.remove("hidden");
@@ -1674,8 +1682,10 @@ function onKey(e) {
 
 // ---------- theme / settings ----------
 function toggleTheme() {
+  const wasSystem = settings.theme === "system";
   settings.theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   applySettings(); saveSettings();
+  status(`${settings.theme} theme${wasSystem ? "; Follow system is off (Settings turns it back on)" : ""}`);
 }
 
 function openSettings(show) {
@@ -1947,6 +1957,7 @@ $("fail-copy").onclick = () => copyReport(startReport, $("fail-copy"));
 $("folder-filter").oninput = () => { state.kbFolder = -1; renderFolders(); };
 wireSettings();
 wireSplitters();
+window.addEventListener("resize", () => applyLayout());
 wireMovePicker();
 wireContactCards();
 viewer.init({ thumb: thumbFor, raw: api.rawMessage, docPages: api.docPages, cleanHtml, status });

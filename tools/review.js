@@ -179,6 +179,77 @@ scenario("darkenHtml golden values, and crafted styles stay fast", async ({ page
   expect(!/lightyellow|darkblue/.test(r.named) && /currentcolor/.test(r.named), "every named colour darkens, keywords stay: " + r.named);
 });
 
+// ---------- layout and look ----------
+const LONG = "Quarterly" + "x".repeat(300);
+scenario("a narrow window keeps the reader on screen", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m) => { if (id === "MSG1_2") m.headers.subject = LONG; };
+  await page.setViewportSize({ width: 900, height: 700 });
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  const r = await page.evaluate(() => ({ scroll: document.scrollingElement.scrollWidth, w: innerWidth,
+    print: document.getElementById("r-print").getBoundingClientRect().right, reader: document.getElementById("reader").getBoundingClientRect().width }));
+  expect(r.scroll <= r.w && r.print <= r.w && r.reader >= 250, "no sideways scroll, buttons and reader on screen: " + JSON.stringify(r));
+}, { settings: { folderW: 400, listW: 600 } });
+
+scenario("the list toolbar fits at 150% text", async ({ page }, expect) => {
+  const r = await page.evaluate(() => { const l = document.getElementById("list").getBoundingClientRect(); return { list: Math.round(l.right), buttons: Math.round(Math.max(...[...document.querySelectorAll("#toolbar button")].map(b => b.getBoundingClientRect().right))) }; });
+  expect(r.buttons <= r.list, "every toolbar button inside the list: " + JSON.stringify(r));
+}, { settings: { textPct: 150 } });
+
+scenario("overlays sit above popovers, and help fits a short window", async ({ page }, expect) => {
+  await page.setViewportSize({ width: 1200, height: 420 });
+  const z = await page.evaluate(() => { const z = id => Number(getComputedStyle(document.getElementById(id)).zIndex) || 0;
+    return { over: Math.min(z("settings"), z("help"), z("movebox")), pop: Math.max(z("search-help"), z("card"), z("ctx"), z("c-suggest"), z("c-palette")) }; });
+  await page.locator("#list").focus(); await page.keyboard.press("?"); await page.waitForTimeout(200);
+  const h = await page.evaluate(() => { const b = document.getElementById("help-box"), r = b.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: innerHeight, scrolls: b.scrollHeight > b.clientHeight }; });
+  expect(z.over > z.pop, "Settings, Help and Move cover popovers: " + JSON.stringify(z));
+  expect(h.top >= 0 && h.bottom <= h.h && h.scrolls, "help scrolls inside the window: " + JSON.stringify(h));
+});
+
+scenario("Load images goes away once images load, and counts CSS backgrounds", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_4") body.html = '<div style="width:9px;height:9px;background:url(https://ecp.yusercontent.com/bg.png)">x</div>'; };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  const before = await page.locator("#r-images").isVisible();
+  await page.click("#r-images"); await page.waitForTimeout(600);
+  const after = await page.locator("#r-images").isVisible();
+  await page.locator("#rows .row").nth(3).click(); await page.waitForTimeout(600);
+  const bg = await page.locator("#r-images").isVisible();
+  expect(before && !after && bg, "shown, gone after loading, shown for a CSS background: " + JSON.stringify({ before, after, bg }));
+}, { settings: { images: "never" }, allow: /ERR_NAME_NOT_RESOLVED|Content Security Policy/ });
+
+scenario("an error in the reader does not stay after leaving", async ({ page, mock }, expect) => {
+  mock.handler = async ({ name, uri }) => name === "messages.getBody" && uri.includes("MSG1_2/") ? { error: { code: "EC-5003", message: "Internal error" } } : undefined;
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  const err = await page.locator("#reader-empty").textContent();
+  await folder(page, "Sent");
+  const after = await page.locator("#reader-empty").textContent();
+  expect(/^Error/.test(err) && !/Error/.test(after), "the empty reader says what it normally says: " + JSON.stringify({ err, after }));
+}, { allow: /EC-5003|fetching/ });
+
+scenario("selected rows look different from the cursor row", async ({ page }, expect) => {
+  await page.locator("#rows .row").nth(0).click();
+  await page.locator("#rows .row").nth(2).click({ modifiers: ["Control"] }); await page.waitForTimeout(200);
+  const bg = await page.evaluate(() => [...document.querySelectorAll("#rows .row")].slice(0, 3).map(r => getComputedStyle(r).backgroundColor));
+  expect(bg[0] !== bg[2], "marked and cursor rows differ: " + JSON.stringify(bg));
+});
+
+scenario("t says when it turns off Follow system", async ({ page }, expect) => {
+  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.locator("#list").focus(); await page.keyboard.press("t"); await page.waitForTimeout(300);
+  expect(/Follow system/.test(await page.locator("#st-msg").textContent()), "the status says so: " + await page.locator("#st-msg").textContent());
+}, { settings: { theme: "system" } });
+
+scenario("names keep their own direction", async ({ page }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  const b = await page.evaluate(() => [".row .fr", ".row .sb", "#r-from .who", "#r-subject"].map(s => getComputedStyle(document.querySelector(s)).unicodeBidi));
+  expect(b.every(x => x === "isolate" || x === "plaintext" || x === "isolate-override"), "bidi isolation: " + JSON.stringify(b));
+});
+
+scenario("the dark reader does not flash white between messages", async ({ page }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  const bg = await page.locator("#r-body").evaluate(f => getComputedStyle(f).backgroundColor);
+  expect(bg !== "rgb(255, 255, 255)", "the frame's own background is dark: " + bg);
+}, { settings: { theme: "dark" } });
+
 // ---------- start-up ----------
 scenario("starting offline says why and recovers by itself", async ({ page, mock }, expect) => {
   const shown = { panel: await page.locator("#signin-fail").isVisible(), app: await page.locator("#app").isVisible(), text: await page.locator("#fail-text").textContent() };
