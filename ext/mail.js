@@ -17,7 +17,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: "Helvetica Neue, Helvetica, Arial, sans-serif", composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, images: "safe", readerOriginal: false, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -75,7 +75,9 @@ function syncSettingsForm() {
   $("textpct").value = settings.textPct;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
   $("undosend").value = settings.undoSendSec;
-  $("composeFont").value = settings.composeFont; $("composeSize").value = String(settings.composeSize);
+  if (!$("composeFont").options.length) compose.fillFonts($("composeFont"), "(default)");
+  // a font saved as a bare name (or an older list) shows as its entry
+  $("composeFont").value = compose.fontEntry(settings.composeFont)?.[1] || compose.DEFAULT_FONT; $("composeSize").value = String(settings.composeSize);
 }
 
 function applySettings() { applyLayout(); syncSettingsForm(); startPolling(); }

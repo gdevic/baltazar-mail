@@ -729,6 +729,28 @@ scenario("every formatting tool does what it says, and can be undone", async ({ 
   expect(on && off, "the bold button shows bold at the caret: " + JSON.stringify({ on, off }));
 });
 
+scenario("font choices show one name and carry a fallback", async ({ page, calls }, expect) => {
+  const s = await page.evaluate(() => [...document.querySelectorAll("#composeFont option")].map(o => [o.textContent, o.value]));
+  const labels = s.map(x => x[0]);
+  expect(labels[0] === "Helvetica (default)" && labels.every(l => !l.includes(",")), "short names in Settings: " + JSON.stringify(labels));
+  expect(s.every(([, v]) => /,\s*(sans-serif|serif|monospace|cursive)$/.test(v)), "every choice ends in a generic family: " + JSON.stringify(s.map(x => x[1])));
+  // a font saved earlier as a bare name is shown as its entry
+  expect(await page.inputValue("#composeFont") === s.find(x => x[0] === "Georgia")[1], "a saved bare name maps to its entry: " + await page.inputValue("#composeFont"));
+  // the composer's box: short names, and a pick applies the whole list
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  const shown = await page.locator("#c-font").evaluate(sel => sel.selectedOptions[0].textContent);
+  await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
+  await page.fill("#c-subject", "Fonts");
+  await page.locator("#c-editor").focus(); await page.keyboard.type("word"); await page.keyboard.press("Shift+Home");
+  await page.locator("#c-font").selectOption({ label: "Consolas" });
+  const picked = await page.locator("#c-font").evaluate(sel => sel.selectedOptions[0].textContent);
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+  const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
+  expect(shown === "Georgia" && picked === "Consolas", "the composer shows short names: " + JSON.stringify({ shown, picked }));
+  expect(/font-family:\s*Georgia, Times New Roman, Times, serif/.test(html) && /font-family:\s*"?Consolas"?, Menlo/.test(html), "the message carries the fallbacks: " + html.slice(0, 300));
+}, { settings: { composeFont: "Georgia" } });
+
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
   await folder(page, "Draft");

@@ -108,6 +108,7 @@ const stored = new WeakMap();
 
 export function init(h) {
   hooks = h;
+  fillFonts($("c-font"));
   const c = $("compose");
   fields.to = new AddrField($("c-to"), "name <address>, address");
   fields.cc = new AddrField($("c-cc"));
@@ -337,7 +338,7 @@ export async function close(save = true) {
 // ---------- editor ----------
 function defaultFont() {
   const st = hooks.settings();
-  return { family: st.composeFont || "Helvetica Neue, Helvetica, Arial, sans-serif", size: Number(st.composeSize) || 13 };
+  return { family: fontEntry(st.composeFont)?.[1] || st.composeFont || DEFAULT_FONT, size: Number(st.composeSize) || 13 };
 }
 function applyDefaultFont() {
   const f = defaultFont();
@@ -364,6 +365,33 @@ function switchMode(v) {
 }
 
 // ---------- font controls ----------
+// The fonts offered, by the name shown, each with fallbacks for recipients who lack it: whatever
+// font is picked goes into the sent message, which is read on other systems.
+export const FONTS = [
+  ["Helvetica", "Helvetica Neue, Helvetica, Arial, sans-serif"],
+  ["Arial", "Arial, Helvetica, sans-serif"],
+  ["Segoe UI", "Segoe UI, -apple-system, Roboto, Helvetica Neue, Arial, sans-serif"],
+  ["Verdana", "Verdana, Geneva, sans-serif"],
+  ["Tahoma", "Tahoma, Verdana, Segoe UI, sans-serif"],
+  ["Trebuchet MS", "Trebuchet MS, Helvetica, sans-serif"],
+  ["Georgia", "Georgia, Times New Roman, Times, serif"],
+  ["Times New Roman", "Times New Roman, Times, serif"],
+  ["Garamond", "Garamond, Baskerville, Georgia, serif"],
+  ["Courier New", "Courier New, Courier, monospace"],
+  ["Consolas", "Consolas, Menlo, Monaco, Courier New, monospace"],
+  ["Comic Sans MS", "Comic Sans MS, Comic Sans, cursive"],
+];
+export const DEFAULT_FONT = FONTS[0][1];
+const firstFamily = v => String(v || "").split(",")[0].trim().replace(/^["']|["']$/g, "").toLowerCase();
+// The list entry for a saved or applied font: by its whole value, or by its first family (a font
+// saved as a bare name, or one in a quoted message).
+export function fontEntry(value) {
+  const f = firstFamily(value);
+  return FONTS.find(([, v]) => v === value) || FONTS.find(([n, v]) => firstFamily(v) === f || n.toLowerCase() === f) || null;
+}
+export function fillFonts(sel, defaultLabel = "") {
+  sel.replaceChildren(...FONTS.map(([n, v], i) => new Option(i === 0 && defaultLabel ? `${n} ${defaultLabel}` : n, v)));
+}
 // The Font and Size boxes always show what applies at the caret (or selection start).
 let fontRange = null, byKeys = false;
 function saveRange() { const s = getSelection(); fontRange = s.rangeCount && $("c-editor").contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null; }
@@ -387,10 +415,10 @@ export function syncFontControls() {
   let node = s.rangeCount && ed.contains(s.anchorNode) ? s.anchorNode : ed;
   if (node.nodeType !== 1) node = node.parentElement;
   const cs = getComputedStyle(node);
-  const families = cs.fontFamily.split(",").map(f => f.trim().replace(/^["']|["']$/g, ""));
+  const entry = fontEntry(cs.fontFamily);
   const fontSel = $("c-font");
-  const known = families.find(f => [...fontSel.options].some(o => !o.dataset.dyn && o.value.toLowerCase() === f.toLowerCase()));
-  showValue(fontSel, known || families[0] || "");
+  if (entry) { fontSel.querySelectorAll("option[data-dyn]").forEach(o => o.remove()); fontSel.value = entry[1]; }
+  else showValue(fontSel, cs.fontFamily.split(",")[0].trim().replace(/^["']|["']$/g, ""));
   showValue($("c-size"), String(Math.round(parseFloat(cs.fontSize))));
 }
 
