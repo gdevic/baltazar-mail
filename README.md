@@ -57,7 +57,7 @@ Moving from a ZIP install to the Edge Add-ons copy: the store copy is a separate
 
 Extensions cannot add themselves to this list.
 
-To publish a release, set `version` in `ext/manifest.json`, commit, and run the Release workflow from the Actions tab with a matching tag (for example `v0.16.0`). It runs every test suite, then builds the install ZIP and the store ZIP (`-store.zip`, with `manifest.json` at the top level) and creates the release.
+To publish a release, set `version` in `ext/manifest.json`, commit, and run the Release workflow from the Actions tab with a matching tag (for example `v0.17.0`). It runs every test suite, then builds the install ZIP and the store ZIP (`-store.zip`, with `manifest.json` at the top level) and creates the release.
 
 Baltazar Mail relies on an undocumented Yahoo API that can change at any time; what is known about it is in `docs/yahoo-v3.md`.
 
