@@ -5,6 +5,6 @@ import fs from "node:fs";
 
 const files = execFileSync("git", ["ls-files"], { encoding: "utf8" }).split("\n")
   .filter(f => f && !f.startsWith("ext/vendor/") && /\.(js|mjs|html|css|md|json|yml|py|sh|txt)$/.test(f));
-const hits = files.flatMap(f => fs.readFileSync(f, "utf8").split("\n").flatMap((l, i) => l.includes("…") ? [`${f}:${i + 1}`] : []));
+const hits = files.flatMap(f => fs.readFileSync(f, "utf8").split("\n").flatMap((l, i) => l.includes("\u2026") ? [`${f}:${i + 1}`] : []));
 if (hits.length) { console.log("FAIL: single-character ellipsis in", hits.join(", ")); process.exit(1); }
 console.log(`PASS (${files.length} files)`);
