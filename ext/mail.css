@@ -194,15 +194,19 @@ body.dragging iframe { pointer-events: none; }
 .tb-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 #c-editor img { max-width: 100%; height: auto; }
 #c-editor img.sel { outline: 2px solid var(--sel-line); }
-#c-editor, #c-text { flex: 1; min-height: 120px; overflow-y: auto; padding: 10px 14px; background: #fff; color: #111; font: 14px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif; border: 0; resize: none; }
+/* The reply and the quoted original below it scroll together as one page; the editor fills the
+   space when there is no quote and grows with its text. */
+#c-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; background: #fff; }
+#c-editor, #c-text { flex: 1 0 auto; min-height: 160px; padding: 10px 14px; background: #fff; color: #111; font: 14px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif; border: 0; resize: none; }
+#c-text { min-height: max(160px, 30vh); }
 #c-editor:focus, #c-text:focus { outline: none; }
 /* Nothing in the edited message, however styled, can paint outside the editor */
 #c-editor { contain: paint; }
 #c-editor blockquote { border-left: 2px solid #bbb; margin: 4px 0; padding-left: 10px; color: #444; }
-#c-quote-wrap { background: #fff; padding: 0 14px 8px; }
+#c-quote-wrap { flex: none; background: #fff; padding: 0 14px 8px; }
 #c-quote-toggle { font-size: calc(11 * var(--fu)); color: #555; background: #eee; border-color: #ddd; }
 #c-quote { margin-top: 6px; }
-#c-quote iframe { display: block; width: 100%; height: 40vh; border: 0; background: #fff; }
+#c-quote iframe { display: block; width: 100%; height: 0; border: 0; background: #fff; }   /* sized to its content (compose.js) */
 #c-quote pre { white-space: pre-wrap; font: inherit; }
 #c-filelist { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px; background: var(--bg2); }
 #c-filelist:not(:empty) { padding: 6px 12px; border-top: 1px solid var(--line); }

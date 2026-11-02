@@ -237,7 +237,7 @@ export async function open(opts) {
   $("c-editor").innerHTML = editorSafe(bodyHtml || sig);
   syncFontControls();
   $("c-text").value = bodyHtml ? toText(bodyHtml) : (fromAcct.signatureActive && fromAcct.signature ? "\n\n" + toText(fromAcct.signature) : "");
-  renderQuote(false);
+  renderQuote(true);
   renderFiles();
   $("compose").classList.remove("hidden");
   dirty = false;
@@ -462,13 +462,28 @@ function editorSafe(html) {
 }
 
 // The quoted original is the sender's HTML, so it is shown in a sandboxed frame like the reader,
-// with the reader's image policy: its styles and element ids cannot reach the app's own page.
+// with the reader's image policy: its styles and element ids cannot reach the app's own page. It
+// runs no script; like the reader it shares the app's origin, so the app can size it to its
+// content and it reads as part of the message, below the reply. It is shown expanded.
+let quoteSizer = null;
+function fitQuote(frame) {
+  const doc = frame.contentDocument;
+  if (doc?.documentElement) frame.style.height = doc.documentElement.scrollHeight + "px";
+}
 function renderQuote(expanded) {
   const has = !!draft.quoteHtml;
   $("c-quote-wrap").classList.toggle("hidden", !has);
+  quoteSizer?.disconnect(); quoteSizer = null;
   if (!has) { $("c-quote").replaceChildren(); return; }
   const frame = document.createElement("iframe");
-  frame.setAttribute("sandbox", "");
+  frame.setAttribute("sandbox", "allow-same-origin");
+  frame.addEventListener("load", () => {
+    fitQuote(frame);
+    // images arriving later, and a narrower window, change the height
+    frame.contentDocument?.addEventListener("load", () => fitQuote(frame), true);
+    quoteSizer = new ResizeObserver(() => fitQuote(frame));
+    quoteSizer.observe($("c-quote"));
+  });
   frame.referrerPolicy = "no-referrer";
   frame.title = "Quoted text";
   frame.srcdoc = `<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:${draft.images ? " https://*.yusercontent.com" : ""}; media-src 'none'">` +
@@ -699,7 +714,7 @@ async function reopenFrom(snap) {
   applyDefaultFont();
   if (snap.html) $("c-editor").innerHTML = editorSafe(snap.editorHtml || "");
   else $("c-text").value = snap.ownText ?? "";
-  renderQuote(false); renderFiles();
+  renderQuote(true); renderFiles();
   $("compose").classList.remove("hidden");
   dirty = true;
   clearInterval(autosaveTimer);

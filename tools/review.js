@@ -94,7 +94,7 @@ scenario("a reply's quoted original loads no Yahoo-host image", async (h, expect
   h.mock.patchBody = leakyIn("MSG1_");
   await h.page.locator("#rows .row").nth(1).click(); await h.page.waitForTimeout(600);
   await h.page.locator("#list").focus(); await h.page.keyboard.press("r"); await h.page.waitForSelector("#compose:not(.hidden)");
-  await h.page.click("#c-quote-toggle"); await h.page.waitForTimeout(800);
+  await h.page.waitForTimeout(800);
   expect(!h.mock.probes.length, "the quote frame requests no Yahoo host: " + JSON.stringify(h.mock.probes));
 }, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
 
@@ -552,6 +552,23 @@ scenario("opening a message that no longer exists drops its row quietly", async 
   expect(!drafts.includes("Subject 3-2") && !n2, "the same for a draft: " + JSON.stringify({ n2, drafts: drafts.slice(0, 3) }));
 }, { allow: /EC-4007|status of 404/ });
 
+scenario("the quoted original shows under the reply, sized to its content", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html = "<p>Original message.</p>" + "<p>more text in the original</p>".repeat(60); };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
+  await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.waitForTimeout(800);
+  const r = await page.evaluate(() => {
+    const ed = document.getElementById("c-editor").getBoundingClientRect(), f = document.querySelector("#c-quote iframe"), fr = f?.getBoundingClientRect(), body = document.getElementById("c-body");
+    return { shown: !!f && f.offsetParent !== null, label: document.getElementById("c-quote-toggle").textContent, gap: fr ? Math.round(fr.top - ed.bottom) : null,
+      frameH: fr ? Math.round(fr.height) : 0, contentH: f?.contentDocument?.documentElement.scrollHeight ?? -1, scrolls: body ? body.scrollHeight > body.clientHeight : false, editorH: Math.round(ed.height) };
+  });
+  expect(r.shown && r.label === "Hide quoted text", "expanded when the reply opens: " + JSON.stringify(r));
+  expect(r.gap !== null && r.gap >= 0 && r.gap < 60 && r.editorH >= 100, "the quote starts right under the text: " + JSON.stringify(r));
+  expect(r.contentH > 0 && Math.abs(r.frameH - r.contentH) <= 2 && r.scrolls, "the frame fits its content and the whole column scrolls: " + JSON.stringify(r));
+  await page.click("#c-quote-toggle"); await page.waitForTimeout(200);
+  expect(await page.locator("#c-quote").isHidden() && await page.locator("#c-quote-toggle").textContent() === "Show quoted text", "the toggle still hides it");
+});
+
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
   await folder(page, "Draft");
@@ -642,7 +659,7 @@ scenario("a plain-text reply quotes names and structure as text", async ({ page,
     body.html = '<p>See <a href="https://example.com/doc">the doc</a> and <a href="https://example.com/">https://example.com/</a></p><ul><li>one</li><li>two</li></ul><ol><li>first</li></ol><table><tr><td>a</td><td>b</td></tr></table>'; } };
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(600);
   await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
-  await page.click("#c-quote-toggle"); await page.waitForTimeout(300);
+  await page.waitForTimeout(300);
   const text = await page.frameLocator("#c-quote iframe").locator("pre").textContent();
   expect(/O'Brien "AT&T" <ob@x\.ie> wrote:/.test(text) && !/&#39;|&quot;|&amp;/.test(text), "the header reads as text: " + JSON.stringify(text.split("\n")[0]));
   expect(text.includes("the doc <https://example.com/doc>") && !text.includes("https://example.com/ <https://example.com/>"), "links keep their address once: " + JSON.stringify(text));
