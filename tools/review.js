@@ -667,6 +667,68 @@ scenario("Tab from the subject goes to the message, past the toolbar", async ({ 
   expect(html === "c-editor" && typed.includes("typed after Tab") && text === "c-text", "Tab lands in the editor: " + JSON.stringify({ html, text }));
 });
 
+scenario("Insert link takes what people type, and edits or removes a link", async ({ page }, expect) => {
+  const fresh = async () => { await page.evaluate(() => document.getElementById("compose").classList.add("hidden")); await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)"); await page.locator("#c-editor").focus(); await page.keyboard.press("Control+Home"); };
+  const link = async answer => { let asked = null; page.once("dialog", d => { asked = d.defaultValue(); d.accept(answer); }); await page.click('[data-cmd="link"]'); await page.waitForTimeout(250); return asked; };
+  const hrefs = () => page.locator("#c-editor a").evaluateAll(as => as.map(a => a.getAttribute("href")));
+  await fresh(); await page.keyboard.type("site"); await page.keyboard.press("Shift+Home");
+  await link("example.com");
+  const a = await hrefs();
+  await fresh(); await page.keyboard.type("mail me"); await page.keyboard.press("Shift+Home");
+  await link("me@example.com");
+  const b = await hrefs();
+  await fresh(); await page.keyboard.type("nope"); await page.keyboard.press("Shift+Home");
+  await link("not a link");
+  const c = { hrefs: await hrefs(), st: await page.locator("#st-msg").textContent() };
+  expect(a[0] === "https://example.com" && b[0] === "mailto:me@example.com", "bare domain and address become links: " + JSON.stringify({ a, b }));
+  expect(!c.hrefs.length && /not a web or mail address/.test(c.st), "anything else says why: " + JSON.stringify(c));
+  // the caret in a link: the dialog shows its address; a new one replaces it; nothing removes it
+  await fresh(); await page.keyboard.type("docs"); await page.keyboard.press("Shift+Home");
+  await link("https://example.com/old");
+  await page.locator("#c-editor a").click(); await page.keyboard.press("ArrowLeft");
+  const shown = await link("https://example.com/new");
+  const d = await hrefs();
+  await page.locator("#c-editor a").click(); await page.keyboard.press("ArrowLeft");
+  await link("");
+  const e = { hrefs: await hrefs(), text: await page.locator("#c-editor").innerText() };
+  expect(shown === "https://example.com/old" && d.join() === "https://example.com/new", "an existing link is shown and replaced: " + JSON.stringify({ shown, d }));
+  expect(!e.hrefs.length && e.text.startsWith("docs"), "an empty address removes the link, keeping its text: " + JSON.stringify(e));
+});
+
+scenario("every formatting tool does what it says, and can be undone", async ({ page }, expect) => {
+  const fresh = async () => { await page.evaluate(() => document.getElementById("compose").classList.add("hidden")); await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)"); await page.locator("#c-editor").focus(); await page.keyboard.press("Control+Home"); await page.keyboard.type("alpha beta gamma"); };
+  const body = () => page.evaluate(() => document.getElementById("c-editor").innerHTML.split('<div class="ymsig">')[0]);
+  const selWord = async () => { await page.keyboard.press("Home"); for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowRight"); await page.keyboard.press("Control+Shift+ArrowRight"); };
+  const tool = cmd => page.click(`[data-cmd="${cmd}"]`);
+  // a horizontal line carries no stray id
+  await fresh(); await page.keyboard.press("End"); await tool("insertHorizontalRule");
+  const hr = await body();
+  // the preformatted block toggles off again
+  await fresh(); await tool("code"); await tool("code");
+  const pre = await body();
+  // clear formatting removes bold and size
+  await fresh(); await selWord(); await tool("bold"); await page.locator("#c-size").selectOption("24"); await tool("removeFormat");
+  const clear = await body();
+  // the default text colour removes the colour
+  await fresh(); await selWord(); await page.click('[data-pal="fore"]'); await page.locator("#c-palette .sw").nth(3).click();
+  await page.click('[data-pal="fore"]'); await page.locator("#c-palette .pal-default").click();
+  const colour = await body();
+  // Enter in an indented paragraph keeps it indented: only quotes split
+  await fresh(); await tool("indent"); await page.keyboard.press("End"); await page.keyboard.press("Enter"); await page.keyboard.type("next");
+  const indent = await page.evaluate(() => { const n = [...document.querySelectorAll("#c-editor div")].find(d => d.textContent === "next"); return !!n?.closest("blockquote"); });
+  // buttons show what applies at the caret
+  await fresh(); await selWord(); await tool("bold"); await page.keyboard.press("ArrowLeft"); await page.keyboard.press("ArrowRight"); await page.waitForTimeout(150);
+  const on = await page.locator('[data-cmd="bold"]').evaluate(b => b.classList.contains("on") && b.getAttribute("aria-pressed") === "true");
+  await page.keyboard.press("Home"); await page.waitForTimeout(150);
+  const off = await page.locator('[data-cmd="bold"]').evaluate(b => !b.classList.contains("on"));
+  expect(/<hr>/.test(hr) && !/id=/.test(hr), "a plain <hr>: " + hr);
+  expect(!/<pre/.test(pre), "the preformatted block goes off again: " + pre);
+  expect(!/bold|font-size/.test(clear), "clear formatting clears: " + clear);
+  expect(!/color/.test(colour), "the default colour removes the colour: " + colour);
+  expect(indent, "Enter in an indent stays indented");
+  expect(on && off, "the bold button shows bold at the caret: " + JSON.stringify({ on, off }));
+});
+
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
   await folder(page, "Draft");

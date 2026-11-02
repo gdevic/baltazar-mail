@@ -182,6 +182,7 @@ body.dragging iframe { pointer-events: none; }
 #c-toolbar { display: flex; gap: 3px; padding: 4px 12px; border-bottom: 1px solid var(--line); background: var(--bg2); }
 #c-toolbar { flex-wrap: wrap; align-items: center; }
 #c-toolbar button { font-size: calc(12 * var(--fu)); padding: 0 6px; min-width: 26px; height: 22px; }
+#c-toolbar button.on { background: var(--sel); border-color: var(--sel-line); }
 #c-toolbar select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; font: inherit; font-size: calc(12 * var(--fu)); height: 22px; }
 #c-font { width: 110px; } #c-size { width: 58px; }
 .tb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 3px; }

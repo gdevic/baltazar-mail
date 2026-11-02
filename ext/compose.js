@@ -133,7 +133,7 @@ export function init(h) {
   const picked = (id, apply) => () => { restoreRange(); apply($(id).value); syncFontControls(); if (byKeys) { saveRange(); $(id).focus(); } };
   $("c-font").onchange = picked("c-font", v => exec("fontName", v));
   $("c-size").onchange = picked("c-size", v => setFontSize(Number(v)));
-  document.addEventListener("selectionchange", () => { if (isOpen() && draft?.html && $("c-editor").contains(getSelection().anchorNode)) syncFontControls(); });
+  document.addEventListener("selectionchange", () => { if (isOpen() && draft?.html && $("c-editor").contains(getSelection().anchorNode)) { syncFontControls(); syncToolStates(); } });
   for (const b of $("c-toolbar").querySelectorAll("button[data-pal]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); togglePalette(b); }; }
   document.addEventListener("mousedown", e => { if (!e.target.closest("#c-palette") && !e.target.closest("[data-pal]")) hidePalette(); });
   $("c-imgfile").onchange = () => { insertImages([...$("c-imgfile").files]); $("c-imgfile").value = ""; };
@@ -159,8 +159,9 @@ export function init(h) {
     if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
     const sel = getSelection(); if (!sel.rangeCount || !sel.isCollapsed) return;
     const node = sel.anchorNode, start = node.nodeType === 1 ? node : node.parentElement;
-    let bq = start?.closest("blockquote"); if (!bq || !ed.contains(bq)) return;
-    for (let up = bq.parentElement?.closest("blockquote"); up && ed.contains(up); up = up.parentElement?.closest("blockquote")) bq = up;
+    // only a quoted original splits; an indent (also a blockquote) stays one block
+    let bq = start?.closest(".ymq blockquote"); if (!bq || !ed.contains(bq)) return;
+    for (let up = bq.parentElement?.closest(".ymq blockquote"); up && ed.contains(up); up = up.parentElement?.closest(".ymq blockquote")) bq = up;
     e.preventDefault();
     splitQuote(bq, sel);
     dirty = true;
@@ -415,12 +416,21 @@ function setFontSize(px) {
   const before = new Set(ed.querySelectorAll('font[size="7"]'));
   document.execCommand("styleWithCSS", false, false);
   document.execCommand("fontSize", false, "7");
+  const made = [];
   for (const f of ed.querySelectorAll('font[size="7"]')) {
     if (before.has(f)) continue;
     const span = document.createElement("span");
     span.style.fontSize = px + "px";
     while (f.firstChild) span.appendChild(f.firstChild);
     f.replaceWith(span);
+    made.push(span);
+  }
+  // the selection pointed into the replaced elements; select the resized text again, so the next
+  // tool acts on it
+  if (made.length) {
+    const r = document.createRange();
+    r.setStart(made[0], 0); r.setEnd(made[made.length - 1], made[made.length - 1].childNodes.length);
+    sel.removeAllRanges(); sel.addRange(r);
   }
   dirty = true;
 }
@@ -435,29 +445,113 @@ function togglePalette(btn) {
   const kind = btn.dataset.pal, fore = kind === "fore";
   const sel = getSelection(); savedRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
   pal.dataset.kind = kind;
-  pal.innerHTML = `<button class="pal-default" data-c="${fore ? "#000000" : ""}">${fore ? "Default (black)" : "No highlight"}</button>` +
+  pal.innerHTML = `<button class="pal-default" data-c="">${fore ? "Default colour" : "No highlight"}</button>` +
     (fore ? FORE : BACK).map(c => `<span class="sw" data-c="${c}" style="background:${c}" title="${c}"></span>`).join("");
   const r = btn.getBoundingClientRect();
   pal.style.left = Math.min(r.left, innerWidth - 240) + "px"; pal.style.top = (r.bottom + 2) + "px";
   pal.classList.remove("hidden");
   const apply = c => { hidePalette(); $("c-editor").focus(); if (savedRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(savedRange); }
-    if (fore) exec("foreColor", c || "#000000"); else if (c) exec("hiliteColor", c); else exec("hiliteColor", "transparent"); };
+    if (fore && c) exec("foreColor", c); else if (fore) clearInline(["color"]); else if (c) exec("hiliteColor", c); else exec("hiliteColor", "transparent"); };
   pal.onclick = e => {
     const sw = e.target.closest("[data-c]"); if (sw) apply(sw.dataset.c);
   };
 }
 function hidePalette() { $("c-palette").classList.add("hidden"); }
 
-function exec(cmd, arg = null) {
+// A command without a value gets none: insertHorizontalRule takes its value as the new rule's id.
+function exec(cmd, arg) {
   const ed = $("c-editor"); ed.focus();
   document.execCommand("styleWithCSS", false, true);
-  document.execCommand(cmd, false, arg);
+  if (arg === undefined) document.execCommand(cmd, false); else document.execCommand(cmd, false, arg);
   dirty = true;
+  syncToolStates();
+}
+
+// What a person types for a link: a web address with or without https://, or an email address.
+// Returns the href, or null for anything else.
+export function linkTarget(input) {
+  const v = String(input || "").trim();
+  if (/^(https?:\/\/|mailto:)\S+$/i.test(v)) return v;
+  if (/^[^\s@<>()",;:]+@[^\s@<>()",;:]+\.[a-z]{2,}$/i.test(v)) return `mailto:${v}`;
+  if (/^(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}([:/?#]\S*)?$/i.test(v)) return `https://${v}`;
+  return null;
+}
+// The link button: with the caret in a link, its address is offered to change, and an empty one
+// removes the link; otherwise the selection (or, with only a caret, the address itself) becomes one.
+function insertLink() {
+  const ed = $("c-editor"), sel = getSelection();
+  const inside = sel.rangeCount && ed.contains(sel.anchorNode) ? (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement)?.closest("a[href]") : null;
+  const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  const answer = prompt("Link address (web or email):", inside?.getAttribute("href") || "");
+  if (answer === null) return;
+  ed.focus();
+  if (range) { sel.removeAllRanges(); sel.addRange(range); }
+  if (inside && ed.contains(inside)) {
+    if (!answer.trim()) { inside.replaceWith(...inside.childNodes); dirty = true; return; }
+    const href = linkTarget(answer);
+    if (!href) { hooks.status(`"${answer.trim().slice(0, 60)}" is not a web or mail address`); return; }
+    inside.setAttribute("href", href); dirty = true; return;
+  }
+  if (!answer.trim()) return;
+  const href = linkTarget(answer);
+  if (!href) { hooks.status(`"${answer.trim().slice(0, 60)}" is not a web or mail address`); return; }
+  exec("createLink", href);
+}
+
+// Whether the caret (or selection start) is inside an element matching selector, in the editor.
+function caretIn(selector) {
+  const ed = $("c-editor"), n = getSelection().anchorNode;
+  const el = n && (n.nodeType === 1 ? n : n.parentElement);
+  return !!(el && ed.contains(el) && el.closest(selector) && ed.contains(el.closest(selector)));
+}
+// The toolbar shows what applies at the caret: bold, italic, underline, strike, lists, preformatted.
+const STATEFUL = ["bold", "italic", "underline", "strikeThrough", "insertUnorderedList", "insertOrderedList"];
+function syncToolStates() {
+  for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) {
+    const cmd = b.dataset.cmd;
+    let on = null;
+    if (STATEFUL.includes(cmd)) { try { on = document.queryCommandState(cmd); } catch { on = false; } }
+    else if (cmd === "code") on = caretIn("pre");
+    if (on === null) continue;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+  }
+}
+// Removes inline formatting the browser's removeFormat leaves (styles written as span styles, and
+// font sizes) from what is wholly selected; props limits it to those style properties.
+function clearInline(props = null) {
+  const ed = $("c-editor"), sel = getSelection();
+  if (!sel.rangeCount || !ed.contains(sel.anchorNode)) return;
+  const range = sel.getRangeAt(0);
+  const whole = el => {
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let any = false;
+    for (let t = w.nextNode(); t; t = w.nextNode()) {
+      if (!t.data.length) continue;
+      if (!range.intersectsNode(t)) return false;
+      if (t === range.startContainer && range.startOffset > 0) return false;
+      if (t === range.endContainer && range.endOffset < t.length) return false;
+      any = true;
+    }
+    return any;
+  };
+  const els = [...ed.querySelectorAll("span, font, b, strong, i, em, u, s, strike")].filter(el => range.intersectsNode(el) && whole(el));
+  for (const el of els.reverse()) {
+    if (props) {
+      for (const p of props) el.style.removeProperty(p);
+      if (props.includes("color")) el.removeAttribute("color");
+      if (!el.getAttribute("style")?.trim()) el.removeAttribute("style");
+      if (el.attributes.length || !/^(SPAN|FONT)$/.test(el.tagName)) continue;   // still styled, or bold and the like
+    }
+    el.replaceWith(...el.childNodes);
+  }
+  dirty = true;
+  syncToolStates(); syncFontControls();
 }
 
 function format(cmd) {
-  if (cmd === "link") { const url = prompt("Link URL:"); if (url && /^https?:\/\//i.test(url)) exec("createLink", url); return; }
-  if (cmd === "code") { exec("formatBlock", "pre"); return; }
+  if (cmd === "link") { insertLink(); return; }
+  if (cmd === "code") { exec("formatBlock", caretIn("pre") ? "div" : "pre"); return; }
+  if (cmd === "removeFormat") { exec("removeFormat"); clearInline(); return; }
   if (cmd === "image") { $("c-imgfile").click(); return; }
   exec(cmd);
 }
