@@ -121,9 +121,16 @@ export function init(h) {
   $("c-quote-toggle").onclick = () => toggleQuote();
   $("c-cc-toggle").onclick = () => { $("c-cc-row").classList.toggle("hidden"); $("c-bcc-row").classList.toggle("hidden"); };
   for (const b of $("c-toolbar").querySelectorAll("button[data-cmd]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); format(b.dataset.cmd); }; }
-  $("c-font").onmousedown = $("c-size").onmousedown = () => saveRange();
-  $("c-font").onchange = () => { restoreRange(); exec("fontName", $("c-font").value); syncFontControls(); };
-  $("c-size").onchange = () => { restoreRange(); setFontSize(Number($("c-size").value)); syncFontControls(); };
+  // Picked with the mouse, the caret goes back to the text; stepped through with the keys, the box
+  // keeps focus so the next key steps again.
+  for (const id of ["c-font", "c-size"]) {
+    $(id).onmousedown = () => { saveRange(); byKeys = false; };
+    $(id).onkeydown = () => { byKeys = true; };
+    $(id).onfocus = () => saveRange();
+  }
+  const picked = (id, apply) => () => { restoreRange(); apply($(id).value); syncFontControls(); if (byKeys) { saveRange(); $(id).focus(); } };
+  $("c-font").onchange = picked("c-font", v => exec("fontName", v));
+  $("c-size").onchange = picked("c-size", v => setFontSize(Number(v)));
   document.addEventListener("selectionchange", () => { if (isOpen() && draft?.html && $("c-editor").contains(getSelection().anchorNode)) syncFontControls(); });
   for (const b of $("c-toolbar").querySelectorAll("button[data-pal]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); togglePalette(b); }; }
   document.addEventListener("mousedown", e => { if (!e.target.closest("#c-palette") && !e.target.closest("[data-pal]")) hidePalette(); });
@@ -306,13 +313,19 @@ function switchMode(v) {
 
 // ---------- font controls ----------
 // The Font and Size boxes always show what applies at the caret (or selection start).
-let fontRange = null;
+let fontRange = null, byKeys = false;
 function saveRange() { const s = getSelection(); fontRange = s.rangeCount && $("c-editor").contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null; }
 function restoreRange() { const ed = $("c-editor"); ed.focus(); if (fontRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(fontRange); } }
 
+// A value not in the list is shown as an extra option: in numeric order for sizes, first for fonts.
 function showValue(sel, value) {
   let opt = [...sel.options].find(o => o.value.toLowerCase() === String(value).toLowerCase());
-  if (!opt) { sel.querySelectorAll("option[data-dyn]").forEach(o => o.remove()); opt = new Option(value, value); opt.dataset.dyn = "1"; sel.add(opt, 0); }
+  if (!opt) {
+    sel.querySelectorAll("option[data-dyn]").forEach(o => o.remove());
+    opt = new Option(value, value); opt.dataset.dyn = "1";
+    const n = Number(value), after = Number.isFinite(n) ? [...sel.options].find(o => Number(o.value) > n) : sel.options[0];
+    sel.add(opt, after || null);
+  }
   sel.value = opt.value;
 }
 
@@ -329,11 +342,30 @@ export function syncFontControls() {
   showValue($("c-size"), String(Math.round(parseFloat(cs.fontSize))));
 }
 
-// execCommand only knows sizes 1-7; apply size 7 and rewrite those elements to the real pixel size.
+// execCommand only knows sizes 1-7: size 7 is applied to the selection and the elements it makes
+// are rewritten to the real pixel size; <font size="7"> already in the message is left as it is.
+// With only a caret there is nothing to rewrite yet, so an empty sized span takes the caret, holding
+// a zero-width space that is dropped when the message is saved.
+const CARET_HOLD = "\u200B";
 function setFontSize(px) {
+  const ed = $("c-editor"), sel = getSelection();
+  if (!sel.rangeCount || !ed.contains(sel.anchorNode)) return;
+  if (sel.isCollapsed) {
+    const span = document.createElement("span");
+    span.style.fontSize = px + "px";
+    span.textContent = CARET_HOLD;
+    const r = sel.getRangeAt(0);
+    r.insertNode(span);
+    r.setStart(span.firstChild, 1); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+    dirty = true;
+    return;
+  }
+  const before = new Set(ed.querySelectorAll('font[size="7"]'));
   document.execCommand("styleWithCSS", false, false);
   document.execCommand("fontSize", false, "7");
-  for (const f of $("c-editor").querySelectorAll('font[size="7"]')) {
+  for (const f of ed.querySelectorAll('font[size="7"]')) {
+    if (before.has(f)) continue;
     const span = document.createElement("span");
     span.style.fontSize = px + "px";
     while (f.firstChild) span.appendChild(f.firstChild);
@@ -622,7 +654,7 @@ function collect(upload = false) {
   if (draft.html) {
     // Images in the quoted original travel as new inline parts too, so recipients see them.
     const f = defaultFont();
-    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : ""), new Set(draft.files.map(x => x.name)));
+    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML.replaceAll(CARET_HOLD, "")}</div>` + (draft.quoteHtml ? `<br>${draft.quoteHtml}` : ""), new Set(draft.files.map(x => x.name)));
     d.html = html;
     d.inline = inline;
   } else d.text = $("c-text").value + (draft.quoteText ? `\n\n${draft.quoteText}` : "");

@@ -569,6 +569,31 @@ scenario("the quoted original shows under the reply, sized to its content", asyn
   expect(await page.locator("#c-quote").isHidden() && await page.locator("#c-quote-toggle").textContent() === "Show quoted text", "the toggle still hides it");
 });
 
+scenario("the font size box sets the size it shows", async ({ page }, expect) => {
+  await newMessage(page);
+  const px = () => page.evaluate(() => { const n = getSelection().anchorNode; return getComputedStyle(n.nodeType === 1 ? n : n.parentElement).fontSize; });
+  // a caret alone: the text typed next takes the size picked
+  await page.keyboard.press("Control+Home");
+  await page.locator("#c-size").selectOption("18"); await page.keyboard.type("typed at 18");
+  const a = { px: await px(), box: await page.inputValue("#c-size") };
+  expect(a.px === "18px" && a.box === "18", "a size picked at the caret applies to what is typed: " + JSON.stringify(a));
+  // big text already in the message is left alone when another line is resized
+  await page.evaluate(() => document.getElementById("c-editor").insertAdjacentHTML("beforeend", '<div id="big"><font size="7">big quoted</font></div>'));
+  await page.keyboard.press("Enter"); await page.keyboard.type("second line"); await page.keyboard.press("Shift+Home");
+  await page.locator("#c-size").selectOption("24");
+  const b = await page.evaluate(() => ({ big: document.querySelector("#big font[size='7']") !== null, first: getComputedStyle([...document.querySelectorAll("#c-editor span")].find(e => e.textContent.replace(/\u200B/g, "") === "typed at 18")).fontSize }));
+  expect(b.big && b.first === "18px", "only the selection changes size: " + JSON.stringify(b));
+  // arrow keys step through sizes while the box keeps focus
+  await page.locator("#c-size").focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("ArrowDown");
+  const e = { box: await page.inputValue("#c-size"), focus: await page.evaluate(() => document.activeElement.id) };
+  expect(e.box === "32" && e.focus === "c-size", "two steps down from 24 is 32, focus stays: " + JSON.stringify(e));
+  // a size not in the list is shown in its place, not at the top
+  await page.evaluate(() => document.getElementById("c-editor").insertAdjacentHTML("afterbegin", '<div><span style="font-size:15px">fifteen</span></div>'));
+  await page.locator("#c-editor span", { hasText: "fifteen" }).click(); await page.waitForTimeout(100);
+  const opts = await page.locator("#c-size option").evaluateAll(os => os.map(o => o.value).join(","));
+  expect(opts.startsWith("8,9,10,11,12,13,14,15,16"), "15 sits between 14 and 16: " + opts);
+});
+
 scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) => {
   mock.patchBody = (id, message) => { if (id.startsWith("MSG3_")) message.headers.bcc = [{ name: "Hidden", email: "secret@x.com" }]; };
   await folder(page, "Draft");
