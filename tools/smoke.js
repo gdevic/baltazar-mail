@@ -246,6 +246,11 @@ const folders = [
   await page.locator("#rows .row").nth(3).click({ modifiers: ["Control"] });
   ctrlSel.untoggled = await marks();
   await page.locator("#list").focus(); await page.keyboard.press("Escape");
+  // Deletes here are checked by the row count, not the undo label, which an earlier delete
+  // already set; each undo waits for the full list again.
+  let listRows = 0;
+  const rowsBelow = n => page.waitForFunction(n => document.querySelectorAll("#rows .row").length < n, n, { timeout: 5000 }).catch(() => {}).then(() => page.waitForTimeout(300));
+  const rowsBack = () => page.waitForFunction(() => document.querySelectorAll("#rows .row").length >= 95, null, { timeout: 5000 }).catch(() => {});
   // The trash icon: shown on the row under the pointer, the cursor row and marked rows; it deletes its row,
   // or the whole selection when it is one of the selected rows.
   const trash = {};
@@ -258,26 +263,29 @@ const folders = [
   await page.mouse.move(2, 2);
   trash.marked = await shown();
   trash.before = await page.locator("#rows .row").count();
+  listRows = await page.locator("#rows .row").count();
   await page.locator("#rows .row").nth(2).locator(".tr").click();
-  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  await rowsBelow(listRows);
   trash.two = { rows: await page.locator("#rows .row").count(), undo: await undoNow() };
-  await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  await page.locator("#list").focus(); await page.keyboard.press("z"); await rowsBack();
   // a row outside the selection: only that row goes, and the selection and cursor stay
   await page.keyboard.press("Escape"); await page.keyboard.press("Home");
   await page.keyboard.press("j"); await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
   const selState = () => page.evaluate(() => ({ marked: [...document.querySelectorAll("#rows .row.marked .fr")].map(e => e.dataset.email).join(), cursor: document.querySelector("#rows .row.sel .fr")?.dataset.email }));
   const selBefore = await selState();
   await page.locator("#rows .row").nth(5).hover(); const sel5 = await page.locator("#rows .row").nth(5).locator(".fr").getAttribute("data-email");
+  listRows = await page.locator("#rows .row").count();
   await page.locator("#rows .row").nth(5).locator(".tr").click();
-  await page.waitForFunction(() => /Undo: delete 1/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  await rowsBelow(listRows);
   trash.one = { rows: await page.locator("#rows .row").count(), undo: await undoNow(), gone: !(await page.locator(`#rows .row .fr[data-email="${sel5}"]`).count()), selBefore, selAfter: await selState() };
-  await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  await page.locator("#list").focus(); await page.keyboard.press("z"); await rowsBack();
   // a click a few pixels outside the drawn icon still deletes
   { const svg = await page.locator("#rows .row").nth(7).locator(".tr svg").boundingBox(); await page.locator("#rows .row").nth(7).hover();
+    listRows = await page.locator("#rows .row").count();
     await page.mouse.click(svg.x - 5, svg.y + svg.height / 2);
-    await page.waitForFunction(() => /Undo: delete 1/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+    await rowsBelow(listRows);
     trash.near = { rows: await page.locator("#rows .row").count(), opened: await page.locator("#r-subject").textContent() }; }
-  await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  await page.locator("#list").focus(); await page.keyboard.press("z"); await rowsBack();
   // the icon sits right beside the date
   trash.gap = await page.locator("#rows .row").nth(1).evaluate(r => { const t = r.querySelector(".tr svg").getBoundingClientRect(), d = r.querySelector(".dt"); const range = document.createRange(); range.selectNodeContents(d.lastChild); return Math.round(range.getBoundingClientRect().left - t.right); });
   // The toolbar's order, with Delete between separators; the menu's Reply and Find all from
@@ -308,27 +316,30 @@ const folders = [
   const rowCount = () => page.locator("#rows .row").count();
   await page.locator("#list").focus(); await page.keyboard.press("Home");
   keys.before = await rowCount();
+  listRows = await page.locator("#rows .row").count();
   await page.keyboard.press("Backspace");
-  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  await rowsBelow(listRows);
   keys.backspace = { rows: await rowCount(), undo: await undoText() };
-  await page.keyboard.press("z"); await page.waitForTimeout(400);
+  await page.keyboard.press("z"); await rowsBack();
   const altKey = key => page.locator("#list").evaluate((l, key) => l.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true })), key);
   await altKey("e"); await page.waitForTimeout(400);
   keys.altLetter = await rowCount();
+  listRows = await page.locator("#rows .row").count();
   await altKey("#");
-  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  await rowsBelow(listRows);
   keys.altHash = { rows: await rowCount(), undo: await undoText() };
-  await page.keyboard.press("z"); await page.waitForTimeout(400);
+  await page.keyboard.press("z"); await rowsBack();
   // In the message: shortcuts work, scroll keys and copy stay with the message. Backspace deletes
   // outside text fields too, but not in the search box.
   const sel = () => page.locator("#rows .row").evaluateAll(rs => rs.findIndex(r => r.classList.contains("sel")));
   const inBody = () => page.frameLocator("#r-body").locator("body").click({ position: { x: 5, y: 5 } });
   await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(600);
   await inBody(); keys.frameFocus = await page.evaluate(() => document.activeElement.id);
+  listRows = await page.locator("#rows .row").count();
   await page.keyboard.press("Delete");
-  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  await rowsBelow(listRows);
   keys.frameDelete = { rows: await rowCount(), undo: await undoText() };
-  await page.keyboard.press("z"); await page.waitForTimeout(500);
+  await page.keyboard.press("z"); await rowsBack();
   await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(600);
   await inBody(); await page.keyboard.press("ArrowDown"); await page.waitForTimeout(300);
   keys.frameArrow = await sel();
@@ -336,10 +347,11 @@ const folders = [
   await page.keyboard.press("j"); await page.waitForTimeout(600);
   keys.frameJ = await sel();
   await page.locator("#r-subject").click(); keys.before2 = await rowCount();
+  listRows = await page.locator("#rows .row").count();
   await page.keyboard.press("Backspace");
-  await page.waitForFunction(() => /Undo: delete/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+  await rowsBelow(listRows);
   keys.headerBackspace = { rows: await rowCount(), undo: await undoText() };
-  await page.keyboard.press("z"); await page.waitForTimeout(500);
+  await page.keyboard.press("z"); await rowsBack();
   await page.locator("#search").focus(); const undoBefore = await undoText(); await page.keyboard.press("Backspace"); await page.waitForTimeout(400);
   keys.searchBackspace = (await undoText()) === undoBefore && await rowCount() === keys.before2;
   await page.keyboard.press("Escape");
