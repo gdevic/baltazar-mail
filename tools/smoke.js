@@ -261,9 +261,15 @@ const folders = [
   await page.locator("#rows .row").nth(5).locator(".tr").click();
   await page.waitForFunction(() => /Undo: delete 1/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
   trash.one = { rows: await page.locator("#rows .row").count(), undo: await undoNow(), gone: !(await page.locator(`#rows .row .fr[data-email="${sel5}"]`).count()), selBefore, selAfter: await selState() };
-  // the icon sits right beside the date
-  trash.gap = await page.locator("#rows .row").nth(1).evaluate(r => { const t = r.querySelector(".tr").getBoundingClientRect(), d = r.querySelector(".dt"); const range = document.createRange(); range.selectNodeContents(d.lastChild); return Math.round(range.getBoundingClientRect().left - t.right); });
   await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  // a click a few pixels outside the drawn icon still deletes
+  { const svg = await page.locator("#rows .row").nth(7).locator(".tr svg").boundingBox(); await page.locator("#rows .row").nth(7).hover();
+    await page.mouse.click(svg.x - 5, svg.y + svg.height / 2);
+    await page.waitForFunction(() => /Undo: delete 1/.test(document.getElementById("st-undo").textContent), null, { timeout: 5000 }).catch(() => {});
+    trash.near = { rows: await page.locator("#rows .row").count(), opened: await page.locator("#r-subject").textContent() }; }
+  await page.locator("#list").focus(); await page.keyboard.press("z"); await page.waitForTimeout(600);
+  // the icon sits right beside the date
+  trash.gap = await page.locator("#rows .row").nth(1).evaluate(r => { const t = r.querySelector(".tr svg").getBoundingClientRect(), d = r.querySelector(".dt"); const range = document.createRange(); range.selectNodeContents(d.lastChild); return Math.round(range.getBoundingClientRect().left - t.right); });
   // The toolbar's order, with Delete between separators; the menu's Reply and Find all from
   // (the mock's body is always message 1, the top row)
   const menuActs = {};
@@ -352,7 +358,7 @@ const folders = [
   expectEnd(imageHosts.includes("ecp.yusercontent.com") && !imageHosts.some(h => /yahoo\.com$/.test(h)), "the reader loads images only from Yahoo's proxy: " + JSON.stringify([...new Set(imageHosts)]));
   expectEnd(trash.hover === "100010" && trash.marked === "011000" && trash.two.rows === trash.before - 2 && /Undo: delete 2/.test(trash.two.undo) &&
     trash.one.rows === trash.before - 1 && trash.one.gone && trash.one.selBefore.marked.split(",").length === 2 &&
-    trash.one.selAfter.marked === trash.one.selBefore.marked && trash.one.selAfter.cursor === trash.one.selBefore.cursor && trash.gap >= 10 && trash.gap <= 16, "the row trash icon shows on hover and selection and deletes: " + JSON.stringify(trash));
+    trash.one.selAfter.marked === trash.one.selBefore.marked && trash.one.selAfter.cursor === trash.one.selBefore.cursor && trash.gap >= 10 && trash.gap <= 16 && trash.near.rows === trash.before - 1, "the row trash icon shows on hover and selection and deletes: " + JSON.stringify(trash));
   expectEnd(menuActs.toolbar === "Archive Move... Spam | Delete | Mark read Star _ Undo Redo" || menuActs.toolbar === "Archive Move... Spam | Delete | Mark unread Star _ Undo Redo",
     "toolbar order: " + menuActs.toolbar);
   expectEnd(menuActs.reply.title === "Reply" && menuActs.replyAll === "Reply all" && menuActs.reply.to.includes(menuActs.rowFrom) && menuActs.find.term === `from:${menuActs.rowFrom}`,

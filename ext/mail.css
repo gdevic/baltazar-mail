@@ -130,12 +130,13 @@ body.dragging iframe { pointer-events: none; }
 .row .fr { color: var(--fg2); }
 .row .sb { color: var(--fg); }
 .row .sb em { font-style: normal; color: var(--fg2); font-size: calc(11 * var(--fu)); margin-left: 6px; }
-.row .tr { display: flex; align-items: center; visibility: hidden; color: var(--fg3); cursor: pointer; }
+/* the clickable area reaches half the icon's width past each side, and the row's full height */
+.row .tr { display: flex; align-items: center; align-self: stretch; padding: 0 calc(6.5 * var(--fu)); visibility: hidden; color: var(--fg3); cursor: pointer; }
 .row .tr svg { width: calc(13 * var(--fu)); height: calc(13 * var(--fu)); }
 .row .tr path { stroke-width: 1.4; }
 .row:hover .tr, .row.sel .tr, .row.marked .tr { visibility: visible; }
 .row .tr:hover { color: var(--accent); }
-.row .dt { display: flex; align-items: center; justify-content: flex-end; gap: calc(12 * var(--fu)); color: var(--fg3); font-family: var(--mono); font-size: calc(11 * var(--fu)); }
+.row .dt { display: flex; align-items: center; justify-content: flex-end; align-self: stretch; gap: calc(5.5 * var(--fu)); color: var(--fg3); font-family: var(--mono); font-size: calc(11 * var(--fu)); }
 .row.unread .fr, .row.unread .sb { color: var(--unread); font-weight: 600; }
 .row .sb mark { background: none; color: var(--accent); }
 .day { padding: 2px 8px; color: var(--fg3); font-size: calc(10 * var(--fu)); letter-spacing: .5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg2); position: sticky; top: 0; }
