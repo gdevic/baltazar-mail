@@ -33,9 +33,9 @@ All names, addresses and messages in these screenshots are invented; `node tools
 
 ## Install
 
-**Microsoft Edge:** install [Baltazar Mail from Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/baltazar-mail/fmfafokapbejponlbknighiecagfcnai). Edge keeps it up to date. Be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon.
+**Google Chrome:** install [Baltazar Mail from the Chrome Web Store](https://chromewebstore.google.com/detail/baltazar-mail/kkphbfhheikioedcgnjmeldabekdcnib). **Microsoft Edge:** install [Baltazar Mail from Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/baltazar-mail/fmfafokapbejponlbknighiecagfcnai). Either store keeps it up to date. Be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon.
 
-**Chrome and other Chromium browsers**, or to run a release before it reaches the store (Chrome or Edge 147 or later, or another browser built on Chromium 147 or later):
+**Other Chromium browsers**, or to run a release before it reaches the stores (Chrome or Edge 147 or later, or another browser built on Chromium 147 or later):
 
 1. Download `baltazar-mail-<version>.zip` from the [latest release](https://github.com/gdevic/baltazar-mail/releases/latest) and unzip it into a folder you will keep; it contains one folder, `baltazar-mail`.
 2. Open `chrome://extensions` (or `edge://extensions`) and turn on Developer mode.
@@ -44,7 +44,7 @@ All names, addresses and messages in these screenshots are invented; `node tools
 
 A copy installed this way says in Settings when a newer release is out. To update, put the new release's files into the same `baltazar-mail` folder, replacing the old ones, and click Reload on the extensions page. Windows' Extract All offers a new folder by default, so point it at the folder that contains `baltazar-mail` and confirm replacing the files; macOS's Archive Utility never replaces files, so use `unzip -o baltazar-mail-<version>.zip -d <that folder>` in Terminal. Loading the new release from a different folder, or removing the extension, would start over without its settings and address book. From a clone of this repository, load the `ext/` folder the same way.
 
-Moving from a ZIP install to the Edge Add-ons copy: the store copy is a separate extension, so set your preferences again once; its address book rebuilds itself from your mail. Then remove the ZIP copy so only one toolbar button remains.
+Moving from a ZIP install to a store copy: the store copy is a separate extension, so set your preferences again once; its address book rebuilds itself from your mail. Then remove the ZIP copy so only one toolbar button remains.
 
 **Microsoft Edge: keep the tab awake.** Baltazar Mail asks the browser not to discard its tab, which keeps Chrome's Memory Saver from unloading it. Edge also puts background tabs to sleep, pinned ones included, and a sleeping tab cannot check for new mail until you click it. To keep Baltazar Mail checking in Edge (and the new-mail dot working), add it to Edge's exception list once:
 
