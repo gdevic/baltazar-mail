@@ -53,7 +53,8 @@ const { launch } = require("./harness");
   const frameImgs = await page.frameLocator("#r-body").locator("img").evaluateAll(els => els.map(e => e.getAttribute("src") || ""));
   results.inlineParts = { partInlined: /^data:image\/png/.test(frameImgs[0] || ""), fromSource: /^data:image\/png/.test(frameImgs[1] || ""), proxyKept: frameImgs[2] === "https://ecp.yusercontent.com/p.png", hiddenFetched: mock.hiddenFetched,
     clips: await page.locator("#rows .row .fl").evaluateAll(els => els.map(e => e.innerHTML ? 1 : 0).join("")),
-    spacerHeight: await page.frameLocator("#r-body").locator("#spacer").evaluate(e => e.getBoundingClientRect().height) };
+    spacerHeight: await page.frameLocator("#r-body").locator("#spacer").evaluate(e => e.getBoundingClientRect().height),
+    spacer2Height: await page.frameLocator("#r-body").locator("#spacer2").evaluate(e => e.getBoundingClientRect().height) };
   results.originHeader = calls.find(c => c.name === "messages.getBody")?.origin;
   // keys pressed while the message has focus reach the app; scroll keys stay with the message
   const selIndex = () => page.locator("#rows .row").evaluateAll(rs => rs.findIndex(r => r.classList.contains("sel")));
@@ -655,7 +656,7 @@ const { launch } = require("./harness");
       hidN >= ab.filtered - 1 && ab.offRows === ab.filtered && /^Show (all )?\d+ again$/.test(ab.hiddenTabBulk) && Number(ab.afterEye) === hidN - 1 && ab.filterCleared === "" && ab.backOnMain &&
       new RegExp(`· ${hidN - 1} hidden from suggestions`).test(ab.summaryAfter) && ab.closed, "address book: " + JSON.stringify(ab));
   }
-  expect(results.inlineParts.partInlined && results.inlineParts.fromSource && results.inlineParts.clips.startsWith("00100") && results.inlineParts.spacerHeight <= 2 && results.inlineParts.proxyKept && !results.inlineParts.hiddenFetched, "inline images: " + JSON.stringify(results.inlineParts));
+  expect(results.inlineParts.partInlined && results.inlineParts.fromSource && results.inlineParts.clips.startsWith("00100") && results.inlineParts.spacerHeight <= 2 && results.inlineParts.spacer2Height <= 6 && results.inlineParts.proxyKept && !results.inlineParts.hiddenFetched, "inline images: " + JSON.stringify(results.inlineParts));
   expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(/^ui-monospace, Consolas, Menlo, .*monospace$/.test(results.vMono || ""), "renderer monospace stack: " + results.vMono);
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
@@ -699,10 +700,10 @@ const { launch } = require("./harness");
   expect(results.spam.dest === "6" && results.spam.undo.includes("as spam") && !results.spam.next.empty && results.spam.next.subject && results.spam.next.sel.startsWith(results.spam.next.subject) &&
     results.spam.undone.subject === results.spam.was && results.spam.undone.sel.startsWith(results.spam.was) &&
     !results.spam.elsewhere.empty && results.spam.elsewhere.subject === results.spam.next.subject && results.spam.elsewhere.sel.startsWith(results.spam.next.subject), "spam moves to Bulk: " + JSON.stringify(results.spam));
-  // The original's 7 attachments go by reference; its three inline images (Yahoo part, part taken
-  // from the message source, data: spacer) travel as uploaded inline parts.
+  // The original's 7 attachments go by reference; its four inline images (Yahoo part, part taken
+  // from the message source, two data: spacers) travel as uploaded inline parts.
   const refs = results.fwd.atts.filter(x => x.messageReference), inl = results.fwd.atts.filter(x => x.disposition === "inline");
-  expect(results.fwdChips.length === 7 && refs.length === 7 && refs[0].messageReference?.pid === "2" && inl.length === 3 && results.fwd.uri.includes("uploadCount=3&totalAttachments=10") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
+  expect(results.fwdChips.length === 7 && refs.length === 7 && refs[0].messageReference?.pid === "2" && inl.length === 4 && results.fwd.uri.includes("uploadCount=4&totalAttachments=11") && results.fwd.inReplyTo.forwarded, "forward with attachments: " + JSON.stringify(results.fwd));
   expect(results.palette === 16, "16 text colours");
   expect(results.fontInitial[0] === "Helvetica" && results.fontInitial[1] === "13" && results.fontAfter[0] === "Georgia" && results.fontAfter[1] === "18", "font controls track caret: " + JSON.stringify([results.fontInitial, results.fontAfter]));
   expect(results.noListOnOpen && results.listOnClick && results.noListAfterPick, "address list only on click: " + JSON.stringify([results.noListOnOpen, results.listOnClick, results.noListAfterPick]));
@@ -724,12 +725,12 @@ const { launch } = require("./harness");
   expect(!unexpectedHosts.size, "no request left for the real network: " + [...unexpectedHosts].join(", "));
   expect(results.slowLoad.rows > 0, "an action during a slow folder load leaves the folder filled: " + JSON.stringify(results.slowLoad));
   const de = results.draftEdit;
-  expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 3 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&
+  expect(de.chips === 7 && /report\.pdf/.test(de.names) && /deck\.pptx/.test(de.names) && de.imgSrcs.filter(s => s.startsWith("data:")).length === 4 && !de.imgSrcs.some(s => s.includes("cloud-apis")) &&
     ["2", "3", "6", "8"].every(p => de.refs.some(r => /^MSG3_\d+:/.test(r) && r.endsWith(":" + p))) && de.refs.length === 7 && !de.uploaded.some(n => !n.startsWith("inline-")) && !de.partLinks && de.closed,
     "editing a draft keeps its attachments, as references to its own parts, and its images: " + JSON.stringify(de));
   expect(de.inReplyTo === null, "a reopened draft drops a reply reference that is not a message id: " + JSON.stringify(de.inReplyTo));
   expect(de.overlay.present && de.overlay.position !== "fixed" && !de.overlay.coversApp, "a quoted box cannot cover the app: " + JSON.stringify(de.overlay));
-  expect(de.uploaded.filter(n => n.startsWith("inline-")).every(n => /\.(png|jpg|gif|webp|bmp)$/.test(n)) && de.uploaded.filter(n => n.startsWith("inline-")).length === 3, "only real images become inline parts, bad ones do not stop the save: " + JSON.stringify(de.uploaded));
+  expect(de.uploaded.filter(n => n.startsWith("inline-")).every(n => /\.(png|jpg|gif|webp|bmp)$/.test(n)) && de.uploaded.filter(n => n.startsWith("inline-")).length === 4, "only real images become inline parts, bad ones do not stop the save: " + JSON.stringify(de.uploaded));
   expect(results.afterSend.refreshed, "a folder change seen right after a send refreshes the list: " + JSON.stringify(results.afterSend));
   const sq = results.sendQueue;
   expect(/Queue B.*1 more message waiting/.test(sq.pending) && sq.leaveAsks, "two pending sends both wait, and leaving asks first: " + JSON.stringify(sq));

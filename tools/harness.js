@@ -117,8 +117,10 @@ async function launch(opts = {}) {
       const inline = `<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==${id}/content/parts/@.id==2/thumbnail&amp;appid=x&amp;pid=2">` +
         `<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==${id}/content/parts/@.id==5/thumbnail&amp;appid=x&amp;pid=5">` +
         `<img alt="x src='https://mail.yahoo.com/ws/v3/hidden-in-alt'" src="https://ecp.yusercontent.com/p.png">` +
-        // a layout spacer: a square PNG stretched by CSS, kept one pixel tall by its attributes
-        `<img id="spacer" style="min-width:640px;min-height:1px" width="640" height="1" src="data:image/png;base64,${thumbPng.toString("base64")}">`;
+        // layout spacers: a square PNG stretched by CSS, kept one pixel tall by its attributes, and
+        // one given its width in CSS and only its height as an attribute
+        `<img id="spacer" style="min-width:640px;min-height:1px" width="640" height="1" src="data:image/png;base64,${thumbPng.toString("base64")}">` +
+        `<img id="spacer2" style="width:100%;min-height:5px" height="5" src="data:image/png;base64,${thumbPng.toString("base64")}">`;
       // a white card with dark text, which the dark reader turns into a dark card with light text
       const card = `<div id="paper" style="background-color:#ffffff;color:#333333">Card</div>`;
       // Drafts also carry a quote a hostile sender could plant: a box over the whole window, a
