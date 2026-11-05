@@ -1264,6 +1264,9 @@ async function renderMessage(m, r, how = "user") {
   $("r-cc").innerHTML = addrHtml(h.cc);
   $("r-date").textContent = toDate(h.date)?.toLocaleString() || "";
   $("r-folder").textContent = noBidi(r.message.folder?.name);
+  const inTrash = rowInTrash(m);
+  $("r-delete").textContent = inTrash ? "Undelete" : "Delete";
+  $("r-delete").title = inTrash ? "Move this message to Inbox" : "Delete this message";
   const auto = autoImages(r.message);
   // images, and anything else that loads a picture: CSS backgrounds, SVG images, posters
   const hasImg = /<img\b|url\(|\bbackground\s*=|<image\b|\bposter\s*=|image-set\(/i.test(r.html);
@@ -1638,7 +1641,8 @@ async function doMove(ids, folderId, verb = "move") {
     updateFolderCounts();
     const n = plural(done.length, "message"), where = folderName(dest).split("/").pop();
     const words = { move: [`move ${n} to ${where}`, `moved ${n} to ${where}`], archive: [`archive ${n}`, `archived ${n}`], delete: [`delete ${n}`, `deleted ${n}`],
-      spam: [`mark ${n} as spam`, `marked ${n} as spam`], notspam: [`mark ${n} not spam`, `marked ${n} not spam, moved to Inbox`] }[verb];
+      spam: [`mark ${n} as spam`, `marked ${n} as spam`], notspam: [`mark ${n} not spam`, `marked ${n} not spam, moved to Inbox`],
+      undelete: [`restore ${n} to ${where}`, `restored ${n} to ${where}`] }[verb];
     status(words[1], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
     pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null, count: done.length,
@@ -1666,6 +1670,11 @@ async function doArchive(ids) {
   const f = folderByType("ARCHIVE"); if (!f) { status("no Archive folder"); return; }
   await doMove(ids, f.id, "archive");
 }
+
+// Undelete moves the reader's message from Trash to Inbox: Trash keeps no record of where a
+// message came from, and Inbox is where it is found again.
+const rowInTrash = m => folderType(state.byId.get(m?.folder?.id)) === "TRASH";
+const doUndelete = id => doMove([id], inboxId(), "undelete");
 
 // Delete moves to Trash. Permanent deletion only while viewing the Trash folder itself.
 async function doDelete(ids) {
@@ -2316,6 +2325,7 @@ viewer.init({ thumb: thumbFor, raw: api.rawMessage, docPages: api.docPages, clea
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;
+$("r-delete").onclick = () => { const id = state.openId; if (id) run(() => rowInTrash(byIds([id])[0]) ? doUndelete(id) : doDelete([id])); };
 $("r-dark").onclick = toggleReaderColours;
 $("compose-btn").onclick = () => startCompose("new");
 for (const b of document.querySelectorAll("[data-reply]")) b.onclick = () => startCompose(b.dataset.reply);
