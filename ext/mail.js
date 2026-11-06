@@ -2253,6 +2253,7 @@ async function poll() {
 async function checkUpdate() {
   const have = chrome.runtime.getManifest().version, note = $("update-note");
   $("app-version").textContent = `Baltazar Mail ${have}`;
+  $("app-repo").href = update.REPO;
   if (!await loadedFromZip()) return;
   const v = await update.latest().catch(() => null);
   const avail = !!v && update.newer(v, have);
