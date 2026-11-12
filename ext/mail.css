@@ -34,6 +34,9 @@ body.dragging iframe { pointer-events: none; }
 #app-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 2px; }
 #app-version { font-weight: 600; flex: 1; }
 #app-repo { font-size: 12px; }
+/* Sign out sits up here, small and away from Close, as a link-like action, so it is not hit by accident. */
+#signout { font-size: 12px; background: none; border: 0; padding: 0; color: var(--fg2); text-decoration: underline; }
+#signout:hover { color: var(--fg); }
 #update-note { margin: 10px 0 0; padding: 6px 8px; border-left: 3px solid var(--accent); }
 /* Modal overlays sit above every popover (search help, cards, menus, suggestions). */
 #settings { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; }

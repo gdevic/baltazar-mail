@@ -75,7 +75,7 @@ Search terms (7 terms, 14 words): gmail; gmail client; email client; webmail; ad
 
 ## Notes for certification
 
-> To test: click the Baltazar Mail for Gmail toolbar button, then Sign in with Google with any Google account (the reviewer's own, or a test account; nothing in the account is changed unless the reviewer moves, deletes or sends mail). Things to try: open a label and a message, search (the ? next to the search box explains the syntax), open an attachment from the strip under a message, write a message to yourself with New message, and open Settings with the gear button, where Sign out revokes the sign-in.
+> To test: click the Baltazar Mail for Gmail toolbar button, then Sign in with Google with any Google account (the reviewer's own, or a test account; nothing in the account is changed unless the reviewer moves, deletes or sends mail). Things to try: open a label and a message, search (the ? next to the search box explains the syntax), open an attachment from the strip under a message, write a message to yourself with New message, and open Settings with the gear button, where Sign out (at the top right, after a confirmation) revokes the sign-in.
 >
 > How it works: the extension uses the Gmail API (gmail.googleapis.com) with an OAuth 2.0 token obtained through chrome.identity's web auth flow from Google's own sign-in page; it never sees or stores the password. The token lives in session storage and is renewed silently; the extension never opens Google's window except when the sign-in button is clicked.
 >

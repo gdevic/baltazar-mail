@@ -2144,14 +2144,16 @@ function wireSettings() {
   };
   $("density").onchange = () => { settings.rowPct = Math.min(150, Math.max(80, Math.round((Number($("density").value) || 100) / 5) * 5)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
-  // A provider the extension signs in to itself (Gmail) can be signed out of here. The address
-  // book goes with the sign-in, and the page loads afresh, so nothing of the mailbox stays in
-  // memory; the sign-in panel then asks again.
+  // A provider the extension signs in to itself (Gmail) can be signed out of here, after a
+  // confirmation, since it withdraws the permission at Google. The address book goes with the
+  // sign-in, and the page loads afresh, so nothing of the mailbox stays in memory; the sign-in
+  // panel then asks again.
   if (api.signOut) {
     $("signout").classList.remove("hidden");
     $("signout").onclick = async () => {
+      if (pendingSends.length) { openSettings(false); status("not signed out: a message is still waiting to be sent"); return; }
+      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google and its address book is cleared.`)) return;
       openSettings(false);
-      if (pendingSends.length) { status("not signed out: a message is still waiting to be sent"); return; }
       if (!(await compose.close(true))) return;
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
       await contacts.clear().catch(() => {});

@@ -292,8 +292,15 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForTimeout(500);
   results.newMail = { title: await page.title(), unread: [...gmail.messages.values()].filter(m => m.labelIds.includes("INBOX") && m.labelIds.includes("UNREAD")).length, dotted: dotted.slice(0, 22), listed: await page.locator("#rows .row .sb", { hasText: "Fresh mail" }).count(), history: gmail.calls.filter(c => c.path === "/history").length > 0 };
 
-  // sign out: the token is revoked and forgotten, the sign-in page comes back
+  // sign out: asked first, and Cancel changes nothing; once confirmed the token is revoked and
+  // forgotten, and the sign-in page comes back
   await page.locator("#list").focus(); await page.keyboard.press(",");
+  let asked = "";
+  page.once("dialog", d => { asked = d.message(); d.dismiss(); });
+  await page.locator("#signout").click();
+  await page.waitForTimeout(500);
+  results.signOutDeclined = { asked, settings: await page.locator("#settings").isVisible(), app: await page.locator("#app").isVisible(), revoked: gmail.calls.some(c => c.path === "/revoke") };
+  page.once("dialog", d => d.accept());
   await page.locator("#signout").click();
   await page.waitForSelector("#signin:not(.hidden)", { timeout: 8000 });
   results.signOut = { panel: await page.locator("#signin-none").isVisible(), app: await page.locator("#app").isHidden(), revoked: gmail.calls.some(c => c.path === "/revoke"), token: await page.evaluate(async () => (await chrome.storage.session.get("gmToken")).gmToken ?? null) };
@@ -345,6 +352,8 @@ const { FX } = require("./gmail-mock.js");
   expect(/^\d+ addresses learned from Inbox and Sent/.test(results.ab.summary) && results.ab.signOut && /^Baltazar Mail for Gmail \d+\.\d+\.\d+$/.test(results.ab.version), "address book and the sign-out button: " + JSON.stringify(results.ab));
   const nm = results.newMail;
   expect(nm.title === `(${nm.unread}) Baltazar Mail for Gmail` && nm.unread >= 1 && nm.dotted === "data:image/png;base64," && nm.listed === 1 && nm.history, "new mail through history: " + JSON.stringify(nm));
+  const sk = results.signOutDeclined;
+  expect(/^Sign out of me@gmail\.com\? /.test(sk.asked) && sk.settings && sk.app && !sk.revoked, "sign out asks first, and Cancel keeps the sign-in: " + JSON.stringify(sk));
   const so = results.signOut;
   expect(so.panel && so.app && so.revoked && so.token === null, "sign out: " + JSON.stringify(so));
   // Blocked on purpose: the sandbox's own fetch (tried above), images where the reader has them
