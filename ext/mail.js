@@ -7,6 +7,7 @@ import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { esc, noBidi } from "./text.js";
+import { cleanLink } from "./links.js";
 
 const $ = id => document.getElementById(id);
 // The extension's name as its manifest gives it: this client serves more than one extension.
@@ -16,7 +17,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, images: "safe", readerOriginal: false, messageZoom: 100, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, images: "safe", links: "asis", readerOriginal: false, messageZoom: 100, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -939,13 +940,22 @@ let markReadTimer = null;
 const purify = globalThis.DOMPurify;
 // A link's target resolves against the app's page, so only absolute web, mail and phone links keep
 // theirs: a relative one would open an extension page. An in-message anchor scrolls the message
-// (see setFrame).
+// (see setFrame). With the links setting at "clean", a web link loses its tracking (see links.js),
+// and so does its text when that is the link written out, as in plain-text mail. Only mail is
+// cleaned this way (cleanHtml); HTML pasted into the composer, which shares this hook, is not.
 const LINK_OK = /^(https?:\/\/|mailto:|tel:)/i;
+let cleaningLinks = false;
 purify.addHook("afterSanitizeAttributes", node => {
   if ((node.localName === "a" || node.localName === "area") && (node.hasAttribute("href") || node.hasAttribute("xlink:href"))) {
     const href = (node.getAttribute("href") ?? node.getAttribute("xlink:href") ?? "").trim();
     if (/^#[^#]*$/.test(href) && node.localName === "a") { node.removeAttribute("target"); return; }
     if (!LINK_OK.test(href)) { node.removeAttribute("href"); node.removeAttribute("xlink:href"); node.removeAttribute("target"); return; }
+    const clean = cleaningLinks ? cleanLink(href) : href;
+    if (clean !== href) {
+      node.setAttribute(node.hasAttribute("href") ? "href" : "xlink:href", clean);
+      const t = node.firstChild;
+      if (node.childNodes.length === 1 && t.nodeType === Node.TEXT_NODE && t.data.trim() === href) t.data = t.data.replace(href, clean);
+    }
     node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer");
   }
   if (node.tagName === "IMG" && !node.style.aspectRatio) {
@@ -955,7 +965,9 @@ purify.addHook("afterSanitizeAttributes", node => {
   }
 });
 function cleanHtml(html) {
-  return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] });
+  cleaningLinks = settings.links === "clean";
+  try { return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] }); }
+  finally { cleaningLinks = false; }
 }
 
 // Inline images (cid parts of the message) cannot be loaded by the sandboxed frame, which has no
@@ -1197,7 +1209,9 @@ function setFrame(doc, bg = "#fff") {
   old.replaceWith(f);
 }
 
+// r.source keeps the HTML as the provider gave it, for relinkBody.
 async function renderMessage(m, r, how = "user") {
+  r.source = r.html;
   r.html = cleanHtml(r.html);
   currentBody = r;
   const h = r.message.headers || {};
@@ -1243,6 +1257,18 @@ async function loadImages() {
   const id = state.openId;
   currentBody.html = await inlineImages(currentBody.html, currentBody);
   if (state.openId === id) { showBody(true); $("r-images").classList.add("hidden"); }
+}
+
+// A change to the links setting redraws the open message at once, so a link that cleaning broke
+// can be had as the sender wrote it without opening the message again.
+async function relinkBody() {
+  const body = currentBody;
+  if (!body || !state.openId) return;
+  let html = cleanHtml(body.source);
+  if (bodyImages) html = await inlineImages(html, body);
+  if (currentBody !== body) return;
+  body.html = html;
+  showBody();
 }
 
 const READER_EMPTY = "Select a message to read it. Press ? for keyboard shortcuts.";
@@ -2105,7 +2131,7 @@ function wireSettings() {
   };
   $("contrast").onchange = () => { settings.contrast = clampContrast($("contrast").value); applySettings(); saveSettings(); };
   for (const el of document.querySelectorAll("#settings input[type=radio]"))
-    el.onchange = () => { settings[el.name] = el.value; applySettings(); saveSettings(); };
+    el.onchange = () => { settings[el.name] = el.value; applySettings(); saveSettings(); if (el.name === "links") relinkBody(); };
   $("poll").onchange = () => { settings.pollSec = Math.max(5, Number($("poll").value) || 20); applySettings(); saveSettings(); };
   $("composeFont").onchange = () => { settings.composeFont = $("composeFont").value; saveSettings(); };
   $("composeSize").onchange = () => { settings.composeSize = Number($("composeSize").value) || 13; saveSettings(); };

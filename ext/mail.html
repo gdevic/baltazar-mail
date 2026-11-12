@@ -155,6 +155,9 @@
     <label><input type="radio" name="images" value="safe"> Load automatically, except in Spam and Trash</label>
     <label><input type="radio" name="images" value="always"> Load automatically everywhere</label>
     <label><input type="radio" name="images" value="never"> Only when asked (i key or button)</label>
+    <b>Links in messages</b>
+    <label title="Drops tags such as utm_source, fbclid and mc_eid, and takes the destination out of redirects that carry it (Google, Facebook, Outlook SafeLinks, Substack). Links through a mailing service's own click tracker cannot be cleaned without visiting them, and stay as they are."><input type="radio" name="links" value="clean"> Remove tracking (utm_ and similar tags, known redirects)</label>
+    <label><input type="radio" name="links" value="asis"> Leave as the sender wrote them</label>
     <b>Behaviour</b>
     <label><input type="number" id="poll" min="5" max="600" step="5" style="width:60px"> seconds between new-mail checks</label>
     <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>

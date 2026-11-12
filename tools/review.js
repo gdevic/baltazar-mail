@@ -128,6 +128,30 @@ scenario("relative links cannot open extension pages", async (h, expect) => {
   await p.close();
 }, { allow: /Blocked script execution in 'about:srcdoc'/ });   // Playwright's own click in the frame
 
+scenario("links lose their tracking only when the setting asks, and the open message follows", async (h, expect) => {
+  const { page } = h;
+  const tracked = "https://example.com/story?id=7&utm_source=news&fbclid=x", plain = "https://example.com/story?id=7";
+  const wrapped = "https://www.google.com/url?q=https%3A%2F%2Fexample.org%2Fp%3Futm_medium%3Demail&sa=D";
+  const share = "https://www.facebook.com/sharer.php?u=https%3A%2F%2Fexample.com%2F";
+  const attr = s => s.replace(/&/g, "&amp;");
+  h.mock.patchBody = (id, m, body) => { if (id.startsWith("MSG1_")) body.html += `<a id="t-utm" href="${attr(tracked)}">${attr(tracked)}</a> <a id="t-wrap" href="${attr(wrapped)}">wrapped</a> <a id="t-share" href="${attr(share)}">share</a>`; };
+  const read = () => page.frameLocator("#r-body").locator("a[id^=t-]").evaluateAll(as => Object.fromEntries(as.map(a => [a.id, { href: a.getAttribute("href"), text: a.textContent }])));
+  const choose = async value => { await page.click("#gear"); await page.click(`input[name=links][value=${value}]`); await page.waitForTimeout(700); await page.click("#settings-close"); };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(700);
+  const before = await read();
+  expect(before["t-utm"]?.href === tracked && before["t-wrap"]?.href === wrapped && before["t-utm"]?.text === tracked, "by default links stay as written: " + JSON.stringify(before));
+  await choose("clean");
+  const after = await read();
+  expect(after["t-utm"]?.href === plain && after["t-utm"]?.text === plain, "a tracked link and its written-out text are cleaned in the open message: " + JSON.stringify(after["t-utm"]));
+  expect(after["t-wrap"]?.href === "https://example.org/p" && after["t-wrap"]?.text === "wrapped", "a Google redirect is unwrapped and cleaned, its text kept: " + JSON.stringify(after["t-wrap"]));
+  expect(after["t-share"]?.href === share, "a share link keeps its destination parameter: " + JSON.stringify(after["t-share"]));
+  const stored = await page.evaluate(async () => (await chrome.storage.local.get("settings")).settings.links);
+  expect(stored === "clean", "the choice is saved: " + stored);
+  await choose("asis");
+  const again = await read();
+  expect(again["t-utm"]?.href === tracked && again["t-wrap"]?.href === wrapped, "back to as written, again in place: " + JSON.stringify(again));
+});
+
 // ---------- attachments ----------
 scenario("a previewed file's type comes from its name, not the sender", async ({ page, mock }, expect) => {
   mock.patchBody = (id, m) => { if (id.startsWith("MSG1_")) { m.attachments[3].filename = "pic.avif"; m.attachments[3].subtype = "avif"; } };

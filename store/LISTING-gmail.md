@@ -55,7 +55,7 @@ Description:
 
 > Baltazar Mail for Gmail is a fast, clean, ad-free way to read and write your Gmail. It opens in its own tab; click Sign in with Google once, and Google's own page asks which account and what permission, then the extension keeps you signed in while the browser does.
 >
-> Reading: a three-column or stacked layout with resizable panes, sixteen light and dark palettes in different hues with a contrast slider, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their hues and leaving images untouched. Your labels are the folders, nested as you named them, and a Starred view collects starred mail from every one of them but Spam and Trash.
+> Reading: a three-column or stacked layout with resizable panes, sixteen light and dark palettes in different hues with a contrast slider, an adjustable text size, and a dark reading pane that darkens messages to match while keeping their hues and leaving images untouched. Your labels are the folders, nested as you named them, and a Starred view collects starred mail from every one of them but Spam and Trash. Links in messages can be cleaned of tracking tags and of redirects that carry their destination.
 >
 > Mailbox: mark messages read or unread, star, archive, move, delete or report them as spam, one at a time or as a selection, with multi-level undo and redo. Labels can be created, renamed, moved and nested, empty ones deleted, and Trash and Spam emptied, all from a right-click menu.
 >

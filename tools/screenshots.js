@@ -341,13 +341,21 @@ function listFor(q) {
   if (!STORE) await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
   await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent));
   await page.waitForTimeout(300);
-  // At the store's 800 px the panel scrolls; show it from the Layout heading to the buttons, as a
-  // slightly taller window would, so no section is cut.
+  // At the store's 800 px the panel scrolls; show it from the first section heading from which the
+  // rest, down to the buttons, fits the window, as a slightly taller window would, so no section
+  // below it is cut. The README's window grows instead until the whole panel fits under its 90vh cap.
   if (STORE) await page.locator("#settings-box").evaluate(e => {
-    const top = e.querySelector("#settings-main > b").getBoundingClientRect().top - e.getBoundingClientRect().top - 16;
+    const box = e.getBoundingClientRect().top - e.scrollTop;
+    // 16 px above the heading, but nothing of the row before it
+    const tops = [...e.querySelectorAll("#settings-main > b")].map(b => Math.max(b.getBoundingClientRect().top - 16, b.previousElementSibling.getBoundingClientRect().bottom) - box);
+    const top = tops.find(t => e.scrollHeight - t + 2 <= innerHeight - 20) ?? tops.at(-1);
     e.style.maxHeight = (e.scrollHeight - top) + "px";
     e.scrollTop = top;
   });
+  else {
+    const need = await page.locator("#settings-box").evaluate(e => e.scrollHeight + 2);   // with its borders
+    if (need > 0.9 * H) { await page.setViewportSize({ width: W, height: Math.ceil(need / 0.9) + 1 }); await page.waitForTimeout(300); }
+  }
   const box = await page.locator("#settings-box").boundingBox(), pad = 16;
   // The store takes whole windows only; the README shows the panel alone.
   await page.screenshot({ path: path.join(OUT, "settings.png"), ...(STORE ? {} : { clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } }) });
