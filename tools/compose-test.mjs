@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // ext/compose.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { parseAddrs, replyRecipients, linkTarget } = await import("../dist/baltazar-mail-yahoo/compose.js");
+const { parseAddrs, replyRecipients, linkTarget, sentSize } = await import("../dist/baltazar-mail-yahoo/compose.js");
 
 let fail = 0;
 const eq = (got, want, what) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g !== w) { fail++; console.log("FAIL", what, "got", g, "want", w); } };
@@ -27,5 +27,14 @@ for (const [input, want] of [["https://x.org/a?b=1", "https://x.org/a?b=1"], ["H
   ["www.example.co.uk/path#top", "https://www.example.co.uk/path#top"], ["host.example.com:8080/x", "https://host.example.com:8080/x"], ["me@example.com", "mailto:me@example.com"],
   ["mailto:me@example.com", "mailto:me@example.com"], [" spaced.org ", "https://spaced.org"], ["not a link", null], ["javascript:alert(1)", null], ["localhost", null], ["", null]])
   eq(linkTarget(input), want, `link target for ${JSON.stringify(input)}`);
+// the size a picture shown smaller is sent at: twice the shown width, never more than its own
+eq(sentSize(4000, 3000, null), null, "a picture with no width of its own goes whole");
+eq(sentSize(4000, 3000, 400), { w: 800, h: 600 }, "shown at a tenth, sent at twice that");
+eq(sentSize(800, 600, 200), { w: 400, h: 300 }, "shown at a quarter, sent at half");
+eq(sentSize(800, 600, 400), null, "shown at half, twice that is the whole picture");
+eq(sentSize(800, 600, 640), null, "shown wider than half goes whole");
+eq(sentSize(1001, 333, 100), { w: 200, h: 67 }, "the height is rounded");
+eq(sentSize(5000, 2, 24), { w: 48, h: 1 }, "never less than one pixel high");
+eq(sentSize(0, 0, 200), null, "a picture with no size of its own goes whole");
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

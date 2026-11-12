@@ -113,6 +113,12 @@
     <div id="c-body">
       <div id="c-editor" contenteditable="true" spellcheck="true"></div>
       <textarea id="c-text" class="hidden" spellcheck="true"></textarea>
+      <div id="c-imgframe" class="hidden"><div id="c-imghandle" title="Drag to resize"></div></div>
+      <div id="c-imgbar" class="hidden">
+        <button data-w="200" title="200 pixels wide">Small</button><button data-w="400" title="400 pixels wide">Medium</button><button data-w="640" title="640 pixels wide">Large</button><button data-w="0" title="The picture's own size">Original</button>
+        <span id="c-imgsize"></span>
+        <button id="c-imgdel" title="Remove the picture (Delete; Ctrl+Z brings it back)">Delete</button>
+      </div>
     </div>
     <div id="c-suggest" class="hidden"></div>
   </section>
@@ -151,6 +157,8 @@
     <b>Writing</b>
     <label>Default font <select id="composeFont"></select></label>
     <label>Default size <select id="composeSize"><option>10</option><option>11</option><option>12</option><option>13</option><option>14</option><option>15</option><option>16</option><option>18</option><option>20</option></select> px</label>
+    <label><input type="radio" name="scaledImages" value="full"> Pictures made smaller are sent whole (they can be opened at full size)</label>
+    <label title="A picture made smaller is sent at twice its shown width, sharp on high-density screens; GIFs are sent whole so they keep their animation. Drafts keep the whole picture."><input type="radio" name="scaledImages" value="shrink"> Pictures made smaller are sent at the size shown (a smaller message)</label>
     <b>Images in messages</b>
     <label><input type="radio" name="images" value="safe"> Load automatically, except in Spam and Trash</label>
     <label><input type="radio" name="images" value="always"> Load automatically everywhere</label>

@@ -76,7 +76,10 @@ async function launch(opts = {}) {
     const jsonM = post.match(/name="batchJson"\r\n\r\n([\s\S]*?)\r\n--/);
     const envelope = jsonM ? JSON.parse(jsonM[1]) : null;
     const fileParts = [...post.matchAll(/name="([^"]+)"; filename="([^"]+)"/g)].map(m => [m[1], m[2]]);
-    calls.push({ name, origin: headers.origin, envelope, fileParts });
+    // each uploaded PNG's width, from its IHDR chunk, by file name
+    const bin = (req.postDataBuffer() || Buffer.alloc(0)).toString("latin1");
+    const pngWidths = Object.fromEntries([...bin.matchAll(/filename="([^"]+)"[^\r\n]*(?:\r\n[^\r\n]+)*\r\n\r\n\x89PNG/g)].map(m => [m[1], Buffer.from(bin.slice(m.index + m[0].length + 12, m.index + m[0].length + 16), "latin1").readUInt32BE(0)]));
+    calls.push({ name, origin: headers.origin, envelope, fileParts, pngWidths });
     const top = envelope?.requests?.[0] || {};
     const uri = top.uri || "";
     if (name === "messageGroups.getList" && mock.listDelay) await new Promise(r => setTimeout(r, mock.listDelay));

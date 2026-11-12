@@ -152,8 +152,7 @@ export function init(h) {
     if (imgs.length) { placeCaretAt(e.clientX, e.clientY); insertImages(imgs); }
     if (rest.length) { addFiles(rest); hooks.status(`attached ${rest.length} file${rest.length === 1 ? "" : "s"}`); }
   });
-  ed.addEventListener("click", e => { ed.querySelectorAll("img.sel").forEach(i => i.classList.remove("sel")); if (e.target.tagName === "IMG") e.target.classList.add("sel"); });
-  ed.addEventListener("keydown", e => { const sel = ed.querySelector("img.sel"); if (sel && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); sel.remove(); dirty = true; } });
+  initPictureTools(ed);
   // Enter inside the quoted original splits the quote, so what is typed next is the user's own
   // text between quoted parts, not more quoted text.
   ed.addEventListener("keydown", e => {
@@ -331,7 +330,7 @@ export async function close(save = true) {
     hooks.status("message saved to Drafts");
   }
   clearInterval(autosaveTimer);
-  hideSuggest();
+  hideSuggest(); unpick();
   $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null;
   hooks.clearNotice("compose");
   hooks.onClose();
@@ -357,6 +356,7 @@ export function applyZoom() {
 }
 
 function setMode(html) {
+  unpick();
   draft.html = html;
   $("c-mode").value = html ? "html" : "text";
   $("c-editor").classList.toggle("hidden", !html);
@@ -631,6 +631,162 @@ async function insertImages(files) {
   dirty = true;
 }
 
+// ---------- pictures in the message ----------
+// A picture clicked in the editor gets a frame with a corner handle that drags its size, and a bar
+// below it with preset widths, its size in the message and Delete. The tools sit beside the
+// editor in its scrolled box, outside the editable area, so they move with the text and never go
+// out with the message. A size is a width in the message; the picture itself goes whole, unless
+// the scaledImages setting asks for it to be sent at that size (sentSize).
+const MIN_PICTURE = 24;
+let picked = null, pictureWatch = null;
+
+function initPictureTools(ed) {
+  const bar = $("c-imgbar"), handle = $("c-imghandle");
+  pictureWatch = new ResizeObserver(() => placePictureTools());
+  pictureWatch.observe(ed);
+  ed.addEventListener("click", e => { if (e.target.tagName === "IMG" && ed.contains(e.target)) pick(e.target); else unpick(); });
+  ed.addEventListener("input", () => unpick());
+  // Delete and Backspace remove the picture, Escape lets it go (the composer stays open), and any
+  // other key goes to the text.
+  ed.addEventListener("keydown", e => {
+    if (!picked || ["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removePicked(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); unpick(); }
+    else unpick();
+  });
+  // for the mouse, like the toolbar: the caret stays in the text
+  for (const el of [...bar.querySelectorAll("button"), handle]) { el.tabIndex = -1; el.addEventListener("mousedown", e => e.preventDefault()); }
+  bar.onclick = e => {
+    const b = e.target.closest("button"); if (!b || !picked) return;
+    if (b.id === "c-imgdel") removePicked(); else setWidth(picked, Number(b.dataset.w));
+  };
+  // Dragging keeps the picture no wider than itself, nor than the block it sits in shows it.
+  handle.onpointerdown = e => {
+    if (!picked || e.button !== 0) return;
+    e.preventDefault();
+    const img = picked, zoom = Number(ed.style.zoom) || 1, x0 = e.clientX;
+    const start = img.getBoundingClientRect().width / zoom;
+    let box = img.parentElement;
+    while (box !== ed && getComputedStyle(box).display.startsWith("inline")) box = box.parentElement;
+    const bs = getComputedStyle(box), room = box.getBoundingClientRect().width / zoom - parseFloat(bs.paddingLeft) - parseFloat(bs.paddingRight);
+    const max = Math.min(img.naturalWidth, Math.floor(room));
+    handle.setPointerCapture(e.pointerId);
+    handle.onpointermove = m => setWidth(img, Math.min(max, Math.max(MIN_PICTURE, start + (m.clientX - x0) / zoom)));
+    handle.onpointerup = handle.onpointercancel = () => { handle.onpointermove = handle.onpointerup = handle.onpointercancel = null; };
+  };
+}
+
+function pick(img) {
+  if (picked !== img) { unpick(); picked = img; pictureWatch.observe(img); }
+  $("c-imgframe").classList.remove("hidden"); $("c-imgbar").classList.remove("hidden");
+  placePictureTools();
+}
+function unpick() {
+  if (picked) pictureWatch?.unobserve(picked);
+  picked = null;
+  $("c-imgframe").classList.add("hidden"); $("c-imgbar").classList.add("hidden");
+}
+
+// The frame over the picked picture and the bar under it, in the scrolled box's own coordinates.
+// A picture with no size of its own (held back, or broken) can only be deleted.
+function placePictureTools() {
+  if (!picked) return;
+  const ed = $("c-editor"), body = $("c-body"), frame = $("c-imgframe"), bar = $("c-imgbar");
+  if (!picked.isConnected || !ed.contains(picked)) { unpick(); return; }
+  const r = picked.getBoundingClientRect(), b = body.getBoundingClientRect();
+  const left = r.left - b.left + body.scrollLeft, top = r.top - b.top + body.scrollTop;
+  Object.assign(frame.style, { left: `${left}px`, top: `${top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  const nw = picked.naturalWidth, nh = picked.naturalHeight, shown = shownWidth(picked);
+  $("c-imghandle").classList.toggle("hidden", !nw);
+  for (const btn of bar.querySelectorAll("button[data-w]")) {
+    const w = Number(btn.dataset.w);
+    btn.classList.toggle("hidden", !nw);
+    btn.disabled = w > 0 && w >= nw;
+    btn.classList.toggle("on", w ? shown === w : shown == null);
+  }
+  const w = shown ?? nw;
+  $("c-imgsize").textContent = nw ? `${w} × ${Math.max(1, Math.round(nh * w / nw))}` : "";
+  bar.style.left = `${Math.max(0, Math.min(left, body.scrollLeft + body.clientWidth - bar.offsetWidth - 4))}px`;
+  bar.style.top = `${top + r.height + 6}px`;
+}
+
+// The width a picture is given in the message, in pixels, or null when it has none of its own.
+// A width in the style wins over the attribute, as it does when the message is shown.
+function shownWidth(img) {
+  const s = img.style.width, a = img.getAttribute("width")?.trim() || "";
+  const px = s ? (/^\d+(\.\d+)?px$/.test(s) ? parseFloat(s) : null) : /^\d+$/.test(a) ? Number(a) : null;
+  return px ? Math.round(px) : null;
+}
+
+// Sets the width the picture is shown at, in the style and, for mail programs that read only
+// those, in the width and height attributes; no width, or one not smaller than the picture's own,
+// gives the picture its own size.
+function setWidth(img, w) {
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  if (!nw) return;
+  w = Math.round(w);
+  if (!w || w >= nw) {
+    img.style.removeProperty("width"); img.style.removeProperty("height");
+    img.removeAttribute("width"); img.removeAttribute("height");
+    if (!img.getAttribute("style")?.trim()) img.removeAttribute("style");
+  } else {
+    w = Math.max(MIN_PICTURE, w);
+    img.style.width = `${w}px`; img.style.height = "auto";
+    img.setAttribute("width", String(w)); img.setAttribute("height", String(Math.max(1, Math.round(nh * w / nw))));
+  }
+  dirty = true;
+  placePictureTools();
+}
+
+// Through the editor's own delete, so Ctrl+Z brings the picture back.
+function removePicked() {
+  const img = picked; if (!img) return;
+  unpick();
+  const ed = $("c-editor"), sel = getSelection(), r = document.createRange();
+  ed.focus();
+  r.selectNode(img); sel.removeAllRanges(); sel.addRange(r);
+  document.execCommand("delete", false);
+  if (ed.contains(img)) img.remove();
+  dirty = true;
+}
+
+// The size a picture of nw × nh pixels is sent at when it is shown `shown` pixels wide: twice that
+// width, which stays sharp on high-density screens, never more than its own. null: sent whole.
+export function sentSize(nw, nh, shown) {
+  if (!(nw > 0 && nh > 0 && shown > 0)) return null;
+  const w = Math.min(nw, Math.round(2 * shown));
+  return w < nw ? { w, h: Math.max(1, Math.round(nh * w / nw)) } : null;
+}
+
+// The formats a smaller picture is written in, by the picture's own; a GIF is not re-encoded, as
+// that would lose its animation.
+const SHRINK_TO = { "image/jpeg": "image/jpeg", "image/webp": "image/webp", "image/png": "image/png", "image/bmp": "image/png" };
+// A picture of the message's own (a data: URL) re-encoded at its sentSize, as a data: URL, or null
+// when it goes as it is. The new one carries none of the photo's metadata, location included.
+function shrunk(img) {
+  const src = img.getAttribute("src") || "", type = SHRINK_TO[src.match(/^data:([^;,]*)/i)?.[1].toLowerCase()];
+  if (!type || !img.complete) return null;
+  const size = sentSize(img.naturalWidth, img.naturalHeight, shownWidth(img)); if (!size) return null;
+  const c = document.createElement("canvas"); c.width = size.w; c.height = size.h;
+  const g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(img, 0, 0, size.w, size.h);
+  const out = type === "image/png" ? c.toDataURL(type) : c.toDataURL(type, 0.85);
+  return out.length < src.length ? out : null;
+}
+// The editor's HTML for sending; with shrink, each picture shown smaller goes at that size. The
+// editor keeps the whole pictures, for a send that is undone.
+function editorHtml(shrink) {
+  const ed = $("c-editor");
+  if (!shrink) return ed.innerHTML;
+  const smaller = new Map();
+  ed.querySelectorAll("img").forEach((img, i) => { const src = shrunk(img); if (src) { img.dataset.shrunk = String(i); smaller.set(String(i), src); } });
+  if (!smaller.size) return ed.innerHTML;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = ed.innerHTML;
+  for (const img of ed.querySelectorAll("img[data-shrunk]")) img.removeAttribute("data-shrunk");
+  for (const img of tpl.content.querySelectorAll("img[data-shrunk]")) { img.setAttribute("src", smaller.get(img.dataset.shrunk)); img.removeAttribute("data-shrunk"); }
+  return tpl.innerHTML;
+}
+
 // Returns { html, inline } with data: images replaced by cid: references and their bytes as Files.
 // A data: URL's bytes and their image format, or null. Only real images, typed by their bytes,
 // travel as inline parts: a quoted message can carry data: URLs of any type, which would go out
@@ -849,7 +1005,9 @@ function collect(upload = false) {
   if (draft.html) {
     // Images in the quoted original travel as new inline parts too, so recipients see them.
     const f = defaultFont();
-    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${$("c-editor").innerHTML.replaceAll(CARET_HOLD, "")}</div>`, new Set(draft.files.map(x => x.name)));
+    // A draft keeps whole pictures, so one made smaller can still be made larger when reopened.
+    const shrink = upload && hooks.settings().scaledImages === "shrink";
+    const { html, inline } = extractInline(`<div style="font-family:${f.family};font-size:${f.size}px">${editorHtml(shrink).replaceAll(CARET_HOLD, "")}</div>`, new Set(draft.files.map(x => x.name)));
     d.html = html;
     d.inline = inline;
   } else d.text = $("c-text").value;
@@ -915,7 +1073,7 @@ async function send() {
   // A save still in flight may give the message its lasting csid and saved id (Gmail's first save
   // creates the draft); the send and a composer reopened after a cancel take them once it settles.
   const settle = async () => { await saved(); d.csid = snapshot.csid = mine.csid; snapshot.savedId = mine.savedId; };
-  clearInterval(autosaveTimer);
+  clearInterval(autosaveTimer); unpick();
   $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; dirty = false;
   hooks.clearNotice("compose");
   hooks.onClose();

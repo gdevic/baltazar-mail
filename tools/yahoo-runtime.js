@@ -457,6 +457,66 @@ const { launch } = require("./harness");
   results.readerBack = await page.locator("#reader").isVisible();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "runtime.png") }).catch(() => {});
 
+  // pictures in the message: a clicked one gets a size bar and a corner handle, Escape lets it go
+  // and keeps the composer open, Delete goes through the editor's undo; a picture made smaller is
+  // sent whole, or at twice its shown width when Settings › Writing says to send it at that size
+  {
+    const pictures = {};
+    // random pixels, so a smaller copy is also a smaller file
+    const noise = Buffer.from(await page.evaluate(() => {
+      const c = document.createElement("canvas"); c.width = 800; c.height = 600;
+      const g = c.getContext("2d"), d = g.createImageData(800, 600);
+      for (let i = 0; i < d.data.length; i++) d.data[i] = i % 4 === 3 ? 255 : Math.floor(Math.random() * 256);
+      g.putImageData(d, 0, 0);
+      return c.toDataURL("image/png").split(",")[1];
+    }), "base64");
+    const newWithPicture = async () => {
+      await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+      await page.locator("#c-editor").focus();
+      await page.setInputFiles("#c-imgfile", { name: "noise.png", mimeType: "image/png", buffer: noise });
+      await page.waitForFunction(() => document.querySelector("#c-editor img")?.naturalWidth === 800);
+    };
+    const img = page.locator("#c-editor img");
+    await newWithPicture();
+    await img.click();
+    pictures.shown = { bar: await page.locator("#c-imgbar").isVisible(), handle: await page.locator("#c-imghandle").isVisible(), size: await page.locator("#c-imgsize").textContent(),
+      originalOn: await page.locator('#c-imgbar button[data-w="0"]').evaluate(b => b.classList.contains("on")) };
+    await page.locator('#c-imgbar button[data-w="400"]').click();
+    pictures.medium = [...await img.evaluate(i => [i.getAttribute("width"), i.getAttribute("height"), i.style.width]), await page.locator("#c-imgsize").textContent()];
+    const zoom = await page.locator("#c-editor").evaluate(e => Number(e.style.zoom) || 1);
+    const h = await page.locator("#c-imghandle").boundingBox(), hx = h.x + h.width / 2, hy = h.y + h.height / 2;
+    await page.mouse.move(hx, hy); await page.mouse.down(); await page.mouse.move(hx - 100, hy, { steps: 5 }); await page.mouse.up();
+    pictures.dragged = { width: Number(await img.getAttribute("width")), want: Math.round(400 - 100 / zoom) };
+    const frame = await page.locator("#c-imgframe").boundingBox(), box = await img.boundingBox();
+    pictures.frameFollows = Math.abs(frame.width - box.width) < 1.5 && Math.abs(frame.x - box.x) < 1.5 && Math.abs(frame.y - box.y) < 1.5;
+    await page.keyboard.press("Escape");
+    pictures.escape = { bar: await page.locator("#c-imgbar").isVisible(), composer: await page.locator("#compose").isVisible() };
+    await img.click(); await page.locator("#c-imgdel").click();
+    pictures.deleted = await img.count();
+    await page.keyboard.press("Control+z");
+    pictures.undone = await img.count();
+    // the signature makes it a message, so discarding it asks first
+    page.once("dialog", d => d.accept());
+    await page.click("#c-discard"); await page.waitForSelector("#compose", { state: "hidden" }).catch(() => {});
+    const sendPicture = async subject => {
+      await newWithPicture();
+      await page.fill("#c-subject", subject);
+      await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
+      await img.click(); await page.locator('#c-imgbar button[data-w="200"]').click();
+      await page.locator("#c-editor").focus(); await page.keyboard.press("Control+Enter");
+      const sent = () => calls.find(c => c.name === "messages.saveAndSend" && c.envelope.requests[0].payloadParts[0].payload.message.headers.subject === subject);
+      for (let i = 0; i < 100 && !sent(); i++) await page.waitForTimeout(100);
+      const c = sent();
+      return c && { widths: Object.entries(c.pngWidths).filter(([n]) => n.startsWith("inline-")).map(([, w]) => w), html: /<img [^>]*width="200"[^>]*>/.test(c.envelope.requests[0].payloadParts[0].payload.simpleBody.html) };
+    };
+    const setScaled = async v => { await page.locator("#list").focus(); await page.keyboard.press(","); await page.locator(`input[name="scaledImages"][value="${v}"]`).check(); await page.click("#settings-close"); };
+    pictures.whole = await sendPicture("Picture whole");
+    await setScaled("shrink");
+    pictures.smaller = await sendPicture("Picture smaller");
+    await setScaled("full");
+    results.pictures = pictures;
+  }
+
   // two sends inside the undo window keep their own timers and z takes back only the newest; a
   // send that fails while another message is open saves that one before reopening; leaving the
   // tab with a send pending asks first
@@ -637,6 +697,12 @@ const { launch } = require("./harness");
   expect(!results.afterHide.some(s => s.includes("s2@x.com")) && results.afterHide.length >= results.suggestions.length - 1, "hidden address gone: " + results.afterHide.join(","));
   expect(/^<div style="font-family:[^"]+;font-size:13px">/.test(results.sent.html) && results.sent.html.replace(/<[^>]+>/g, "").startsWith("Hello from the runtime test.") && results.sent.html.includes("ymsig"), "default font wrapper, typed text above signature: " + results.sent.html);
   expect(results.sent.html.includes('src="cid:') && results.sent.attachments.some(a => a.disposition === "inline" && a.contentId) && results.sent.attachments.filter(a => a.disposition === "inline").length === 1 && results.sent.uri.includes("uploadCount=4&totalAttachments=4"), "inline image as cid attachment: " + results.sent.html + " " + JSON.stringify(results.sent.attachments) + " " + results.sent.uri);
+  {
+    const p = results.pictures;
+    expect(p.shown.bar && p.shown.handle && p.shown.size === "800 × 600" && p.shown.originalOn && p.medium.join() === "400,300,400px,400 × 300" && Math.abs(p.dragged.width - p.dragged.want) <= 2 && p.frameFollows &&
+      !p.escape.bar && p.escape.composer && p.deleted === 0 && p.undone === 1, "a picture in the composer is scaled, let go and deleted, and the delete undone: " + JSON.stringify(p));
+    expect(p.whole?.html && p.whole.widths.join() === "800" && p.smaller?.html && p.smaller.widths.join() === "400", "a picture made smaller is sent whole, or at twice its shown width: " + JSON.stringify({ whole: p.whole, smaller: p.smaller }));
+  }
   expect(results.sent.fileParts.some(p => p[1] === "note.txt") && results.sent.attachments.some(a => a.disposition === "attachment"), "attachment sent");
   const names = results.sent.fileParts.map(p => p[1]);
   expect(names.includes("note (2).txt") && new Set(names).size === names.length, "attachments with the same name get unique names: " + JSON.stringify(names));
