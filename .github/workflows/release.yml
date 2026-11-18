@@ -115,7 +115,7 @@ jobs:
           1. Download the ZIP and unzip it into a folder you will keep, such as Documents; it contains one folder, \`baltazar-mail\` or \`baltazar-mail-gmail\`.
           2. Open \`edge://extensions\` (or \`chrome://extensions\`) and turn on **Developer mode**.
           3. Click **Load unpacked** and select that folder.
-          4. Yahoo™: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail™: click the Baltazar Mail for Gmail™ toolbar icon and sign in with Google™ when asked (see docs/google-setup.md for the OAuth client an unpacked copy needs).
+          4. Yahoo™: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail: click the Baltazar Mail for Gmail toolbar icon and sign in with Google™ when asked (see docs/google-setup.md for the OAuth client an unpacked copy needs).
 
           ### Verify (optional)
           The ZIPs were built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-$version.zip -R $REPO\` (or \`baltazar-mail-gmail-$version.zip\`)
@@ -125,7 +125,7 @@ jobs:
           ### Update
           Unzip the new release over the same folder, replacing the files, then click **Reload** on the extension's card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.
 
-          Yahoo™ and Yahoo Mail™ are trademarks of Yahoo Inc., and Gmail™ and Google™ are trademarks of Google LLC. Baltazar Mail and Baltazar Mail for Gmail™ are not created by, affiliated with, or endorsed by Yahoo Inc. or Google LLC.
+          Yahoo and Yahoo Mail are trademarks of Yahoo Inc., and Gmail and Google are trademarks of Google LLC. Baltazar Mail and Baltazar Mail for Gmail are not created by, affiliated with, or endorsed by Yahoo Inc. or Google LLC.
 
           NOTES
           gh release create "$tag" dist/*.zip dist/*.zip.sha256 \

@@ -81,18 +81,18 @@ Folder sets: `folderId:(a OR b OR c)` selects several folders (verified with 217
 
 Message (as returned in lists and bodies): `id` (27-char opaque, the handle for every mutation), `immutableid`, `uid`, `conversationId`, `csid`, `modSeq`, `size`, `snippet` (about 500 chars of body text, enough for a preview pane without a body fetch), `attachmentCount`, `attachments[]`, `flags {read, flagged, ham, recent, answered, forwarded}`, `headers {subject, from[], to[], cc[], bcc[], replyTo[], date (epoch seconds as string), mimeDate, internalDate, messageIdRfc822, inReplyTo, referenceList[], mimeType}`, `folder {id, name, types[], unread, total, highestModSeq}`, `decos[] {id, type}` (classification tags, also where ads and "smart view" markers live), `inReplyTo {replied, messageReference.id}`.
 
-Body: `simpleBody.html` (server-sanitised HTML, remote images rewritten through Yahoo™'s proxy), `simpleBody.htmlAnnotations[]`, `simpleBody.attachments[] {partId, filename, size, type, subtype, contentId, disposition, downloadUrl, thumbnailUrl, textExtractionUrl}`.
+Body: `simpleBody.html` (server-sanitised HTML, remote images rewritten through Yahoo's proxy), `simpleBody.htmlAnnotations[]`, `simpleBody.attachments[] {partId, filename, size, type, subtype, contentId, disposition, downloadUrl, thumbnailUrl, textExtractionUrl}`.
 
 Folder: `id` (small decimal string; 1 Inbox, 3 Sent, 4 Trash and 371 seen in this capture; the rest to be read from the folder list), `name`, `types[]` (`INBOX`, `SENT`, `TRASH`, `SYNC`, `INVISIBLE`, custom), `unread`, `total`, `size`, `uidNext`, `uidValidity`, `highestModSeq`, `acctId`. The captured mailbox reports 217 folders, most of which carry `SYNC` or `INVISIBLE` types and are filtered out of the list query.
 
 ## Folders (verified 2026-11-02, from the web client)
 
-A folder's `name` is its whole path, segments joined with `/`. Subfolders of a system folder use its name as the first segment (`Inbox/Receipts`, type `USER`); Yahoo™'s client offers Inbox as a parent.
+A folder's `name` is its whole path, segments joined with `/`. Subfolders of a system folder use its name as the first segment (`Inbox/Receipts`, type `USER`); Yahoo's client offers Inbox as a parent.
 
 - Create: `folders.create`, PUT `.../mailboxes/@.id==<mb>/folders`, payload `{"folder":{"types":["USER"],"acctId":"1","name":"Parent/New"}}`. HTTP 201; the result is the new folder (`id`, `name`, `types`, `unread`, `total`, `acctId`, ...).
 - Rename and move are one call: `folders.rename`, POST `.../folders/<id>` (no `@.id==`), inner id `RenameFolders00_<id>`, payload `{"folder":{"name":"<new path>"}}`. HTTP 200 with the updated folder. Moving to the top level drops the parent segments.
 - Mark a folder read: `messages.readFlagUpdate`, POST `.../messages/@.select==q?q=folderId:<id> count:<unread> offset:0 is:unread acctId:<acct>&async=true`, payload `{"message":{"flags":{"read":true}}}`. HTTP 202 with `result.task` (`id` like `t182533`, `status` `PENDING`); `task.status`, GET `.../tasks/@.id==<taskId>`, reports `PENDING` until `COMPLETED`.
-- Delete a folder: `folders.delete`, DELETE `.../folders/@.id==<id>`, inner id `DeleteFolders`. HTTP 204. Yahoo™'s client deletes a subfolder before its parent. A folder that is already gone answers HTTP 400 `EC-4001` with `validationErrors: ["ID"]`; Yahoo™'s own folder list lagged a deletion in testing, and its client sent the same delete again and got that error.
+- Delete a folder: `folders.delete`, DELETE `.../folders/@.id==<id>`, inner id `DeleteFolders`. HTTP 204. Yahoo's client deletes a subfolder before its parent. A folder that is already gone answers HTTP 400 `EC-4001` with `validationErrors: ["ID"]`; Yahoo's own folder list lagged a deletion in testing, and its client sent the same delete again and got that error.
 - Empty a folder (Trash, Spam): `messages.delete`, DELETE `.../messages/@.select==q?q=folderId:<id> count:<total> acctId:<acct>&async=true`. HTTP 202 with a task, followed with `task.status` as above (270 messages took about 5 s).
 - Folder ids are decimal strings; new folders got five-digit ids (33003 and up).
 
@@ -152,7 +152,7 @@ The `UpdateMessages` child is only added for replies and forwards. Measured: 829
 
 ## Spam, forwarded attachments, person search (verified 2026-10-30)
 
-Spam and not spam in Yahoo™'s client are plain moves: to the folder of type BULK, and back to INBOX. No flag update accompanies them; the server learns from the move.
+Spam and not spam in Yahoo's client are plain moves: to the folder of type BULK, and back to INBOX. No flag update accompanies them; the server learns from the move.
 
 An attachment of another message is forwarded by reference, copied server-side without a download: `{ "disposition": "attachment", "contentId": "<cid>", "messageReference": { "id": "<orig message id>", "pid": "<partId>" } }`, counted in `totalAttachments` but not `uploadCount`. The save answers HTTP 206 when some referenced parts were dropped: inline parts referenced this way become plain attachments and the body's `cid:` links do not resolve, so inline images of a quoted original are re-uploaded as new inline parts instead.
 
@@ -168,6 +168,6 @@ Attachment text: `textExtractionUrl` (`.../content/parts/@.id==<pid>/text?appid=
 
 ## Attachment bytes and document preview (verified 2026-10-31)
 
-Message source: `GET https://apis.mail.yahoo.com/ws/v3/mailboxes/@.id==<mb>/messages/@.id==<msg>/content/rawplaintext?appId=<appId>&wssid=<wssid>&ymreqid=<uuid>` returns the full RFC 822 message as `text/plain` (it is what Yahoo™'s "View raw message" opens). Attachment `partId` values are IMAP body-part numbers (`2`, `3`, `1.2`) into this MIME tree; decoded sizes match the metadata `size` byte for byte. This is the only fetchable source of attachment bytes, so the client fetches it once per message and cuts parts out of it (`ext/mime.js`).
+Message source: `GET https://apis.mail.yahoo.com/ws/v3/mailboxes/@.id==<mb>/messages/@.id==<msg>/content/rawplaintext?appId=<appId>&wssid=<wssid>&ymreqid=<uuid>` returns the full RFC 822 message as `text/plain` (it is what Yahoo's "View raw message" opens). Attachment `partId` values are IMAP body-part numbers (`2`, `3`, `1.2`) into this MIME tree; decoded sizes match the metadata `size` byte for byte. This is the only fetchable source of attachment bytes, so the client fetches it once per message and cuts parts out of it (`ext/mime.js`).
 
 Document converter: attachment metadata carries `documentId` (on `message.attachments` in the `simplebody/full` response and in list results). `POST /c/ws/v3/batch?name=document.fetch` with HTTP header `docs-document-id: <documentId>` and inner request `{id:"FetchDocument", uri:"/ws/docpreview/v2/fetch", method:"POST", payloadType:"embedded", payload:{start_page, end_page, retryCount}}` returns `{code, statuscode, info:{num_pages, dimension:{w,h}, sheetInfo?}, pages:{pageN:{html, css, statuscode, pdfEmbed}}}`. `code` 800 is success, 605/612/621/814 mean still converting (retry with `retryCount` incremented), 813 unsupported type, 816 password protected. Page `statuscode` 700 means ready. `html` is entity-encoded (`&#60;div...`). PDF pages come back as one JPEG `data:` image per page at 96 dpi; Word, Excel and other Office files come back as HTML and CSS (`.aps-page` root), one sheet per page for spreadsheets.

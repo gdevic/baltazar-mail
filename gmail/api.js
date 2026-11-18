@@ -31,14 +31,14 @@ export class ApiError extends Error {
 }
 export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000 };
 export class Timeout extends Error {
-  constructor(what, ms) { super(`Gmail™ did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
+  constructor(what, ms) { super(`Gmail did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
 }
 
 // The button keeps the exact text Google's sign-in branding prescribes, without a trademark sign.
 export const PROVIDER = {
-  id: "gmail", name: "Gmail™",
-  signIn: { text: "Sign in with your Google™ account to read and write your Gmail™ here. The permission can be withdrawn at any time in your Google™ account's security settings.", link: null, button: "Sign in with Google" },
-  trademark: "Gmail™ and Google™ are trademarks of Google LLC. Baltazar Mail for Gmail™ is not created by, affiliated with, or endorsed by Google LLC.",
+  id: "gmail", name: "Gmail",
+  signIn: { text: "Sign in with your Google™ account to read and write your Gmail here. The permission can be withdrawn at any time in your Google account's security settings.", link: null, button: "Sign in with Google" },
+  trademark: "Gmail™ and Google™ are trademarks of Google LLC. Baltazar Mail for Gmail is not created by, affiliated with, or endorsed by Google LLC.",
 };
 // Gmail's API returns the sender's own HTML, so remote images load straight from their hosts.
 export const IMAGE_SRC = "https:";

@@ -104,7 +104,7 @@ const folders = [
   await page.goto(`http://127.0.0.1:${port}/mail.html`);
   await page.waitForSelector("#rows .row");
   // the installed version heads Settings; the update note stays hidden when nothing newer exists
-  await page.waitForFunction(() => document.getElementById("app-version").textContent === "Baltazar Mail 0.14.0", null, { timeout: 4000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("app-version").textContent === "Baltazar Mail for Yahoo™ 0.14.0", null, { timeout: 4000 }).catch(() => {});
   const versionLine = await page.locator("#app-version").textContent() + (await page.locator("#update-note").isHidden() ? "" : " +note");
   const rows = await page.locator("#rows .row").count();
   const foldersShown = await page.locator("#folders .folder").allTextContents();
@@ -172,7 +172,7 @@ const folders = [
   const afterRead = await page.locator("#st-undo").textContent();
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
-  expect(versionLine === "Baltazar Mail 0.14.0", "version line: " + versionLine);
+  expect(versionLine === "Baltazar Mail for Yahoo™ 0.14.0", "version line: " + versionLine);
   expect(subject === "Hit Z80 here" && hit === "Z80", "search markers become highlights, not text: " + JSON.stringify({ subject, hit }));
   expect(frameHtml.includes("Hello <b>body</b>"), "message body shown: " + frameHtml.slice(0, 80));
   expect(sentRows === 8 && helpVisible, "Sent opens with g s, ? shows help: " + JSON.stringify({ sentRows, helpVisible }));

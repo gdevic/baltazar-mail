@@ -14,11 +14,12 @@ const LIST_FILTER = "-folderType:(SYNC)-folderType:(INVISIBLE)";
 // Searches not limited to chosen folders skip Spam and Trash; searching inside those folders still reaches them.
 const ALL_MAIL = "-folderType:(TRASH)-folderType:(BULK)";
 
-// What the shared client shows and limits for this provider. name is used in sentences
-// ("Yahoo could not be reached"); signIn fills the sign-in panel; trademark is the attribution
-// Settings shows under the version.
+// What the shared client shows and limits for this provider. title is the name the page shows,
+// since the extension's own name stays plain Baltazar Mail (Yahoo's brand rules keep its marks out
+// of an app name); name is used in sentences ("Yahoo could not be reached"); signIn fills the
+// sign-in panel; trademark is the attribution Settings shows under the version.
 export const PROVIDER = {
-  id: "yahoo", name: "Yahoo™",
+  id: "yahoo", name: "Yahoo", title: "Baltazar Mail for Yahoo™",
   signIn: { text: "No Yahoo Mail™ session found in this browser.", link: { href: "https://mail.yahoo.com/", label: "Sign in at mail.yahoo.com" }, button: "retry" },
   trademark: "Yahoo™ and Yahoo Mail™ are trademarks of Yahoo Inc. Baltazar Mail is not created by, affiliated with, or endorsed by Yahoo Inc.",
 };
@@ -74,7 +75,7 @@ function atom(term, neg = false) {
 export const dialect = { atom };
 
 export class NotSignedIn extends Error {
-  constructor() { super("Not signed in to Yahoo Mail™"); this.name = "NotSignedIn"; }
+  constructor() { super("Not signed in to Yahoo Mail"); this.name = "NotSignedIn"; }
 }
 
 export class ApiError extends Error {
@@ -85,7 +86,7 @@ export class ApiError extends Error {
 // forever. Uploads get extra time per megabyte sent.
 export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000 };
 export class Timeout extends Error {
-  constructor(what, ms) { super(`Yahoo™ did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
+  constructor(what, ms) { super(`Yahoo did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
 }
 // fetch plus reading the body, both inside the deadline. read(resp) returns the body.
 async function timed(what, url, init, ms, read) {
@@ -523,9 +524,9 @@ async function follow(task, what) {
     await new Promise(ok => setTimeout(ok, i < 5 ? 1000 : 3000));
     const s = (await one("task.status", { id: "TaskStatus", method: "GET", uri: `/ws/v3/mailboxes/@.id==<mb>/tasks/@.id==${task.id}` })).result?.task;
     if (s?.status === "COMPLETED") return s;
-    if (s?.status === "FAILED") throw new ApiError(`Yahoo™ could not finish ${what}`);
+    if (s?.status === "FAILED") throw new ApiError(`Yahoo could not finish ${what}`);
   }
-  throw new ApiError(`${what} is taking too long; Yahoo™ is still working on it`);
+  throw new ApiError(`${what} is taking too long; Yahoo is still working on it`);
 }
 // Marking a folder read is a background task on Yahoo's side (HTTP 202 and a task id), followed
 // until it completes, as Yahoo's client does. changed: how many messages the task reports having

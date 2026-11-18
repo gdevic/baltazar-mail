@@ -554,7 +554,7 @@ scenario("the dark reader does not flash white between messages", async ({ page 
 // ---------- start-up ----------
 scenario("starting offline says why and recovers by itself", async ({ page, mock }, expect) => {
   const shown = { panel: await page.locator("#signin-fail").isVisible(), app: await page.locator("#app").isVisible(), text: await page.locator("#fail-text").textContent() };
-  expect(shown.panel && !shown.app && /Could not load your mailbox\. Yahoo™ could not be reached/.test(shown.text), "an offline start shows the reason: " + JSON.stringify(shown));
+  expect(shown.panel && !shown.app && /Could not load your mailbox\. Yahoo could not be reached/.test(shown.text), "an offline start shows the reason: " + JSON.stringify(shown));
   mock.offline = false;
   await page.evaluate(() => window.dispatchEvent(new Event("online")));
   await page.waitForSelector("#rows .row", { timeout: 10000 }).catch(() => {});

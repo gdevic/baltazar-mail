@@ -10,8 +10,9 @@ import { esc, noBidi } from "./text.js";
 import { cleanLink } from "./links.js";
 
 const $ = id => document.getElementById(id);
-// The extension's name as its manifest gives it: this client serves more than one extension.
-const APP = chrome.runtime.getManifest().name || "Baltazar Mail";
+// The name the page shows: the adapter's title where it gives one, otherwise the extension's name
+// as its manifest gives it, since this client serves more than one extension.
+const APP = api.PROVIDER.title || chrome.runtime.getManifest().name || "Baltazar Mail";
 const SYSTEM_ORDER = ["INBOX", "DRAFT", "SENT", "ARCHIVE", "BULK", "TRASH"];
 const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
@@ -2152,7 +2153,7 @@ function wireSettings() {
     $("signout").classList.remove("hidden");
     $("signout").onclick = async () => {
       if (pendingSends.length) { openSettings(false); status("not signed out: a message is still waiting to be sent"); return; }
-      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google™ and its address book is cleared.`)) return;
+      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google and its address book is cleared.`)) return;
       openSettings(false);
       if (!(await compose.close(true))) return;
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
