@@ -22,7 +22,7 @@ const KEY = "gmToken", ACCOUNT = "gmAccount";
 const RENEW_AHEAD = 5 * 60e3;
 
 export class NotSignedIn extends Error {
-  constructor(why) { super(why || "Not signed in to Google"); this.name = "NotSignedIn"; }
+  constructor(why) { super(why || "Not signed in to Google™"); this.name = "NotSignedIn"; }
 }
 
 let token = null;       // { access_token, expires, email }, or { email } once the token is forgotten
@@ -46,13 +46,13 @@ async function flow(interactive, email) {
   let redirect;
   try { redirect = await chrome.identity.launchWebAuthFlow({ url, interactive }); }
   catch (e) {
-    if (interactive) throw new NotSignedIn(`Google sign-in did not complete (${e.message})`);
+    if (interactive) throw new NotSignedIn(`Google™ sign-in did not complete (${e.message})`);
     if (/interaction|approve|not signed in/i.test(e.message)) throw new NotSignedIn();
-    throw new Error(`Google's sign-in could not be reached (${e.message})`);
+    throw new Error(`Google™'s sign-in could not be reached (${e.message})`);
   }
   const q = new URLSearchParams(new URL(redirect).hash.slice(1));
   if (q.get("state") !== state) throw new NotSignedIn("the sign-in answer did not match the request");
-  if (q.get("error")) throw new NotSignedIn(interactive ? `Google answered: ${q.get("error")}` : undefined);
+  if (q.get("error")) throw new NotSignedIn(interactive ? `Google™ answered: ${q.get("error")}` : undefined);
   const access = q.get("access_token");
   if (!access) throw new NotSignedIn("no token in the sign-in answer");
   return { access_token: access, expires: Date.now() + (Number(q.get("expires_in")) || 3600) * 1000 };
@@ -60,8 +60,8 @@ async function flow(interactive, email) {
 
 async function profileEmail(access) {
   const resp = await fetch(PROFILE, { headers: { Authorization: `Bearer ${access}` }, signal: AbortSignal.timeout(30000) });
-  if (resp.status === 401 || resp.status === 403) throw new NotSignedIn(`Google did not confirm the account (HTTP ${resp.status})`);
-  if (!resp.ok) throw new Error(`Google could not confirm the account (HTTP ${resp.status})`);
+  if (resp.status === 401 || resp.status === 403) throw new NotSignedIn(`Google™ did not confirm the account (HTTP ${resp.status})`);
+  if (!resp.ok) throw new Error(`Google™ could not confirm the account (HTTP ${resp.status})`);
   return (await resp.json()).emailAddress || "";
 }
 
@@ -88,7 +88,7 @@ export async function getToken({ interactive = false, force = false } = {}) {
     const t = await flow(interactive, want);
     const email = await profileEmail(t.access_token);
     if (epoch !== began) throw new NotSignedIn();
-    if (want && !same(email, want)) throw new NotSignedIn(`Google renewed the sign-in for ${email}, not ${want}; sign in again`);
+    if (want && !same(email, want)) throw new NotSignedIn(`Google™ renewed the sign-in for ${email}, not ${want}; sign in again`);
     token = { ...t, email };
     await chrome.storage.session.set({ [KEY]: token });
     await chrome.storage.local.set({ [ACCOUNT]: email });
@@ -116,8 +116,8 @@ export async function signOut() {
     let resp;
     try {
       resp = await fetch(REVOKE, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: t }).toString(), signal: AbortSignal.timeout(15000) });
-    } catch (e) { throw new Error(`Google could not be reached to end the sign-in (${e.message}); you are still signed in`); }
-    if (!resp.ok && resp.status !== 400) throw new Error(`Google did not end the sign-in (HTTP ${resp.status}); you are still signed in`);
+    } catch (e) { throw new Error(`Google™ could not be reached to end the sign-in (${e.message}); you are still signed in`); }
+    if (!resp.ok && resp.status !== 400) throw new Error(`Google™ did not end the sign-in (HTTP ${resp.status}); you are still signed in`);
   }
   epoch++;
   token = null;

@@ -90,7 +90,7 @@ let silentOk = false, silentDown = "", silentRefusal = "", tokens = 0;
 const area = o => ({ get: async k => ({ [k]: o[k] }), set: async x => Object.assign(o, x), remove: async k => { delete o[k]; } });
 globalThis.chrome = {
   storage: { session: area(store), local: area(local) },
-  runtime: { getManifest: () => ({ name: "Baltazar Mail for Gmail", version: "0.18.0", oauth2: { client_id: "cid.apps.googleusercontent.com" } }) },
+  runtime: { getManifest: () => ({ name: "Baltazar Mail for Gmail™", version: "0.18.0", oauth2: { client_id: "cid.apps.googleusercontent.com" } }) },
   identity: {
     getRedirectURL: () => "https://extid.chromiumapp.org/",
     launchWebAuthFlow: async ({ url, interactive }) => {

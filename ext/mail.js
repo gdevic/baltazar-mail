@@ -2152,7 +2152,7 @@ function wireSettings() {
     $("signout").classList.remove("hidden");
     $("signout").onclick = async () => {
       if (pendingSends.length) { openSettings(false); status("not signed out: a message is still waiting to be sent"); return; }
-      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google and its address book is cleared.`)) return;
+      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google™ and its address book is cleared.`)) return;
       openSettings(false);
       if (!(await compose.close(true))) return;
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
@@ -2333,6 +2333,7 @@ document.addEventListener("keydown", onKey);
 macLabels();
 document.title = APP;
 $("brand").textContent = APP;
+$("app-trademark").textContent = api.PROVIDER.trademark;
 fillSignIn();
 $("retry").onclick = () => api.signIn().then(start, start);
 $("fail-retry").onclick = () => start();

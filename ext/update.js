@@ -2,7 +2,7 @@
 // Settings can say when an update is available. No cookies and nothing about the user or the
 // mailbox is sent; the answer is only compared with the installed version. Nothing is downloaded.
 
-const REPO_PATH = "gdevic/baltazar-mail-2";
+const REPO_PATH = "gdevic/baltazar-mail";
 export const REPO = `https://github.com/${REPO_PATH}`;
 export const RELEASES = `${REPO}/releases/latest`;
 const LATEST = `https://api.github.com/repos/${REPO_PATH}/releases/latest`;

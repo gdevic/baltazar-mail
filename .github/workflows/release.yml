@@ -1,6 +1,6 @@
-# Publishes a GitHub release whose assets are ZIPs of the two extensions, Baltazar Mail for
-# Yahoo and Baltazar Mail for Gmail: unzip one anywhere and load the folder inside with "Load
-# unpacked".
+# Publishes a GitHub release whose assets are ZIPs of the two extensions, Baltazar Mail (for
+# Yahoo Mail) and Baltazar Mail for Gmail: unzip one anywhere and load the folder inside with
+# "Load unpacked".
 # Runs when a v* tag is pushed, or from the Actions tab (Run workflow) with a tag name, which then
 # tags the selected branch.
 # The tag must match the version in VERSION, e.g. v0.13.4. A manual run must start from
@@ -65,11 +65,12 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           # tools/build.js lays each edition's folder (yahoo/, gmail/) over ext/ into
-          # dist/baltazar-mail-<edition>. The folder inside the install ZIP keeps that name in every
-          # release: the browser ties an unpacked extension (and its settings and address book) to
-          # its folder path, so updates unzip over the same folder.
-          for edition in yahoo gmail; do
-            name="baltazar-mail-$edition"
+          # dist/baltazar-mail (Yahoo) or dist/baltazar-mail-gmail. The folder inside the install
+          # ZIP keeps that name in every release: the browser ties an unpacked extension (and its
+          # settings and address book) to its folder path, so updates unzip over the same folder.
+          for pair in yahoo:baltazar-mail gmail:baltazar-mail-gmail; do
+            edition="${pair%%:*}"
+            name="${pair#*:}"
             node tools/build.js "$edition"
             find "dist/$name" -name '.DS_Store' -delete
             cp LICENSE "dist/$name/LICENSE"
@@ -94,8 +95,8 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            dist/baltazar-mail-yahoo-${{ needs.check.outputs.version }}.zip
-            dist/baltazar-mail-yahoo-${{ needs.check.outputs.version }}-store.zip
+            dist/baltazar-mail-${{ needs.check.outputs.version }}.zip
+            dist/baltazar-mail-${{ needs.check.outputs.version }}-store.zip
             dist/baltazar-mail-gmail-${{ needs.check.outputs.version }}.zip
             dist/baltazar-mail-gmail-${{ needs.check.outputs.version }}-store.zip
 
@@ -110,19 +111,21 @@ jobs:
           version="$VERSION"
           cat > notes.md <<NOTES
           ### Install
-          Two extensions: **baltazar-mail-yahoo-$version.zip** for Yahoo Mail and **baltazar-mail-gmail-$version.zip** for Gmail. Both can be installed side by side.
-          1. Download the ZIP and unzip it into a folder you will keep, such as Documents; it contains one folder, \`baltazar-mail-yahoo\` or \`baltazar-mail-gmail\`.
+          Two extensions, which can be installed side by side: **baltazar-mail-$version.zip**, Baltazar Mail, for Yahoo Mail™, and **baltazar-mail-gmail-$version.zip**, Baltazar Mail for Gmail™. Baltazar Mail is also in the Chrome Web Store and in Microsoft Edge Add-ons, which keep it up to date; see the README.
+          1. Download the ZIP and unzip it into a folder you will keep, such as Documents; it contains one folder, \`baltazar-mail\` or \`baltazar-mail-gmail\`.
           2. Open \`edge://extensions\` (or \`chrome://extensions\`) and turn on **Developer mode**.
           3. Click **Load unpacked** and select that folder.
-          4. Yahoo: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail for Yahoo toolbar icon. Gmail: click the Baltazar Mail for Gmail toolbar icon and sign in with Google when asked (see docs/google-setup.md for the OAuth client an unpacked copy needs).
+          4. Yahoo™: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail™: click the Baltazar Mail for Gmail™ toolbar icon and sign in with Google™ when asked (see docs/google-setup.md for the OAuth client an unpacked copy needs).
 
           ### Verify (optional)
-          The ZIPs were built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-yahoo-$version.zip -R $REPO\` (or \`baltazar-mail-gmail-$version.zip\`)
+          The ZIPs were built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-$version.zip -R $REPO\` (or \`baltazar-mail-gmail-$version.zip\`)
 
           The \`-store.zip\` assets hold the same files with \`manifest.json\` at the top level, as uploaded to browser stores; to install by hand, use the other ZIPs.
 
           ### Update
           Unzip the new release over the same folder, replacing the files, then click **Reload** on the extension's card in the extensions page. Do not remove the extension to update it: removing deletes its settings and address book.
+
+          Yahoo™ and Yahoo Mail™ are trademarks of Yahoo Inc., and Gmail™ and Google™ are trademarks of Google LLC. Baltazar Mail and Baltazar Mail for Gmail™ are not created by, affiliated with, or endorsed by Yahoo Inc. or Google LLC.
 
           NOTES
           gh release create "$tag" dist/*.zip dist/*.zip.sha256 \
