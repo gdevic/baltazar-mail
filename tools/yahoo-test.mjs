@@ -82,6 +82,19 @@ ok(throws({ ...base, refs: [{ messageId: "a/b", partId: "2" }] }), "bad attachme
   stale = 5;
   const r2 = await folders().then(() => "ok", e => e instanceof NotSignedIn ? "signin" : e.message);
   ok(r2 === "signin", "a second EC-4008 means signed out: " + r2);
+  // an expired wssid (EC-4003, HTTP 400) gets the same fresh sign-in; a second one is reported as it is
+  const expired = () => new Response(JSON.stringify({ error: { code: "EC-4003", details: { wssid: "W2" } } }), { status: 400 });
+  const plain = globalThis.fetch;
+  let old = 0;
+  globalThis.fetch = async url => String(url) !== "https://mail.yahoo.com/" && old-- > 0 ? expired() : plain(url);
+  stale = 0;
+  await bootstrap(true);
+  pages = 0; old = 1;
+  const r3 = await folders().then(() => "ok", e => e.name);
+  ok(r3 === "ok" && pages === 1, "EC-4003 gets one fresh sign-in, then succeeds: " + JSON.stringify({ r3, pages }));
+  old = 5;
+  const r4 = await folders().then(() => "ok", e => e.name === "ApiError" ? e.detail?.code : e.name);
+  ok(r4 === "EC-4003", "a second EC-4003 is reported, not a sign-out: " + r4);
 }
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

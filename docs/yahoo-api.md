@@ -10,6 +10,8 @@ Query parameters on every batch call: `name=<operation>` (telemetry label, see l
 
 Body: `multipart/form-data` with a single field `batchJson` containing the JSON envelope below. Auth is the browser session cookies plus `wssid`, an anti-CSRF token tied to the session. Attachment previews and downloads go directly to `https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==<mailboxId>/messages/@.id==<msgId>/content/parts/@.id==<partId>/thumbnail?size=552w&pid=<partId>&downloadWhenThumbnailFails=true&appid=YMailNorrin`, and `.../refresh` answers 307 with a signed URL.
 
+A `wssid` expires. A batch call sent with an expired one answers HTTP 400 with a top-level error `{"code":"EC-4003","details":{"wssid":"<token>"},"requestId":"<uuid>"}`, seen on the first call from a tab that had sat open overnight while the computer slept. What the token in `details` is (a replacement, or the one sent) is not verified; reading `mailWssid` from the mail.yahoo.com page again gives one that works. A session Yahoo no longer accepts answers a top-level `EC-4008`, and the same re-read recovers it unless the browser is signed out.
+
 ## Batch envelope
 
 ```json

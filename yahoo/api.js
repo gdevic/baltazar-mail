@@ -157,7 +157,8 @@ async function readSession(force) {
 const uuid = () => crypto.randomUUID();
 
 // One batch envelope, one HTTP round trip. Returns the inner responses array. retry allows one
-// fresh sign-in after a 401/403 and, separately, one retry after EP-4010 (header rule not ready).
+// fresh sign-in after a 401/403 or a session Yahoo refuses (EC-4008, EC-4003) and, separately,
+// one retry after EP-4010 (header rule not ready).
 export async function batch(name, requests, retry = true, files = [], headers = {}) {
   return attempt(name, requests, files, headers, { auth: retry, rules: retry });
 }
@@ -188,11 +189,12 @@ async function attempt(name, requests, files, headers, tries) {
       await chrome.runtime.sendMessage({ type: "ensureRules" }).catch(() => {});
       return attempt(name, requests, files, headers, { ...tries, rules: false });
     }
-    if (code === "EC-4008") {
-      // The session went stale; one fresh sign-in, and only a second refusal means signed out.
+    if (code === "EC-4008" || code === "EC-4003") {
+      // The session went stale (EC-4008) or its wssid expired (EC-4003, a tab left open for
+      // hours); one fresh sign-in. A second EC-4008 means signed out, a second EC-4003 is reported.
       await forgetSession();
       if (tries.auth) { await bootstrap(true); return attempt(name, requests, files, headers, { ...tries, auth: false }); }
-      throw new NotSignedIn();
+      if (code === "EC-4008") throw new NotSignedIn();
     }
     throw new ApiError(`${name}: HTTP ${resp.status} ${JSON.stringify(doc.error).slice(0, 160)}`, doc.error);
   }
