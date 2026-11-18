@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName } = await import("../dist/baltazar-mail/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName } = await import("../dist/baltazar-mail-yahoo/contacts.js");
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",

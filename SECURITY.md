@@ -25,7 +25,7 @@ The two extensions are the same code with one module swapped, the adapter that s
 - **Outgoing mail.** Messages the Gmail extension sends are built by its own RFC 822 writer from the composer's fields; display names, subjects and file names are encoded, so no header can be injected through them. Addresses are written as the composer holds them; their form is not checked.
 - **Bundled libraries.** Every third-party file is recorded with its source and SHA-256 in `ext/vendor/vendor.json`. A GitHub Actions workflow compares each file with its published original and looks up known vulnerabilities in the OSV database on every change to the libraries and weekly; the tests check the recorded hashes on every push to main, on pull requests and before each release.
 - **Code scanning.** CodeQL scans the extensions and the workflows on every push to main, on pull requests and weekly.
-- **Releases.** Release ZIPs are built by GitHub Actions from a tagged commit, never on a personal machine, and carry a signed build provenance. Verify one with `gh attestation verify baltazar-mail-<version>.zip -R gdevic/baltazar-mail` (or `baltazar-mail-gmail-<version>.zip`).
+- **Releases.** Release ZIPs are built by GitHub Actions from a tagged commit, never on a personal machine, and carry a signed build provenance. Verify one with `gh attestation verify baltazar-mail-yahoo-<version>.zip -R gdevic/baltazar-mail` (or `baltazar-mail-gmail-<version>.zip`).
 
 ## Reviews
 

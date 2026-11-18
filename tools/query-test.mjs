@@ -4,7 +4,7 @@
 import { parse, nativeQuery as native, evaluate as evaluateWith, describe, CAP } from "../ext/query.js";
 import { createRequire } from "node:module";
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { dialect } = await import("../dist/baltazar-mail/api.js");
+const { dialect } = await import("../dist/baltazar-mail-yahoo/api.js");
 const nativeQuery = ast => native(ast, dialect);
 const evaluate = (ast, run, scope = "") => evaluateWith(ast, run, scope, dialect);
 

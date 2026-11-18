@@ -1,5 +1,5 @@
 // Builds the two extensions: ext/ (the shared client) with an edition's folder laid over it, yahoo/
-// into dist/baltazar-mail/ and gmail/ into dist/baltazar-mail-gmail/. Each edition gives its
+// into dist/baltazar-mail-yahoo/ and gmail/ into dist/baltazar-mail-gmail/. Each edition gives its
 // manifest, its icons (so the two tell apart when both are pinned), its adapter (api.js) and its
 // request rules (rules.js); the version comes from VERSION.
 // An edition's local.json (not in git) may give the key that pins the extension id of an unpacked
@@ -13,11 +13,10 @@ const ROOT = path.join(__dirname, "..");
 const SHARED = path.join(ROOT, "ext");
 // What every edition must give, and the files it may add besides; each edition's own hosts, which
 // no other edition's code may name outside a comment; the folder it is built into, which is also
-// the folder inside its release ZIP. Yahoo's is plain baltazar-mail, the folder in the original
-// Baltazar Mail's ZIPs, so a copy installed from one of those updates in place.
+// the folder inside its release ZIP.
 const SLOTS = ["manifest.json", "icons", "api.js", "rules.js"];
 const EDITIONS = {
-  yahoo: { added: [], hosts: /yahoo|yusercontent/i, folder: "baltazar-mail" },
+  yahoo: { added: [], hosts: /yahoo|yusercontent/i, folder: "baltazar-mail-yahoo" },
   gmail: { added: ["auth.js", "rfc822.js"], hosts: /googleapis|accounts\.google|google\.com/i, folder: "baltazar-mail-gmail" },
 };
 const NOT_COPIED = new Set(["local.json"]);
