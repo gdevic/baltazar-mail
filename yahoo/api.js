@@ -310,6 +310,9 @@ export async function partBytes(msgId, a) {
 
 // Yahoo's download link, for the browser to follow when the bytes could not be fetched here.
 export const originalUrl = a => /^https:\/\//i.test(a?.downloadUrl || "") ? a.downloadUrl.replace(/&amp;/g, "&") : null;
+// The strip lists the attachments that have that link: without it, one whose bytes are not in
+// the message source could be neither previewed nor downloaded.
+export const isListed = a => !!originalUrl(a);
 
 // Yahoo's text extraction of an attachment, for formats with no renderer and no converter page.
 export async function extractText(a) {
@@ -363,9 +366,10 @@ function partUrl(u) {
     return { mailboxId: m[1], msgId: m[2], partId: m[3] };
   } catch { return null; }
 }
-// Whether an image source has the shape of an inline part reference (the client asks
-// inlineSource only for these).
-export const isInlineRef = src => !!partUrl(src);
+const ownIds = body => [body?.message?.id, body?.message?.immutableid].filter(Boolean).map(String);
+// Whether an image source is an inline part reference of the message of a body() result (the
+// client asks inlineSource only for these, and counts only these towards its limit per message).
+export const isInlineRef = (src, body) => { const ref = partUrl(src); return !!ref && ownIds(body).includes(ref.msgId); };
 
 const partCache = new Map();       // url -> data: URL, or failure()
 const fromSource = new Map();      // url -> time it was last tried from the source
@@ -377,8 +381,7 @@ const RAW_FALLBACK_MAX = 10 << 20;
 export async function inlineSource(src, body) {
   const message = body?.message;
   const ref = partUrl(src);
-  const ids = [message?.id, message?.immutableid].filter(Boolean).map(String);
-  if (!ref || ref.mailboxId !== (await bootstrap()).mailboxId || !ids.includes(ref.msgId)) return null;
+  if (!ref || ref.mailboxId !== (await bootstrap()).mailboxId || !ownIds(body).includes(ref.msgId)) return null;
   const c = partCache.get(src);
   if (typeof c === "string") return c;
   if (!freshFailure(c)) {

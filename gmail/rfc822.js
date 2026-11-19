@@ -15,21 +15,22 @@ function base64(bytes) {
 const base64Lines = bytes => base64(bytes).replace(/.{76}/g, `$&${CRLF}`).replace(/\r\n$/, "");
 
 // Quoted-printable text: lines end in CRLF, stay under 76 characters through soft breaks, and
-// carry no trailing white space, so the recipient's reader sees the text as written.
+// carry no trailing white space, so the recipient's reader sees the text as written. A space or
+// tab that ends a line is written as its escape, which counts towards the line's length.
 function quotedPrintable(text) {
   const bytes = enc.encode(String(text).replace(/\r?\n/g, CRLF));
+  const hardBreak = i => bytes[i] === 13 && bytes[i + 1] === 10;
   let out = "", line = "";
-  const flush = () => { out += line + CRLF; line = ""; };
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i];
-    if (b === 13 && bytes[i + 1] === 10) { line = line.replace(/[ \t]$/, m => `=${m.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`); flush(); i++; continue; }
-    const literal = (b >= 33 && b <= 126 && b !== 61) || b === 32 || b === 9;
+    if (hardBreak(i)) { out += line + CRLF; line = ""; i++; continue; }
+    const blank = b === 32 || b === 9, ends = i + 1 === bytes.length || hardBreak(i + 1);
+    const literal = (b >= 33 && b <= 126 && b !== 61) || (blank && !ends);
     const piece = literal ? String.fromCharCode(b) : `=${b.toString(16).toUpperCase().padStart(2, "0")}`;
     if (line.length + piece.length > 75) { out += line + "=" + CRLF; line = ""; }
     line += piece;
   }
-  if (line) out += line.replace(/[ \t]$/, m => `=${m.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
-  return out;
+  return out + line;
 }
 
 // RFC 2047 encoded words for header text outside ASCII, each under 76 characters and split only
@@ -47,10 +48,18 @@ function encodedWords(s) {
 }
 const headerText = s => ASCII.test(s) ? s : encodedWords(s);
 
+// One address: a local part and a domain around a single @, with no white space and none of the
+// characters that separate addresses or open a comment, a quoted string or a route. The composer
+// accepts no more than this (compose.js ADDR), so what it lets through can be written.
+const ADDR_SPEC = /^[^\s@<>()",;:\\]+@[^\s@<>()",;:\\]+$/;
+
 // A display name: plain when it needs nothing, quoted when it holds specials, encoded otherwise.
+// The address is written only when it is one address, so nothing in it can add a recipient or a
+// header line.
 const SPECIALS = /[()<>[\]:;@\\,."]/;
 function formatAddress(a) {
   const email = String(a?.email || "").trim(), name = String(a?.name || "").trim();
+  if (!ADDR_SPEC.test(email)) throw new Error(`Not an address: ${email.slice(0, 80) || "(none given)"}`);
   if (!name) return email;
   if (!ASCII.test(name)) return `${encodedWords(name)} <${email}>`;
   return SPECIALS.test(name) ? `"${name.replace(/["\\]/g, "\\$&")}" <${email}>` : `${name} <${email}>`;
@@ -61,10 +70,12 @@ const addressList = list => (list || []).map(formatAddress).filter(Boolean).join
 export const rfcDate = (d = new Date()) => d.toUTCString().replace(/GMT$/, "+0000");
 
 // A file name parameter: plain ASCII in quotes, otherwise RFC 2231 with an encoded-word fallback.
+// RFC 2231 keeps ' ( ) and * for its own syntax, so they are escaped as well.
+const extValue = s => encodeURIComponent(s).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 function nameParams(name, key) {
   const n = String(name || "attachment").replace(/[\r\n]/g, " ");
   if (ASCII.test(n)) return `${key}="${n.replace(/["\\]/g, "\\$&")}"`;
-  return `${key}="${encodedWords(n).replace(/\r\n /g, " ")}"; ${key}*=utf-8''${encodeURIComponent(n)}`;
+  return `${key}="${encodedWords(n).replace(/\r\n /g, " ")}"; ${key}*=utf-8''${extValue(n)}`;
 }
 
 // ---------- entities ----------
@@ -154,12 +165,14 @@ function splitList(s) {
 const unquote = s => s.trim().replace(/^"(.*)"$/s, "$1").replace(/\\(.)/g, "$1").trim();
 
 // "Name" <a@b>, a@b, <a@b>, =?utf-8?B?...?= <a@b>, Group: a@b, c@d; -> [{ name, email }]
+// An entry that is not one address (several inside one pair of angle brackets, say) is left out,
+// so a name never stands for recipients the reader does not see.
 export function parseAddresses(header) {
   const out = [];
   for (const item of splitList(String(header || ""))) {
     const m = item.match(/^(.*)<([^<>]*)>\s*$/s);
     const email = (m ? m[2] : item).trim().replace(/^mailto:/i, "").replace(/\s+/g, "");
-    if (!email.includes("@")) continue;
+    if (!ADDR_SPEC.test(email)) continue;
     const name = m ? decodeWords(unquote(m[1])) : "";
     out.push(name ? { name, email } : { name: "", email });
   }
@@ -168,3 +181,18 @@ export function parseAddresses(header) {
 
 // The address part of a Message-ID or In-Reply-To header, with its angle brackets.
 export const messageIdOf = v => { const m = String(v || "").match(/<[^<>\s]+>/); return m ? m[0] : ""; };
+
+// The headers that chain a reply to its original: In-Reply-To is the original's Message-ID, and
+// References its own References followed by that id. Only message ids are carried over. A long
+// chain keeps its first id and its newest ones, as mail clients do, and an id too long for a
+// header line is left out, so no header of the original, whatever its size, makes the reply one
+// the server refuses.
+const ID_MAX = 250, REFS_MAX = 20;
+export function replyHeaders(messageId, references) {
+  const own = messageIdOf(messageId);
+  let ids = String(references || "").match(/<[^<>\s]+>/g) || [];
+  if (own && ids.at(-1) !== own) ids.push(own);
+  ids = ids.filter(id => id.length <= ID_MAX);
+  if (ids.length > REFS_MAX) ids = [ids[0], ...ids.slice(1 - REFS_MAX)];
+  return { inReplyTo: own && own.length <= ID_MAX ? own : undefined, references: ids.length ? ids.join(" ") : undefined };
+}

@@ -53,7 +53,14 @@ function createGmail(opts = {}) {
       { sendAsEmail: "alias@gmail.com", displayName: "Alias", replyToAddress: "r@x.com", verificationStatus: "accepted" }],
     messages: new Map(), attachments: new Map(), drafts: [], history: [], historyGone: false, nextHistory: 1001,
     calls: [], uploads: [], fail: null, failItems: null, failSaves: 0, failSends: 0, failMoves: 0, listDelay: 0, patchHtml: null, seq: 0, revoked: [], failRevoke: 0,
+    // batches: the paths each batch request carried (its calls are marked batched in calls);
+    // signIns: the sign-in flows the page started and its requests to Google's sign-in host, and
+    // images: the requests that reached a sender's image host (both noted by the browser
+    // harness); refuseThread: a thread id uploads are refused for (400), as Gmail refuses one
+    // that does not fit the message.
+    batches: [], signIns: [], images: [], refuseThread: null,
   };
+  let inBatch = false;
   const nextId = prefix => `${prefix}${++state.seq}`;
   const record = r => { state.history.push({ id: String(state.nextHistory++), ...r }); state.profile.historyId = String(state.nextHistory - 1); };
 
@@ -186,7 +193,7 @@ function createGmail(opts = {}) {
     const p = u.pathname.replace(/^\/gmail\/v1\/users\/me/, "").replace(/^\/upload\/gmail\/v1\/users\/me/, "/upload");
     if (u.pathname === "/batch/gmail/v1") return batchAnswer(body, h);
     const qo = Object.fromEntries(q); if (q.has("labelIds")) qo.labelIds = q.getAll("labelIds").join(",");
-    state.calls.push({ method, path: p, q: qo, body: body && typeof body === "string" && body.startsWith("{") ? JSON.parse(body) : null, auth: h.authorization || "" });
+    state.calls.push({ method, path: p, q: qo, body: body && typeof body === "string" && body.startsWith("{") ? JSON.parse(body) : null, auth: h.authorization || "", batched: inBatch });
     if (state.fail?.times > 0) { state.fail.times--; return { status: state.fail.status, json: state.fail.body || { error: { code: state.fail.status, message: "injected" } } }; }
     if (!/^Bearer (test|tok\d+)$/.test(h.authorization || "") || state.revoked.includes(h.authorization.slice(7))) return err(401, "Invalid Credentials");
     let m;
@@ -223,8 +230,12 @@ function createGmail(opts = {}) {
   function batchAnswer(body, h) {
     const boundary = (h["content-type"] || "").match(/boundary=(.+)$/)[1];
     const items = body.split(`--${boundary}`).slice(1, -1);
+    const paths = [];
+    state.batches.push(paths);
+    inBatch = true;
     const answers = items.map((it, i) => {
       const [, m, pth] = it.match(/\r\n\r\n(GET|POST|PUT|PATCH|DELETE) (\S+) HTTP\/1\.1/);
+      paths.push(pth.replace(/^\/gmail\/v1\/users\/me/, "").split("?")[0]);
       const jsonAt = it.indexOf("Content-Type: application/json");
       const inner = jsonAt >= 0 ? it.slice(jsonAt).split("\r\n\r\n")[1].trim() : null;
       // failItems: { status, times, match? }: that many items answered with that status, as Gmail
@@ -233,6 +244,7 @@ function createGmail(opts = {}) {
       const r = f?.times > 0 && (!f.match || f.match.test(pth)) ? (f.times--, err(f.status, "injected item failure")) : respond(m, "https://gmail.googleapis.com" + pth, inner, h);
       return `--resp\r\nContent-Type: application/http\r\nContent-ID: <response-item${i}>\r\n\r\nHTTP/1.1 ${r.status} X\r\nContent-Type: application/json\r\n\r\n${r.json == null ? "" : JSON.stringify(r.json)}\r\n`;
     });
+    inBatch = false;
     return { status: 200, contentType: "multipart/mixed; boundary=resp", text: answers.join("") + "--resp--\r\n" };
   }
 
@@ -245,6 +257,7 @@ function createGmail(opts = {}) {
     const meta = JSON.parse(parts[0].split("\r\n\r\n")[1]);
     const raw = parts[1].split("\r\n\r\n").slice(1).join("\r\n\r\n").replace(/\r\n$/, "");
     state.uploads.push({ path: p, method, meta, raw });
+    if (state.refuseThread && (meta.message?.threadId || meta.threadId) === state.refuseThread) return err(400, "Invalid thread_id value");
     const head = raw.split("\r\n\r\n")[0].replace(/\r\n[ \t]+/g, " ");
     const hdr = name => (head.split("\r\n").find(l => l.toLowerCase().startsWith(name + ":")) || "").slice(name.length + 1).trim();
     const content = () => {

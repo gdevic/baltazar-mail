@@ -167,11 +167,15 @@ const { launch } = require("./harness");
   await page.screenshot({ path: path.join(__dirname, "..", "out", "starcol.png"), clip: { x: 235, y: 80, width: 465, height: 180 } }).catch(() => {});
   await page.screenshot({ path: path.join(__dirname, "..", "out", "listcols.png"), clip: { x: 235, y: 80, width: 300, height: 120 } }).catch(() => {});
   results.starCol = { call: calls.slice(starBefore).map(c => c.name).filter(n => n !== "mailbox.sync").join(","), on: await page.locator("#rows .row").nth(4).locator(".st.on").count() };
+  // an entry Yahoo lists without a download link stays out of the strip
+  let ghosts = 0;
+  mock.patchBody = (id, message) => { ghosts++; message.attachments.push({ partId: "9", filename: "ghost.bin", size: 10, disposition: "attachment", type: "application", subtype: "octet-stream" }); };
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(500);
+  mock.patchBody = null;
 
   // attachment previews: two cards, PDF gets a thumbnail, CSV a type tile
   await page.waitForTimeout(500);
-  results.attach = { cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), labels: await page.locator("#r-attach .att-thumb").allTextContents(),
+  results.attach = { ghosts, ghostCards: await page.locator("#r-attach .att-card", { hasText: "ghost.bin" }).count(), cards: await page.locator("#r-attach .att-card").count(), thumbs: await page.locator("#r-attach .att-thumb img").count(), labels: await page.locator("#r-attach .att-thumb").allTextContents(),
     stripBelowBody: await page.evaluate(() => document.getElementById("r-attach").getBoundingClientRect().top >= document.getElementById("r-body").getBoundingClientRect().bottom - 1) };
   const view = async i => { await page.locator("#r-attach .att-card").nth(i).click(); await page.waitForSelector("#viewer:not(.hidden)"); await page.waitForFunction(() => !document.getElementById("v-body").textContent.startsWith("Loading"), null, { timeout: 15000 }); };
   // Playwright's key press waits for the key-up to land in the focused frame, which a preview frame
@@ -722,7 +726,7 @@ const { launch } = require("./harness");
       new RegExp(`· ${hidN - 1} hidden from suggestions`).test(ab.summaryAfter) && ab.closed, "address book: " + JSON.stringify(ab));
   }
   expect(results.inlineParts.partInlined && results.inlineParts.fromSource && results.inlineParts.clips.startsWith("00100") && results.inlineParts.spacerHeight <= 2 && results.inlineParts.proxyKept && !results.inlineParts.hiddenFetched, "inline images: " + JSON.stringify(results.inlineParts));
-  expect(results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
+  expect(results.attach.ghosts > 0 && results.attach.ghostCards === 0 && results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));
   expect(/^ui-monospace, Consolas, Menlo, .*monospace$/.test(results.vMono || ""), "renderer monospace stack: " + results.vMono);
   expect(results.vCsv.join(",") === "Z80,2,6502,1" && results.vZip.includes("src/main.c") && results.vImg === 1 && results.vDoc.includes("Jorge Ruiz") && results.vPdf.pages === 2 && results.vPdf.zoomed && results.vPdf.zoomBar && /page 1 of 2/.test(results.vPdf.meta) && results.vZoomHidden && results.vClosed, "viewer: " + JSON.stringify([results.vCsv, results.vZip, results.vImg, results.vDoc, results.vPdf, results.vZoomHidden, results.vClosed]));
   expect(results.vSheet.cells.join(",") === "Item,Cost,Z80,2.5,6502,1.25" && results.vSheet.tabs === 2 && results.vSheet2.join(",") === "Item,Cost,68000,9", "spreadsheet: " + JSON.stringify([results.vSheet, results.vSheet2]));

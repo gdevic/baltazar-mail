@@ -150,7 +150,8 @@ export function init(h) {
     e.preventDefault(); e.stopPropagation(); c.classList.remove("drop");
     const imgs = all.filter(f => f.type.startsWith("image/")), rest = all.filter(f => !f.type.startsWith("image/"));
     if (imgs.length) { placeCaretAt(e.clientX, e.clientY); insertImages(imgs); }
-    if (rest.length) { addFiles(rest); hooks.status(`attached ${rest.length} file${rest.length === 1 ? "" : "s"}`); }
+    const n = rest.length ? addFiles(rest) : 0;
+    if (n) hooks.status(`attached ${n} file${n === 1 ? "" : "s"}`);
   });
   initPictureTools(ed);
   // Enter inside the quoted original splits the quote, so what is typed next is the user's own
@@ -905,23 +906,30 @@ function uniqueName(name, taken) {
   const dot = name.lastIndexOf("."), stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : "";
   for (let n = 2; ; n++) if (!taken.has(`${stem} (${n})${ext}`)) return `${stem} (${n})${ext}`;
 }
+const sameFile = (a, b) => a.name === b.name && a.size === b.size;
 function withFiles(list, files) {
   for (const f of files) {
-    if (list.some(x => x.name === f.name && x.size === f.size)) continue;   // the same file again
+    if (list.some(x => sameFile(x, f))) continue;   // the same file again
     const name = uniqueName(f.name, new Set(list.map(x => x.name)));
     list.push(name === f.name ? f : new File([f], name, { type: f.type, lastModified: f.lastModified }));
   }
   return list;
 }
 // Files that would take the message over the provider's size limit are left out, with a notice.
+// A file already attached is not added again, so it counts once. Returns how many were attached.
 function addFiles(files) {
   const have = draft.files.reduce((s, f) => s + f.size, 0) + (draft.refs || []).reduce((s, r) => s + (r.size || 0), 0);
   const fits = [], over = [];
   let used = have;
-  for (const f of files) { if (used + f.size <= api.LIMITS.messageBytes) { fits.push(f); used += f.size; } else over.push(f); }
+  for (const f of files) {
+    if (draft.files.some(x => sameFile(x, f)) || fits.some(x => sameFile(x, f))) continue;
+    if (used + f.size <= api.LIMITS.messageBytes) { fits.push(f); used += f.size; } else over.push(f);
+  }
   if (over.length) warn(`Not attached: ${over.map(f => f.name).join(", ")}. Attachments are limited to ${Math.round(api.LIMITS.messageBytes / 1048576)} MB per message.`);
+  if (!fits.length) return 0;
   withFiles(draft.files, fits);
   dirty = true; renderFiles();
+  return fits.length;
 }
 function renderFiles() {
   const el = $("c-filelist");

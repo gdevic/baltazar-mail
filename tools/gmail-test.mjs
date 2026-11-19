@@ -1,12 +1,10 @@
 // Unit tests for the Gmail adapter: the RFC 822 builder read back through ext/mime.js, the
 // address parser, and the built adapter (dist/baltazar-mail-gmail/api.js) against the Gmail of
 // gmail-mock.js, reached through fetch, with chrome mocked around it. node tools/gmail-test.mjs
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
-import { build, parseAddresses, messageIdOf, rfcDate } from "../gmail/rfc822.js";
+import { build, parseAddresses, messageIdOf, replyHeaders, rfcDate } from "../gmail/rfc822.js";
 import { listParts, extract } from "../ext/mime.js";
 import { parse, nativeQuery, check } from "../ext/query.js";
 
@@ -57,6 +55,29 @@ const headersOf = raw => { const h = {}; for (const line of text(raw).split("\r\
   ok(parsed.parts.length === 1 && text(extract(parsed, "1").bytes) === "line one \r\nline two\r\n" + "é".repeat(60), "text round-trips with CRLF and soft breaks");
   ok(text(raw).split("\r\n").every(l => l.length <= 76), "quoted-printable lines stay short");
 }
+// white space that ends a line is escaped inside the line's limit, a tab too, also on the last line
+{
+  const body = "x".repeat(74) + " \n" + "y".repeat(75) + "\t\nlast ";
+  const raw = await build({ from: { email: "me@x.com" }, to: [{ email: "a@x.com" }], subject: "edge", text: body });
+  const lines = text(raw).split("\r\n\r\n").slice(1).join("\r\n\r\n").split("\r\n");
+  ok(lines.every(l => l.length <= 76) && lines.includes("=20") && lines.includes("=09") && lines.at(-1) === "last=20" && !lines.some(l => /[ \t]$/.test(l)), "an escaped line end stays within 76 characters: " + JSON.stringify(lines.map(l => l.length)));
+  ok(text(extract(listParts(raw), "1").bytes) === body.replace(/\n/g, "\r\n"), "and the text round-trips");
+}
+// a file name outside ASCII escapes what RFC 2231 keeps for itself
+{
+  const raw = await build({ from: { email: "me@x.com" }, to: [{ email: "a@x.com" }], subject: "s", text: "", files: [{ name: "été (1)'*.pdf", type: "application/pdf", bytes: new Uint8Array([1]) }] });
+  ok(text(raw).includes("filename*=utf-8''%C3%A9t%C3%A9%20%281%29%27%2A.pdf"), "RFC 2231 value escapes ' ( ) *: " + (text(raw).match(/filename\*=\S+/) || [])[0]);
+}
+// an address is written only when it is one address
+{
+  const refused = async m => { try { await build({ from: { email: "me@x.com" }, subject: "s", text: "", ...m }); return ""; } catch (e) { return e.message; } };
+  const several = await refused({ to: [{ name: "Boss", email: "boss@corp.com,attacker@evil.com" }] });
+  ok(several === "Not an address: boss@corp.com,attacker@evil.com", "several addresses in one entry are refused: " + several);
+  const others = [await refused({ cc: [{ email: "a@x.com\r\nBcc: evil@x.com" }] }), await refused({ bcc: [{ email: "a@x.com b@x.com" }] }), await refused({ to: [{ email: "" }] }), await refused({ from: { email: "me" } })];
+  ok(others.every(m => /^Not an address/.test(m)), "a line break, a space, an empty or a partial address is refused: " + JSON.stringify(others));
+  const fine = await refused({ to: [{ email: "o'neil+tag@sub.example.co.uk" }, { name: "IP", email: "a@[192.168.0.1]" }] });
+  ok(fine === "", "ordinary addresses are written: " + fine);
+}
 // a Reply-To that differs from From is written; one equal to From is not
 {
   const a = headersOf(await build({ from: { email: "me@x.com" }, replyTo: { email: "other@x.com" }, subject: "s", text: "" }));
@@ -76,11 +97,25 @@ ok(addrs("Team: a@x.com, \"B, C\" <b@x.com>; d@x.com") === JSON.stringify([{ nam
 ok(addrs("undisclosed-recipients:;") === "[]" && addrs("") === "[]" && addrs("MAILER-DAEMON") === "[]", "empty group and non-addresses give nothing");
 ok(addrs('"Esc \\"q\\" \\\\" <e@x.com>') === JSON.stringify([{ name: 'Esc "q" \\', email: "e@x.com" }]), "escapes in a quoted name: " + addrs('"Esc \\"q\\" \\\\" <e@x.com>'));
 ok(addrs("Plain Name <mailto:p@x.com>") === JSON.stringify([{ name: "Plain Name", email: "p@x.com" }]), "mailto: stripped");
+{
+  const mixed = "Boss <boss@corp.com,attacker@evil.com>, Ann <ann@x.com>, <a@x.com;b@x.com>, c@x.com d@x.com";
+  ok(addrs(mixed) === JSON.stringify([{ name: "Ann", email: "ann@x.com" }]), "an entry that is not one address is left out: " + addrs(mixed));
+}
 ok(messageIdOf(" <abc@x.com> ") === "<abc@x.com>" && messageIdOf("none") === "", "messageIdOf");
 
+// ---------- replyHeaders ----------
+{
+  const plain = replyHeaders("<orig@x.com>", "<a@x.com>\r\n <b@x.com>");
+  ok(plain.inReplyTo === "<orig@x.com>" && plain.references === "<a@x.com> <b@x.com> <orig@x.com>", "a reply's References are the original's and its id: " + JSON.stringify(plain));
+  ok(JSON.stringify(replyHeaders("<a@x.com>", "<a@x.com>")) === JSON.stringify({ inReplyTo: "<a@x.com>", references: "<a@x.com>" }) && JSON.stringify(replyHeaders("", "")) === "{}", "the id is not repeated, and nothing gives nothing");
+  const long = replyHeaders("<orig@x.com>", Array.from({ length: 50 }, (_, i) => `<r${i}@x.com>`).join(" ")).references.split(" ");
+  ok(long.length === 20 && long[0] === "<r0@x.com>" && long[1] === "<r32@x.com>" && long.at(-1) === "<orig@x.com>", "a long chain keeps its first id and its newest: " + long.join(" "));
+  const huge = replyHeaders("<" + "a".repeat(5000) + "@x.com>", "junk <ok@x.com> <" + "b".repeat(300) + "@x.com> not an id " + "c".repeat(100000));
+  ok(huge.inReplyTo === undefined && huge.references === "<ok@x.com>", "ids too long for a line, and what is not an id, are left out: " + JSON.stringify(huge).slice(0, 80));
+}
+
 // ---------- the adapter, built ----------
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-execFileSync(process.execPath, [path.join(ROOT, "tools", "build.js"), "gmail"], { stdio: "ignore" });
+require("./build.js").build("gmail");
 
 // chrome: session storage, the manifest with a client id, and a Google sign-in window that answers
 // a token (silently only when the test allows it).
@@ -134,6 +169,8 @@ const lastMod = () => modsOf().at(-1);
   let err = ""; try { check(parse("is:important"), api.dialect); } catch (e) { err = e.message; }
   ok(/is:important/.test(err), "unknown is: refused: " + err);
   ok(api.queries.starred(true) === "is:starred is:unread" && api.queries.person('a@x.com") OR x') === "(from:a@x.comORx OR to:a@x.comORx OR cc:a@x.comORx)", "named queries, with only address characters: " + api.queries.person('a@x.com") OR x'));
+  const odd = api.queries.person("a@x{from:bank.com}|b -c"), usual = api.queries.person("o'neil+tag@sub.example.co.uk");
+  ok(odd === "(from:a@xfrombank.comb-c OR to:a@xfrombank.comb-c OR cc:a@xfrombank.comb-c)" && usual === "(from:o'neil+tag@sub.example.co.uk OR to:o'neil+tag@sub.example.co.uk OR cc:o'neil+tag@sub.example.co.uk)", "an address brings no search operator along: " + JSON.stringify([odd, usual]));
 }
 // batch encoding and decoding
 {
@@ -153,13 +190,15 @@ const lastMod = () => modsOf().at(-1);
 }
 // folders: labels become folders; counts come in one batch; All Mail stands for the archive
 {
+  mock.batches.length = 0;
   const r = await api.folders();
   const f = Object.fromEntries(r.folders.map(x => [x.id, x]));
   ok(r.folders.map(x => x.id).join() === "INBOX,SENT,DRAFT,TRASH,SPAM,Label_1,Label_2,Label_3,Label_4,Label_5,ALL", "folder list: " + r.folders.map(x => x.id).join());
   ok(f.INBOX.types[0] === "INBOX" && f.INBOX.name === "Inbox" && f.INBOX.unread === 4 && f.INBOX.total === 8 && f.SPAM.types[0] === "BULK" && f.DRAFT.types[0] === "DRAFT" && f.DRAFT.total === 1, "system folders: " + JSON.stringify(f.INBOX));
   ok(f.Label_2.name === "Projects/FPGA" && f.Label_2.types.join() === "USER" && f.Label_2.total === 3 && f.Label_3.types.join() === "USER,INVISIBLE", "user labels as paths; hidden ones invisible");
   ok(f.ALL.types[0] === "ARCHIVE" && f.ALL.name === "All Mail" && f.ALL.total === mock.messages.size, "All Mail: " + JSON.stringify(f.ALL));
-  ok(mock.calls.filter(c => c.path === "/labels").length === 1 && mock.calls.filter(c => /^\/labels\//.test(c.path)).length === 10, "counts through one batch, one get per shown label");
+  const counted = mock.calls.filter(c => /^\/labels\//.test(c.path));
+  ok(mock.calls.filter(c => c.path === "/labels").length === 1 && counted.length === 10 && counted.every(c => c.batched) && mock.batches.length === 1 && mock.batches[0].length === 10 && mock.batches[0].every(p => /^\/labels\//.test(p)), "counts through one batch, one get per shown label: " + JSON.stringify(mock.batches));
   // history: a change touching Projects stamps it, and All Mail, but not FPGA
   const before = Object.fromEntries(r.folders.map(x => [x.id, x.highestModSeq]));
   mock.history.push({ id: "1001", labelsAdded: [{ message: { id: "p2", labelIds: ["Label_1", "STARRED"] }, labelIds: ["STARRED"] }] });
@@ -212,6 +251,8 @@ const lastMod = () => modsOf().at(-1);
   const all = await api.list("ALL", 100, 0);
   const notSpamTrash = [...mock.messages.values()].filter(x => !x.labelIds.some(l => l === "SPAM" || l === "TRASH")).length;
   ok(all.messages.length === notSpamTrash && !lastCall("GET", /^\/messages$/).q.labelIds, "All Mail lists without a label, Spam and Trash left out: " + all.messages.length);
+  const placed = Object.fromEntries(["m2", "f1", "s1"].map(id => [id, all.messages.find(x => x.id === id)?.folder.id]));
+  ok(placed.m2 === "INBOX" && placed.f1 === "Label_2" && placed.s1 === "SENT", "a row listed in All Mail is placed by its labels, so archiving it there takes it out of Inbox: " + JSON.stringify(placed));
   const un = await api.query(api.queries.unreadIn("Label_1"), 100, 0);
   ok(lastCall("GET", /^\/messages$/).q.labelIds === "Label_1" && lastCall("GET", /^\/messages$/).q.q === "is:unread" && un.messages.map(x => x.id).join() === "p1,p3,p5", "unreadIn names the label outside the search: " + JSON.stringify([lastCall("GET", /^\/messages$/).q, un.messages.map(x => x.id)]));
   const st = await api.search(api.queries.starred(), null, 100, 0, true);
@@ -249,7 +290,8 @@ const lastMod = () => modsOf().at(-1);
   const b = await api.body("m3");
   ok(b.html.startsWith("<p>Body of <b>m3</b></p>") && b.html.includes('<img src="cid:m3-pic@x">') && b.message.id === "m3" && b.message.headers.messageId === "<m3@x.com>" && b.message.threadId === "t-m3", "body html and message: " + JSON.stringify([b.html.slice(0, 60), b.message.headers.messageId]));
   ok(b.attachments.length === 8 && b.attachments[0].partId === "0.1" && b.attachments[0].contentId === "m3-pic@x" && b.attachments[0].disposition === "inline" && b.attachments[1].filename === "report.pdf" && b.attachments[1].type === "application" && b.attachments[1].subtype === "pdf" && b.attachments[1].disposition === "attachment", "attachments: " + JSON.stringify(b.attachments.slice(0, 2)));
-  ok(api.isInlineRef("cid:m3-pic@x") && !api.isInlineRef("https://x/y.png") && api.isStrayImage("cid:gone@x") && !api.isStrayImage("https://x/y.png"), "inline references are cid: sources");
+  ok(api.isInlineRef("cid:m3-pic@x", b) && api.isInlineRef(" CID:M3-pic%40x ", b) && !api.isInlineRef("cid:other@x", b) && !api.isInlineRef("cid:m3-pic@x", { attachments: [] }) && !api.isInlineRef("https://x/y.png", b) && api.isStrayImage("cid:gone@x") && !api.isStrayImage("https://x/y.png"), "inline references are cid: sources that name the message's own parts");
+  ok(b.attachments.every(a => api.isListed(a)), "every attachment is listed");
   const src = await api.inlineSource("cid:m3-pic@x", b);
   ok(src?.startsWith("data:image/png;base64,") && lastCall("GET", /attachments/).path.endsWith("/att-m3-0.1"), "an inline image is fetched by its attachment id as a data URL: " + String(src).slice(0, 30));
   const pdf = await api.partBytes("m3", b.attachments[1]);
@@ -384,6 +426,16 @@ const lastMod = () => modsOf().at(-1);
   ok(/^sent\d+$/.test(sent2.message.id) && mock.uploads.at(-1).path === "/upload/messages/send", "a message never saved is sent on its own");
   await api.send({ ...d, csid: "10", inReplyTo: { id: "m3", replied: true }, subject: "Something else", refs: [], files: [] }, "SENT");
   ok(!mock.uploads.at(-1).meta.threadId, "a changed subject leaves the thread: " + JSON.stringify(mock.uploads.at(-1).meta));
+  // a thread Gmail refuses is tried once without it, whether the JSON is the message or holds it
+  mock.refuseThread = "t-m3";
+  const uploaded = mock.uploads.length;
+  const rs = await outcome(api.send({ ...d, csid: "11", refs: [], files: [] }, "SENT"));
+  const [first, second] = mock.uploads.slice(uploaded);
+  ok(/^sent\d+$/.test(rs.value?.message.id || "") && mock.uploads.length === uploaded + 2 && first.path === "/upload/messages/send" && first.meta.threadId === "t-m3" && second.path === "/upload/messages/send" && !("threadId" in second.meta), "a send whose thread is refused goes out without it: " + JSON.stringify([rs.e?.message, first?.meta, second?.meta]));
+  const rd = await outcome(api.saveDraft({ ...d, csid: "12", refs: [], files: [] }));
+  ok(rd.value && mock.uploads.at(-2).meta.message.threadId === "t-m3" && !("threadId" in mock.uploads.at(-1).meta.message), "and so is a draft saved: " + JSON.stringify([rd.e?.message, mock.uploads.at(-1).meta]));
+  mock.refuseThread = null;
+  await api.deleteForever([rd.value.message.id]);
   // a draft deleted elsewhere: the next save makes a new draft, and a send goes out on its own
   const plain = { ...d, subject: "Gone", inReplyTo: null, refs: [], files: [] };
   const g1 = await api.saveDraft(plain);
@@ -441,10 +493,20 @@ const lastMod = () => modsOf().at(-1);
   const tq = Date.now();
   const rq = await outcome(api.list("INBOX", 3, 0));
   ok(rq.value?.messages.length === 3 && Date.now() >= (windowStart + 60) * 1000, "a quota refusal waits for Gmail's minute to end: " + (rq.e?.message || `${Date.now() - tq} ms`));
-  mock.fail = { status: 403, times: 1, body: { error: { code: 403, status: "ACCESS_TOKEN_SCOPE_INSUFFICIENT", message: "scope" } } };
-  const r4 = await outcome(api.folders());
-  ok(r4.e instanceof api.NotSignedIn && /permission/.test(r4.e.message), "a missing scope asks for a new sign-in: " + r4.e?.message);
-  await api.bootstrap();
+  // a token without the mail scope, as Google answers it: the status is PERMISSION_DENIED, and the
+  // scope is named among the errors and in the details, either of which is enough
+  const errors = [{ message: "Insufficient Permission", domain: "global", reason: "insufficientPermissions" }];
+  const details = [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT", domain: "googleapis.com", metadata: { service: "gmail.googleapis.com" } }];
+  const scope = { code: 403, message: "Request had insufficient authentication scopes.", status: "PERMISSION_DENIED" };
+  for (const error of [{ ...scope, errors, details }, { ...scope, errors }, { ...scope, details }]) {
+    mock.fail = { status: 403, times: 1, body: { error } };
+    const r4 = await outcome(api.folders());
+    ok(r4.e instanceof api.NotSignedIn && /permission/.test(r4.e.message) && !store.gmToken?.access_token, "a missing scope asks for a new sign-in: " + JSON.stringify([Object.keys(error), r4.e?.name, r4.e?.message]));
+    await api.bootstrap();
+  }
+  mock.fail = { status: 403, times: 1, body: { error: { code: 403, message: "Delegation denied", status: "PERMISSION_DENIED", errors: [{ reason: "forbidden" }] } } };
+  const r4b = await outcome(api.folders());
+  ok(r4b.e instanceof api.ApiError && !(r4b.e instanceof api.NotSignedIn) && store.gmToken?.access_token, "any other refusal is an error, with the sign-in kept: " + JSON.stringify([r4b.e?.name, r4b.e?.message]));
   const held = store.gmToken.access_token;
   mock.failRevoke = 1;
   const so1 = await outcome(api.signOut());

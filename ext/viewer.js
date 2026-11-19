@@ -39,7 +39,8 @@ const LABEL = { pdf: "PDF", image: "IMG", html: "HTML", audio: "AUD", video: "VI
 const CLASS = { pdf: "k-pdf", image: "k-image", html: "k-html", audio: "k-audio", video: "k-video", zip: "k-zip", doc: "k-doc", sheet: "k-sheet", slide: "k-slide", code: "k-code", text: "k-text", other: "k-other" };
 
 // { thumb(msgId, a) -> data URL | null, bytes(msgId, a) -> { bytes, type, filename }, docPages?(docId, start, end, retry),
-//   extractText?(a) -> string, originalUrl?(a) -> url | null, cleanHtml(html), status(msg), providerName }
+//   extractText?(a) -> string, originalUrl?(a) -> url | null, listed(a) -> whether the strip shows it, cleanHtml(html),
+//   status(msg), providerName }
 let hooks = null;
 let items = [], index = 0, msgId = null;
 let objectUrls = [];
@@ -74,7 +75,7 @@ export function onKey(e) {
 // ---------- strip ----------
 export function renderStrip(message, attachments, isCurrent) {
   const box = $("r-attach");
-  items = attachments.filter(a => a.disposition !== "inline");
+  items = attachments.filter(a => a.disposition !== "inline" && hooks.listed(a));
   msgId = message.id;
   box.classList.toggle("hidden", !items.length);
   if (!items.length) { box.innerHTML = ""; return; }
@@ -137,6 +138,25 @@ function close() {
 const center = html => `<div class="v-center">${html}</div>`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// An SVG is drawn once into a bitmap and shown as that. As an image it runs nothing and loads
+// nothing, but opened in a tab from the viewer ("Open image in new tab") the file itself would be
+// a document of the sender's under the extension's address. The bitmap has the picture's own
+// size at the screen's density, as far as RASTER_MAX pixels a side.
+const RASTER_MAX = 4096;
+async function rasterized(blob) {
+  const src = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const w = img.naturalWidth || 300, h = img.naturalHeight || 150;
+    const density = Math.min(devicePixelRatio || 1, RASTER_MAX / Math.max(w, h));
+    const canvas = new OffscreenCanvas(Math.max(1, Math.round(w * density)), Math.max(1, Math.round(h * density)));
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    return { blob: await canvas.convertToBlob({ type: "image/png" }), density };
+  } finally { URL.revokeObjectURL(src); }
+}
+
 // Office formats that have a renderer here; the rest go to the provider's converter.
 const isDocx = a => extOf(a.filename) === "docx" || /wordprocessingml/.test(a.subtype || "");
 const isSheet = a => ["xlsx", "xlsm", "xls", "ods", "numbers"].includes(extOf(a.filename)) || /spreadsheetml|ms-excel/.test(a.subtype || "");
@@ -165,9 +185,12 @@ async function show(i) {
     if (stale()) return;
     const ext = extOf(a.filename);
     if (k === "image") {
+      const drawn = ext === "svg" ? await rasterized(blob) : null;
+      if (stale()) return;
       body.innerHTML = `<img class="v-img" alt="">`;
       const img = body.querySelector("img");
-      img.src = objectUrl(blob, MIME[ext]);
+      img.src = drawn ? objectUrl(drawn.blob) : objectUrl(blob, MIME[ext]);
+      if (drawn) img.srcset = `${img.src} ${drawn.density}x`;
       img.onclick = () => img.classList.toggle("full");
     } else if (k === "audio" || k === "video") {
       body.innerHTML = center(`<${k} controls autoplay></${k}>`);
@@ -196,7 +219,7 @@ async function show(i) {
     }
     if (stale()) return;
     const text = raw && asText(raw);
-    body.innerHTML = center(`No preview available for this file (${esc(e.message)}). ` +
+    body.innerHTML = center(`No preview available for this file${e instanceof NoPreview ? "" : ` (${esc(e.message)})`}. ` +
       (raw ? `<button id="v-raw">${text != null ? "View as text" : "View as binary"}</button> ` : "") + `<button id="v-dl2">Download</button>`);
     $("v-dl2").onclick = () => download(a);
     if (raw) $("v-raw").onclick = () => showRaw(ctx, raw, text);
@@ -309,9 +332,13 @@ async function showConverted(ctx) {
   await sandboxed(ctx, { kind: "pages", total, pages: first.pages.map(p => ({ html: p.html, css: p.css })), provider: hooks.providerName });
 }
 
+// Nothing here draws the file and the provider has neither a converter nor its text: the notice
+// says as much by itself, with no reason to add.
+class NoPreview extends Error {}
+
 async function showText(ctx) {
   const { a, k, stale } = ctx;
-  if (!hooks.extractText) throw new Error("no preview available");
+  if (!hooks.extractText) throw new NoPreview("no preview available");
   const text = await hooks.extractText(a);
   if (stale()) return;
   await sandboxed(ctx, { kind: "text", text, ext: extOf(a.filename), source: k === "text" || k === "code" ? "stored" : "extracted", provider: hooks.providerName });

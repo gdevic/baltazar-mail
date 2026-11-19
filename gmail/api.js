@@ -9,7 +9,7 @@
 // changes, so the client's csid is the draft id.
 
 import { getToken, forget, signOut as revoke, NotSignedIn } from "./auth.js";
-import { build, parseAddresses, messageIdOf } from "./rfc822.js";
+import { build, parseAddresses, messageIdOf, replyHeaders } from "./rfc822.js";
 import { sniffImage } from "./bytes.js";
 import { remember } from "./cache.js";
 import { clean, isoDate } from "./query.js";
@@ -65,7 +65,10 @@ export function normalizeFolders(list) {
 }
 
 // ---------- queries ----------
-const bareAddress = email => String(email).replace(/["()\\\s]/g, "");
+// An address as a search value: only the characters addresses are written with reach the query,
+// so none of it can end the term or work as an operator of Gmail's search (quotes, brackets,
+// braces, a colon, a bar, white space).
+const bareAddress = email => String(email).replace(/[^\p{L}\p{N}.!#$%&'*+\/=?^_`~@-]/gu, "");
 // A query() string that names labels as well as a search: query() reads it back.
 const OPAQUE = "\u0000";
 const opaque = o => OPAQUE + JSON.stringify(o);
@@ -183,6 +186,11 @@ const sleep = ms => new Promise(ok => setTimeout(ok, ms));
 const reasonOf = doc => doc?.error?.errors?.[0]?.reason || doc?.error?.status || "";
 // Rate limits (429, or a 403 that says so) and server errors pass; they are asked again.
 const retriable = (status, doc) => RETRIABLE.has(status) || (status === 403 && /rateLimit|userRateLimit/i.test(reasonOf(doc)));
+// A 403 for a token without the mail permission (left unticked on Google's consent page, or
+// withdrawn since): insufficientPermissions among its errors, and
+// ACCESS_TOKEN_SCOPE_INSUFFICIENT in its details.
+const lacksScope = doc => (doc?.error?.errors || []).some(e => e?.reason === "insufficientPermissions")
+  || (doc?.error?.details || []).some(d => d?.reason === "ACCESS_TOKEN_SCOPE_INSUFFICIENT");
 const backoff = left => Math.min(8000, 500 * 2 ** (3 - left)) + Math.random() * 300;
 // URL parameters; a list (labelIds) is repeated, as Gmail reads it; null and undefined are left out.
 function addQuery(url, query) {
@@ -211,12 +219,11 @@ async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
   if (resp.status === 401) { await forget(); throw new NotSignedIn(); }
   let doc = null;
   if (text) { try { doc = JSON.parse(text); } catch { doc = null; } }
-  const reason = reasonOf(doc);
   if (retriable(resp.status, doc) && tries.again > 0) {
     await sleep(pauseFor(resp, doc, tries.again));
     return call(method, path, opts, { ...tries, again: tries.again - 1 });
   }
-  if (resp.status === 403 && reason === "ACCESS_TOKEN_SCOPE_INSUFFICIENT") { await forget(); throw new NotSignedIn("the sign-in lacks the needed permission; sign in again"); }
+  if (resp.status === 403 && lacksScope(doc)) { await forget(); throw new NotSignedIn("the sign-in lacks the needed permission; sign in again"); }
   if (!resp.ok) throw new ApiError(`${what}: HTTP ${resp.status} ${String(doc?.error?.message || text).slice(0, 160)}`, { status: resp.status, error: doc?.error || text.slice(0, 300) });
   // Gmail leaves empty fields out, so an answer with nothing to say (a list with no entries under
   // a fields mask, a 204) has no body at all: an empty object, read like any other answer.
@@ -394,10 +401,14 @@ export async function deleteFolder(id) {
   await call("DELETE", `/labels/${id}`);
   return { result: null, ms: Math.round(performance.now() - t0) };
 }
-// Every id in a label, a page at a time; forEach may change the label, so each page is asked for afresh.
+// Every id a list names, a page of 500 at a time; fn takes the messages out of the list (it deletes
+// them, or marks them read), so each page is asked for afresh. It stops after PAGES_MAX pages,
+// 100,000 messages, and says so: a list that still names messages then is longer than that, or
+// one fn does not empty, and what was done is not all of it.
+const PAGES_MAX = 200;
 async function eachPage(params, fn) {
   let n = 0;
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < PAGES_MAX; i++) {
     const r = await call("GET", "/messages", { query: { ...params, maxResults: PAGE_MAX }, units: 5 });
     const ids = (r.messages || []).map(m => m.id);
     if (!ids.length) return n;
@@ -405,14 +416,15 @@ async function eachPage(params, fn) {
     n += ids.length;
     if (!r.nextPageToken) return n;
   }
-  return n;
+  throw new ApiError(`only the first ${n.toLocaleString("en-US")} messages were done; do it again for the rest`);
 }
 // Every message in a folder, permanently deleted.
 export async function emptyFolder(id) {
   checkLabel(id);
   const t0 = performance.now();
-  const n = await eachPage({ labelIds: id, includeSpamTrash: true }, ids => call("POST", "/messages/batchDelete", { json: { ids }, units: 50 }));
-  for (const [m, l] of labelsOf) if (l.includes(id)) { labelsOf.delete(m); rowCache.delete(m); }
+  // the kept rows and labels of the folder go even when only part of it was emptied
+  const forgetRows = () => { for (const [m, l] of labelsOf) if (l.includes(id)) { labelsOf.delete(m); rowCache.delete(m); } };
+  const n = await eachPage({ labelIds: id, includeSpamTrash: true }, ids => call("POST", "/messages/batchDelete", { json: { ids }, units: 50 })).finally(forgetRows);
   return { result: null, changed: n, ms: Math.round(performance.now() - t0) };
 }
 export async function markFolderRead(id) {
@@ -449,10 +461,11 @@ function rowFiles(node, related = false, out = []) {
 }
 
 // The folder a message is shown in: the listed label, else Trash, Spam, Drafts, Inbox, its first
-// user label, Sent, and All Mail for a message with none of those.
+// user label, Sent, and All Mail for a message with none of those. All Mail lists every message,
+// so a row listed there is placed by its labels as well: archiving it then takes it out of Inbox.
 function folderOf(labelIds = [], listed = null) {
   const has = l => labelIds.includes(l);
-  const id = listed && (listed === ALL || has(listed)) ? listed
+  const id = listed && listed !== ALL && has(listed) ? listed
     : has("TRASH") ? "TRASH" : has("SPAM") ? "SPAM" : has("DRAFT") ? "DRAFT" : has("INBOX") ? "INBOX"
     : labelIds.find(l => labelName.has(l) && !SYSTEM[l] && !HIDDEN.test(l)) || (has("SENT") ? "SENT" : ALL);
   return { id, name: labelName.get(id) || id };
@@ -666,6 +679,8 @@ export async function partBytes(msgId, a) {
 
 // Gmail has no download link of its own; the viewer saves the fetched bytes instead.
 export const originalUrl = () => null;
+// Every attachment Gmail names can be fetched by its attachment id, so the strip lists them all.
+export const isListed = () => true;
 
 const toDataUrl = (bytes, type) => new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(new Blob([bytes], { type })); });
 
@@ -681,15 +696,21 @@ export async function thumbnail(msgId, a) {
   return p;
 }
 
-// Inline images are cid: references to the message's own parts.
-export const isInlineRef = src => /^cid:/i.test(String(src || "").trim());
+// Inline images are cid: references to the message's own parts: the part of a body() result
+// that an image source names, or null.
+function inlinePart(src, body) {
+  const s = String(src || "").trim();
+  if (!/^cid:/i.test(s)) return null;
+  let cid = s.slice(4); try { cid = decodeURIComponent(cid); } catch { /* as written */ }
+  return (body?.attachments || []).find(x => x.contentId && x.contentId.toLowerCase() === cid.toLowerCase()) || null;
+}
+// Whether an image source names a part of that message (the client asks inlineSource only for
+// these, and counts only these towards its limit per message).
+export const isInlineRef = (src, body) => !!inlinePart(src, body);
 const inlineCache = new Map();
 export async function inlineSource(src, body) {
-  const message = body?.message;
-  if (!message?.id || !isInlineRef(src)) return null;
-  let cid = String(src).trim().slice(4); try { cid = decodeURIComponent(cid); } catch { /* as written */ }
-  const a = (body.attachments || []).find(x => x.contentId && x.contentId.toLowerCase() === cid.toLowerCase());
-  if (!a) return null;
+  const message = body?.message, a = inlinePart(src, body);
+  if (!message?.id || !a) return null;
   const key = partKey(message.id, a.partId);
   if (inlineCache.has(key)) return inlineCache.get(key);
   const p = partBytes(message.id, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? toDataUrl(bytes, t) : null; }).catch(() => null);
@@ -847,11 +868,16 @@ async function rawFor(d) {
   const extra = await Promise.all((d.refs || []).map(async r => { const b = await partBytes(r.messageId, { partId: r.partId, filename: r.filename }); return { name: r.filename || b.filename || "attachment", type: b.type, bytes: b.bytes }; }));
   const raw = await build({
     from: d.from, replyTo: d.replyTo, to: d.to, cc: d.cc, bcc: d.bcc, subject: d.subject, html: d.html, text: d.text, inline: d.inline, files: d.files, extra,
-    inReplyTo: orig?.messageId || undefined, references: orig ? [orig.references, orig.messageId].filter(Boolean).join(" ") : undefined,
+    ...(orig ? replyHeaders(orig.messageId, orig.references) : {}),
   });
   const threadId = orig && bareSubject(orig.subject) === bareSubject(d.subject) ? orig.threadId : null;
   return { raw, threadId };
 }
+
+// The JSON of a draft names the thread inside its message; the JSON of messages.send is the
+// message itself.
+const threadOf = meta => meta.threadId ?? meta.message?.threadId;
+function withoutThread({ threadId, ...meta }) { return meta.message ? { ...meta, message: withoutThread(meta.message) } : meta; }
 
 // Uploads a draft or a send as multipart: the JSON part names the draft and thread, the second
 // part is the message itself. A thread Gmail refuses (400) is tried once without.
@@ -863,7 +889,7 @@ async function upload(method, path, meta, raw, what) {
   try {
     return await call(method, path, { query: { uploadType: "multipart" }, body, type: `multipart/related; boundary=${boundary}`, base: UPLOAD, timeout, units: 10 });
   } catch (e) {
-    if (e instanceof ApiError && e.detail?.status === 400 && meta.message?.threadId) return upload(method, path, { ...meta, message: {} }, raw, what);
+    if (e instanceof ApiError && e.detail?.status === 400 && threadOf(meta)) return upload(method, path, withoutThread(meta), raw, what);
     if (e instanceof Timeout && what === "send") e.message += "; it may still have been sent, so check Sent before sending it again";
     throw e;
   }

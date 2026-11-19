@@ -212,8 +212,10 @@ async function launch(opts = {}) {
   });
   // The Gmail extension: the API answered by gmail-mock.js, with the token the app would have got
   // from Google planted by signIn() (the sign-in window itself is out of reach of a test, so the
-  // first load shows the sign-in page). Google's sign-in host answers 500, so a flow the app
-  // started on its own would fail at once and be seen.
+  // first load shows the sign-in page). The window of a sign-in flow is opened by the browser
+  // outside the pages routed here, where no host resolves, so a flow fails at once; each one the
+  // page starts is noted before it goes (gmail.signIns), as is any request of the page's own to
+  // Google's sign-in host, so a sign-in the app started by itself is seen.
   let gmail = null;
   const signIn = async () => {
     await page.evaluate(() => chrome.storage.session.set({ gmToken: { access_token: "test", expires: Date.now() + 3600e3, email: "me@gmail.com" } }));
@@ -232,7 +234,23 @@ async function launch(opts = {}) {
       return route.fulfill({ status: r.status, contentType: "application/json", body: r.json == null ? "" : JSON.stringify(r.json) });
     });
     await ctx.route("https://oauth2.googleapis.com/**", route => { gmail.calls.push({ method: route.request().method(), path: new URL(route.request().url()).pathname }); return route.fulfill({ status: 200, body: "" }); });
-    await ctx.route("https://accounts.google.com/**", route => route.fulfill({ status: 500, body: "no sign-in window in a test" }));
+    await ctx.route("https://accounts.google.com/**", route => { gmail.signIns.push({ prompt: new URL(route.request().url()).searchParams.get("prompt"), how: "request" }); return route.fulfill({ status: 500, body: "no sign-in window in a test" }); });
+    await ctx.exposeBinding("noteSignInFlow", (source, flow) => { gmail.signIns.push({ ...flow, how: "flow" }); });
+    await ctx.addInitScript(() => {
+      const identity = globalThis.chrome?.identity;
+      if (!identity?.launchWebAuthFlow || !globalThis.noteSignInFlow) return;
+      const launch = identity.launchWebAuthFlow.bind(identity);
+      // only the prompt is noted: the rest of the address names the OAuth client
+      const promptOf = url => { try { return new URL(url).searchParams.get("prompt"); } catch { return null; } };
+      identity.launchWebAuthFlow = details => { globalThis.noteSignInFlow({ prompt: promptOf(details?.url), interactive: !!details?.interactive }); return launch(details); };
+    });
+    // A sender's image host, for mail that shows a remote picture: what was asked for, by which
+    // frame and with what referrer.
+    await ctx.route("https://img.example/**", route => {
+      const req = route.request();
+      gmail.images.push({ url: req.url(), from: req.frame()?.url() || "", referer: req.headers().referer || "" });
+      return route.fulfill({ contentType: "image/png", body: thumbPng });
+    });
   }
   const page = await ctx.newPage();
   const errors = [];

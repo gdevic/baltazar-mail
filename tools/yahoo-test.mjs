@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // The adapter imports the shared modules beside it, so it is tested as built.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { parseBootstrap, normalizeFolders, isMessageId, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage, bootstrap, NotSignedIn } = await import("../dist/baltazar-mail-yahoo/api.js");
+const { parseBootstrap, normalizeFolders, isMessageId, isInlineRef, isListed, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage, bootstrap, NotSignedIn } = await import("../dist/baltazar-mail-yahoo/api.js");
 
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
@@ -31,6 +31,15 @@ ok(normalizeFolders(undefined).length === 0, "no list at all");
 
 // Message ids go into Yahoo queries; a save refuses any that is not in Yahoo's id alphabet.
 ok(isMessageId("AJk9_x-1") && !isMessageId("X) OR id:(Y") && !isMessageId("") && !isMessageId(undefined) && !isMessageId("a".repeat(65)), "message id alphabet");
+
+// An inline reference is a part thumbnail of the message itself, by its id or its immutable id.
+{
+  const part = msg => `https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==${msg}/content/parts/@.id==2/thumbnail&appid=x`;
+  const body = { message: { id: "M1", immutableid: "IMM1" } };
+  ok(isInlineRef(part("M1"), body) && isInlineRef(part("IMM1"), body) && !isInlineRef(part("M2"), body) && !isInlineRef(part("M1"), null) && !isInlineRef("https://evil.example/x.png", body), "inline references are the message's own parts");
+}
+// The strip lists the attachments Yahoo gives an https download link.
+ok(isListed({ downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf" }) && !isListed({ downloadUrl: "" }) && !isListed({ downloadUrl: "http://x.example/y" }) && !isListed({}), "attachments without a download link are not listed");
 const base = { csid: "1", subject: "s", from: { email: "me@x" }, draftFolderId: "3" };
 ok(saveRequest({ ...base, inReplyTo: { id: "AJk9", replied: true }, refs: [{ messageId: "B1", partId: "2" }] }).payloadParts[0].payload.message.inReplyTo.messageReference.id === "AJk9", "good ids pass");
 const throws = d => { try { saveRequest(d); return false; } catch { return true; } };

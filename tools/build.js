@@ -23,37 +23,121 @@ const NOT_COPIED = new Set(["local.json"]);
 const outOf = edition => path.join(ROOT, "dist", EDITIONS[edition].folder);
 const version = () => fs.readFileSync(path.join(ROOT, "VERSION"), "utf8").trim();
 
+// The extension is put together in a folder of its own beside its target, checked there, and only
+// then brought over (see sync), so the target is never empty or half built while a browser has it
+// loaded or another suite runs from it, and a build that fails leaves it as it was.
 function build(edition, { store = false } = {}) {
   const ed = EDITIONS[edition];
   if (!ed) throw new Error(`unknown edition ${edition}`);
-  const over = path.join(ROOT, edition), out = outOf(edition);
+  const over = path.join(ROOT, edition), out = outOf(edition), stage = `${out}.${process.pid}.tmp`;
   const shared = new Set(fs.readdirSync(SHARED));
   for (const name of SLOTS) if (shared.has(name)) throw new Error(`ext/${name} belongs in an edition's folder`);
-  // The folder is emptied rather than removed: Windows refuses to remove a folder that a browser
-  // has loaded or a window shows, and the browser keeps the extension loaded from the same path.
-  fs.mkdirSync(out, { recursive: true });
-  for (const name of fs.readdirSync(out)) fs.rmSync(path.join(out, name), { recursive: true, force: true });
-  fs.cpSync(SHARED, out, { recursive: true });
-  for (const name of fs.readdirSync(over)) {
-    if (NOT_COPIED.has(name)) continue;
-    if (!SLOTS.includes(name) && !ed.added.includes(name)) throw new Error(`${edition}/${name} is neither an edition file nor listed as added`);
-    if (shared.has(name)) throw new Error(`${edition}/${name} would replace the shared ext/${name}`);
-    fs.cpSync(path.join(over, name), path.join(out, name), { recursive: true });
-  }
-  const given = JSON.parse(fs.readFileSync(path.join(over, "manifest.json"), "utf8"));
-  if ("version" in given) throw new Error(`${edition}/manifest.json must not name a version; VERSION does`);
-  const { manifest_version, name, ...rest } = given;
-  const manifest = { manifest_version, name, version: version(), ...rest };
-  const localPath = path.join(over, "local.json");
-  if (fs.existsSync(localPath)) {
-    const local = JSON.parse(fs.readFileSync(localPath, "utf8"));
-    if (local.client_id && manifest.oauth2) manifest.oauth2.client_id = local.client_id;
-    if (local.key && !store) manifest.key = local.key;
-  }
-  if (store) delete manifest.key;
-  fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
-  check(edition, out, manifest);
+  fs.rmSync(stage, { recursive: true, force: true });
+  try {
+    fs.cpSync(SHARED, stage, { recursive: true });
+    for (const name of fs.readdirSync(over)) {
+      if (NOT_COPIED.has(name)) continue;
+      if (!SLOTS.includes(name) && !ed.added.includes(name)) throw new Error(`${edition}/${name} is neither an edition file nor listed as added`);
+      if (shared.has(name)) throw new Error(`${edition}/${name} would replace the shared ext/${name}`);
+      fs.cpSync(path.join(over, name), path.join(stage, name), { recursive: true });
+    }
+    const given = JSON.parse(fs.readFileSync(path.join(over, "manifest.json"), "utf8"));
+    if ("version" in given) throw new Error(`${edition}/manifest.json must not name a version; VERSION does`);
+    const { manifest_version, name, ...rest } = given;
+    const manifest = { manifest_version, name, version: version(), ...rest };
+    const localPath = path.join(over, "local.json");
+    if (fs.existsSync(localPath)) {
+      const local = JSON.parse(fs.readFileSync(localPath, "utf8"));
+      if (local.client_id && manifest.oauth2) manifest.oauth2.client_id = local.client_id;
+      if (local.key && !store) manifest.key = local.key;
+    }
+    if (store) delete manifest.key;
+    fs.writeFileSync(path.join(stage, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+    check(edition, stage, manifest);
+    sync(stage, out);
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   return out;
+}
+
+// Makes the folder `to` hold what `from` holds. A file whose content is already the same is left
+// alone, so a build that changes nothing touches nothing; any other is replaced in one step, and
+// what `from` does not have is removed. The folder itself stays: Windows refuses to remove a
+// folder that a browser has loaded or a window shows, and the browser keeps the extension loaded
+// from the same path.
+function sync(from, to) {
+  fs.mkdirSync(to, { recursive: true });
+  const wanted = fs.readdirSync(from, { withFileTypes: true });
+  const names = new Set(wanted.map(e => e.name));
+  for (const name of fs.readdirSync(to)) if (!names.has(name)) fs.rmSync(path.join(to, name), { recursive: true, force: true });
+  for (const e of wanted) {
+    const a = path.join(from, e.name), b = path.join(to, e.name);
+    let there = fs.statSync(b, { throwIfNoEntry: false });
+    if (there && there.isDirectory() !== e.isDirectory()) { fs.rmSync(b, { recursive: true, force: true }); there = undefined; }
+    if (e.isDirectory()) sync(a, b);
+    else if (!(there && fs.readFileSync(a).equals(fs.readFileSync(b)))) replace(a, b);
+  }
+}
+// A rename puts the whole file in place at once; where the target is held open and cannot be
+// renamed over (Windows), it is written over instead.
+function replace(a, b) {
+  try { fs.renameSync(a, b); } catch { fs.copyFileSync(a, b); }
+}
+
+// The text of a file without its comments. Strings, template literals and regular expressions
+// are stepped over whole, so a comment marker inside one neither starts a comment nor hides the
+// code after it. type: "js", "css", "html" or "json" (which has no comments).
+const REGEX_NEXT = /(^|[(,=:[!&|?{};+\-*%<>~^]|(^|[^\w$.])(return|typeof|case|in|of|delete|void|throw|new|yield|await|else|do))$/;
+function withoutComments(text, type) {
+  if (type === "json") return text;
+  if (type === "html") return text.replace(/<!--[\s\S]*?-->/g, " ");
+  const js = type === "js", n = text.length;
+  let out = "", tail = "";      // tail: the end of the code so far, which decides what a "/" is
+  const note = c => { tail = /\s/.test(c) ? tail.trimEnd() + " " : (tail + c).slice(-12); };
+  const quoted = (i, q) => { for (let j = i + 1; j < n; j++) { if (text[j] === "\\") j++; else if (text[j] === q) return j + 1; else if (text[j] === "\n") return j; } return n; };
+  const regex = i => {
+    for (let j = i + 1, set = false; j < n; j++) {
+      const c = text[j];
+      if (c === "\\") j++; else if (c === "\n") return j; else if (c === "[") set = true; else if (c === "]") set = false; else if (c === "/" && !set) return j + 1;
+    }
+    return n;
+  };
+  // A template literal's text is kept as it is; each ${...} in it is code again.
+  const template = i => {
+    out += "`";
+    for (i++; i < n; i++) {
+      const c = text[i];
+      if (c === "\\") { out += text.slice(i, i + 2); i++; }
+      else if (c === "`") { out += c; return i + 1; }
+      else if (c === "$" && text[i + 1] === "{") { out += "${"; tail = ""; i = code(i + 2, true); out += "}"; }
+      else out += c;
+    }
+    return n;
+  };
+  // Code from i on; inside a template's ${...} it ends at the brace that closes it, whose index it returns.
+  function code(i, inTemplate) {
+    for (let depth = 0; i < n;) {
+      const c = text[i], d = text[i + 1];
+      if (c === "/" && d === "*") { const e = text.indexOf("*/", i + 2); i = e < 0 ? n : e + 2; out += " "; note(" "); continue; }
+      if (js && c === "/" && d === "/") { const e = text.indexOf("\n", i); i = e < 0 ? n : e; continue; }
+      if (c === '"' || c === "'") { const e = quoted(i, c); out += text.slice(i, e); tail = "0"; i = e; continue; }
+      if (js && c === "`") { i = template(i); tail = "0"; continue; }
+      if (js && c === "/" && REGEX_NEXT.test(tail.trimEnd())) { const e = regex(i); out += text.slice(i, e); tail = "0"; i = e; continue; }
+      if (inTemplate && c === "{") depth++;
+      if (inTemplate && c === "}" && depth-- === 0) return i;
+      out += c; note(c); i++;
+    }
+    return n;
+  }
+  code(0, false);
+  return out;
+}
+
+// Whether the code of a file names one of the hosts: its text without the comments, with string
+// literals that are added together read as one. It reads what is written, which is what a
+// mistake looks like; a name put together at run time is beyond it, and there the manifest's own
+// host permissions and connect-src, which this reads too, are what stop the request.
+function names(text, type, hosts) {
+  return hosts.test(withoutComments(text, type).replace(/["'`]\s*\+\s*["'`]/g, ""));
 }
 
 // No edition's code names another edition's hosts outside a comment, and only Yahoo asks for
@@ -62,7 +146,7 @@ function check(edition, out, manifest) {
   const files = walk(out).filter(f => !f.includes(`${path.sep}vendor${path.sep}`) && /\.(js|html|css|json)$/.test(f));
   for (const [other, { hosts }] of Object.entries(EDITIONS)) {
     if (other === edition) continue;
-    const hits = files.filter(f => hosts.test(fs.readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1")));
+    const hits = files.filter(f => names(fs.readFileSync(f, "utf8"), path.extname(f).slice(1), hosts));
     if (hits.length) throw new Error(`${other} addresses in the ${edition} build: ${hits.map(f => path.relative(out, f)).join(", ")}`);
   }
   for (const name of [...SLOTS, ...EDITIONS[edition].added]) if (!fs.existsSync(path.join(out, name))) throw new Error(`missing ${name}`);
@@ -81,4 +165,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, outOf, EDITIONS };
+module.exports = { build, outOf, EDITIONS, withoutComments, names, sync };

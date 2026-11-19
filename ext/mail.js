@@ -965,6 +965,33 @@ purify.addHook("afterSanitizeAttributes", node => {
     else if (h > 0 && !node.style.maxHeight) node.style.maxHeight = `${h}px`;
   }
 });
+// A message's own style sheets may not depend on what the message says. An attribute selector
+// matches on values (a link's address, with the token in it) and :has() on what an element holds,
+// so with images loading, a rule under either can fetch an address picked by the content and so
+// tell a server what the message says. A provider may hand over the sender's CSS as written, so
+// every sheet is read by the browser's own parser and loses the rules such a selector applies or
+// sits in the condition of. A sheet with none of them keeps its text as written.
+const READS_CONTENT = /\[|:has\(/i;
+function pruneRules(owner) {
+  let cut = 0;
+  for (let i = owner.cssRules.length - 1; i >= 0; i--) {
+    const rule = owner.cssRules[i], text = rule.cssText, brace = text.indexOf("{");
+    if (READS_CONTENT.test(rule.selectorText ?? (brace < 0 ? "" : text.slice(0, brace)))) { owner.deleteRule(i); cut++; }
+    else if (rule instanceof CSSGroupingRule || rule instanceof CSSStyleRule) cut += pruneRules(rule);
+  }
+  return cut;
+}
+function contentBlindCss(css) {
+  const sheet = new CSSStyleSheet();
+  try { sheet.replaceSync(css); } catch { return ""; }
+  if (!pruneRules(sheet)) return css;
+  // As the browser writes a sheet back, a string in it may spell the end of the style element,
+  // which the text as written never can; the escape keeps the string and ends nothing.
+  return [...sheet.cssRules].map(r => r.cssText).join("\n").replace(/<(?=\/style)/gi, "\\3c ");
+}
+purify.addHook("afterSanitizeAttributes", node => {
+  if (node.localName === "style") node.textContent = contentBlindCss(node.textContent);
+});
 function cleanHtml(html) {
   cleaningLinks = settings.links === "clean";
   try { return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] }); }
@@ -973,12 +1000,13 @@ function cleanHtml(html) {
 
 // Inline images (cid parts of the message) cannot be loaded by the sandboxed frame, which has no
 // session; the provider fetches them here (api.inlineSource) and they go to the frame as data:
-// URLs. Only sources the provider recognises as inline references are asked for, at most 60 per
-// message. body: the api.body result the HTML belongs to, so only its own parts are fetched.
+// URLs. body: the api.body result the HTML belongs to. Only sources the provider recognises as
+// references to that message's own parts are asked for, at most 60 per message, so references to
+// anything else take none of the 60.
 async function inlineImages(html, body) {
   const tpl = document.createElement("template");      // inert: nothing in it loads
   tpl.innerHTML = html;
-  const imgs = [...tpl.content.querySelectorAll("img[src]")].filter(img => api.isInlineRef(img.getAttribute("src")));
+  const imgs = [...tpl.content.querySelectorAll("img[src]")].filter(img => api.isInlineRef(img.getAttribute("src"), body));
   if (!imgs.length) return html;
   const srcs = [...new Set(imgs.map(img => img.getAttribute("src")))].slice(0, 60);
   const got = new Map(await Promise.all(srcs.map(async s => [s, await api.inlineSource(s, body).catch(() => null)])));
@@ -1082,11 +1110,13 @@ async function searchPerson(email) {
 
 // look: "light" (as written), "dark" (declared colours darkened, see darken.js) or "dim" (as
 // written, at 90% brightness so a white message does not glare in a dark app).
-// Images come only from where the provider allows (api.IMAGE_SRC) and data: URLs.
+// Images come only from where the provider allows (api.IMAGE_SRC) and data: URLs, and are asked
+// for without a referrer. The document says so itself, since the frame's own referrerpolicy
+// attribute covers only the loading of the frame, not what the document in it then asks for.
 function bodyDoc(html, images, look = "light") {
   const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src ${images ? `${api.IMAGE_SRC} data:` : "'none'"};`;
   const dark = look === "dark";
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>body{margin:12px 16px;font:14px/1.45 -apple-system,"Segoe UI",system-ui,sans-serif;color:${dark ? DARK.fg : "#111"};word-wrap:break-word}` +
     (dark ? `html{background:${DARK.bg};color-scheme:dark}a{color:${DARK.link}}` : look === "dim" ? "html{background:#fff;filter:brightness(.9)}" : "") +
     // The text size setting and the message zoom scale the message as a whole, so mail that
@@ -2345,7 +2375,7 @@ wireSplitters();
 window.addEventListener("resize", () => applyLayout());
 wireMovePicker();
 wireContactCards();
-viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, cleanHtml, status, providerName: api.PROVIDER.name });
+viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, cleanHtml, status, providerName: api.PROVIDER.name });
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;

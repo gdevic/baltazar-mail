@@ -160,7 +160,7 @@ Draft saves refer to the parts of the draft's previous save the same way (`messa
 
 Not yet verified: what `simplebody/full` returns for a message saved as plain text (whether `simpleBody.text` is set and `html` empty, and the value of `headers.mimeType`). The client reads either as a sign of a plain-text draft, after its own record of the format (by `csid`) for drafts it saved.
 
-`GET .../content/simplebody/full` returns attachment metadata on `message.attachments`; `simpleBody.attachments` is present only for some messages. Each entry has `partId`, `filename`, `size`, `type`, `subtype`, `disposition`, `contentId`, `downloadUrl`, `thumbnailUrl` (server-rendered previews for images and PDFs, cookie-authenticated).
+`GET .../content/simplebody/full` returns attachment metadata on `message.attachments`; `simpleBody.attachments` is present only for some messages. Each entry has `partId`, `filename`, `size`, `type`, `subtype`, `disposition`, `contentId`, `downloadUrl`, `thumbnailUrl` (server-rendered previews for images and PDFs, cookie-authenticated). The strip under a message lists the entries that have an https `downloadUrl` (`isListed`), which Download falls back on when the bytes cannot be cut out of the message source.
 
 Person search: `(from:("addr") OR to:("addr"))`; `fromEmail:(...)` also exists.
 

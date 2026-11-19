@@ -65,7 +65,7 @@ Description:
 >
 > Attachments open in place: documents, spreadsheets, images and media are previewed without downloading; documents are read inside an isolated sandbox with no access to your session.
 >
-> Privacy: no server, no analytics, no ads. Your mail goes only between your browser and Google. The source code is public at github.com/gdevic/baltazar-mail.
+> Privacy: no server, no analytics, no ads. Your mail goes only between your browser and Google; pictures in a message load from the sender's own server, when your setting lets them. The source code is public at github.com/gdevic/baltazar-mail.
 >
 > Baltazar Mail for Gmail is an independent project. Gmail and Google are trademarks of Google LLC. Baltazar Mail for Gmail is not created by, affiliated with, or endorsed by Google LLC.
 

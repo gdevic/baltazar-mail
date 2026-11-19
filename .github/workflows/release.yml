@@ -57,6 +57,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The library check and the build run on the Node the tests ran on (tests.yml), not on
+      # whichever one the runner image carries.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Check bundled libraries
         run: node tools/vendor-check.mjs --upstream --osv
 
