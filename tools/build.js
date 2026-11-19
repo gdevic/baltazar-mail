@@ -2,10 +2,12 @@
 // into dist/baltazar-mail-yahoo/ and gmail/ into dist/baltazar-mail-gmail/. Each edition gives its
 // manifest, its icons (so the two tell apart when both are pinned), its adapter (api.js) and its
 // request rules (rules.js); the version comes from VERSION.
-// An edition's local.json (not in git) may give the key that pins the extension id of an unpacked
-// copy and, for Gmail, the OAuth client id. node tools/build.js [yahoo|gmail] [--store]; with no edition named, both
-// are built. --store leaves the key out, for the package a browser store takes, since a store
-// assigns the id itself and refuses a key.
+// The Gmail manifest carries the key that pins the extension id of every unpacked copy. An
+// edition's local.json (not in git) may give a key of its own and, for Gmail, an OAuth client id,
+// which then becomes the manifest's oauth2 block; a build without one signs in with the client id
+// the user sets up on the sign-in page. node tools/build.js [yahoo|gmail] [--store]; with no
+// edition named, both are built. --store leaves the key out, for the package a browser store
+// takes, since a store assigns the id itself and refuses a key.
 const fs = require("fs");
 const path = require("path");
 
@@ -17,21 +19,27 @@ const SHARED = path.join(ROOT, "ext");
 const SLOTS = ["manifest.json", "icons", "api.js", "rules.js"];
 const EDITIONS = {
   yahoo: { added: [], hosts: /yahoo|yusercontent/i, folder: "baltazar-mail-yahoo" },
-  gmail: { added: ["auth.js", "rfc822.js"], hosts: /googleapis|accounts\.google|google\.com/i, folder: "baltazar-mail-gmail" },
+  gmail: { added: ["auth.js", "rfc822.js", "setup.js"], hosts: /googleapis|accounts\.google|google\.com/i, folder: "baltazar-mail-gmail", scopes: ["https://mail.google.com/"] },
 };
 const NOT_COPIED = new Set(["local.json"]);
+// A Google OAuth client id: the project number, a dash and a hash.
+const CLIENT_ID = /^\d+-[a-z0-9]+\.apps\.googleusercontent\.com$/;
 const outOf = edition => path.join(ROOT, "dist", EDITIONS[edition].folder);
 const version = () => fs.readFileSync(path.join(ROOT, "VERSION"), "utf8").trim();
 
 // The extension is put together in a folder of its own beside its target, checked there, and only
 // then brought over (see sync), so the target is never empty or half built while a browser has it
 // loaded or another suite runs from it, and a build that fails leaves it as it was.
-function build(edition, { store = false } = {}) {
+// local: what to use in place of the edition's local.json ({} for none), so a test suite builds
+// the same extension on every machine; to: the folder to build into in place of dist/<folder>,
+// so such a build leaves the copy a browser has loaded from dist/ alone.
+function build(edition, { store = false, local, to } = {}) {
   const ed = EDITIONS[edition];
   if (!ed) throw new Error(`unknown edition ${edition}`);
-  const over = path.join(ROOT, edition), out = outOf(edition), stage = `${out}.${process.pid}.tmp`;
+  const over = path.join(ROOT, edition), out = to || outOf(edition), stage = `${out}.${process.pid}.tmp`;
   const shared = new Set(fs.readdirSync(SHARED));
   for (const name of SLOTS) if (shared.has(name)) throw new Error(`ext/${name} belongs in an edition's folder`);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.rmSync(stage, { recursive: true, force: true });
   try {
     fs.cpSync(SHARED, stage, { recursive: true });
@@ -45,12 +53,15 @@ function build(edition, { store = false } = {}) {
     if ("version" in given) throw new Error(`${edition}/manifest.json must not name a version; VERSION does`);
     const { manifest_version, name, ...rest } = given;
     const manifest = { manifest_version, name, version: version(), ...rest };
+    if ("oauth2" in manifest) throw new Error(`${edition}/manifest.json must not carry oauth2; local.json gives the client id`);
     const localPath = path.join(over, "local.json");
-    if (fs.existsSync(localPath)) {
-      const local = JSON.parse(fs.readFileSync(localPath, "utf8"));
-      if (local.client_id && manifest.oauth2) manifest.oauth2.client_id = local.client_id;
-      if (local.key && !store) manifest.key = local.key;
+    const own = local ?? (fs.existsSync(localPath) ? JSON.parse(fs.readFileSync(localPath, "utf8")) : {});
+    if (own.client_id) {
+      if (!ed.scopes) throw new Error(`${edition} signs in without an OAuth client; its local.json names one`);
+      if (!CLIENT_ID.test(own.client_id)) throw new Error(`the client_id in ${edition}/local.json is not a Google OAuth client id`);
+      manifest.oauth2 = { client_id: own.client_id, scopes: ed.scopes };
     }
+    if (own.key) manifest.key = own.key;
     if (store) delete manifest.key;
     fs.writeFileSync(path.join(stage, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
     check(edition, stage, manifest);
@@ -165,4 +176,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, outOf, EDITIONS, withoutComments, names, sync };
+module.exports = { build, outOf, EDITIONS, ROOT, withoutComments, names, sync };

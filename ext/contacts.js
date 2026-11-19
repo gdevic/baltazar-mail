@@ -156,6 +156,7 @@ async function resetRows() {
 
 async function getMeta(key) { const r = await tx(META, "readonly", s => s.get(key)); return r ? r.value : null; }
 async function setMeta(key, value) { await tx(META, "readwrite", s => s.put({ key, value })); }
+async function dropMeta(...keys) { await tx(META, "readwrite", s => { for (const k of keys) s.delete(k); }); }
 
 // One message of a newest-first scan: whether to stop, whether to record it, and the bookmark (the
 // newest date recorded). A date more than a day ahead (a sender's wrong clock) never moves the
@@ -167,18 +168,26 @@ export function scanStep(when, newest, { full, newestSeen, now }) {
   return { stop: false, record: true, newest: Math.max(newest, when) };
 }
 
-// Walk a folder newest-first. full: everything the provider lets a full scan read
-// (api.LIMITS.scanMax rows); otherwise stop at messages older than the last scan.
-async function scanFolder(folderId, direction, full, progress) {
+// Walk a folder newest-first, api.LIMITS.scanPage rows a step (SCAN_PAGE where the provider names
+// none). full: everything the provider lets a full scan read (api.LIMITS.scanMax rows); a full
+// scan keeps its place after every step, so one cut short (the tab closed) carries on from there.
+// Otherwise stop at messages older than the last scan. pace: awaited before each step (see sync).
+async function scanFolder(folderId, direction, full, progress, pace) {
   await loadAll();
-  const metaKey = `scan:${folderId}`;
+  const metaKey = `scan:${folderId}`, fillKey = `fill:${folderId}`, page = api.LIMITS.scanPage || SCAN_PAGE;
   const prev = full ? null : await getMeta(metaKey);
+  const resume = full ? await getMeta(fillKey) : null;
+  if (resume?.done) {
+    if (!(await getMeta(metaKey))) await setMeta(metaKey, { newest: resume.newest, at: Date.now() });
+    return 0;
+  }
   const newestSeen = prev?.newest || 0;
-  let offset = 0, newest = newestSeen, done = false, seen = 0;
+  let offset = resume?.offset || 0, newest = resume?.newest || newestSeen, seen = resume?.seen || 0, done = false;
   const pending = new Map(), now = Date.now() / 1000;
   while (!done) {
+    await pace?.();
     // background: a provider with a request quota (Gmail) paces the scan to leave room for browsing
-    const r = await api.list(folderId, SCAN_PAGE, offset, { background: true });
+    const r = await api.list(folderId, page, offset, { background: true });
     for (const m of r.messages) {
       const step = scanStep(Number(m.headers?.date) || 0, newest, { full, newestSeen, now });
       if (step.stop) { done = true; break; }
@@ -186,26 +195,42 @@ async function scanFolder(folderId, direction, full, progress) {
       newest = step.newest;
     }
     offset += r.messages.length;
-    if (r.messages.length < SCAN_PAGE || (full && offset >= api.LIMITS.scanMax)) done = true;
-    if (pending.size >= 300) await flush(pending);
+    if (r.messages.length < page || (full && offset >= api.LIMITS.scanMax)) done = true;
+    if (full) { await flush(pending); await setMeta(fillKey, { offset, newest, seen, done }); }
+    else if (pending.size >= 300) await flush(pending);
     progress?.(folderId, seen);
   }
   await flush(pending);
   await setMeta(metaKey, { newest, at: Date.now() });
-  return seen;
+  return seen - (resume?.seen || 0);
 }
 
-// Initial build (first run) or incremental refresh. inbox/sent are folder ids.
-export async function sync({ inbox, sent, full = false, progress } = {}) {
+// Initial build (first run) or incremental refresh. inbox/sent are folder ids. A first build cut
+// short carries on where it stopped the next time; full starts one afresh. pace: awaited before
+// each step of the scan, by a provider whose first build goes only as the user allows (see
+// paceWait).
+export async function sync({ inbox, sent, full = false, progress, pace } = {}) {
   await loadAll();
   const built = await getMeta("built");
   const doFull = full || !built;
-  if (doFull) await resetRows();
+  const fills = [sent, inbox].filter(Boolean).map(id => `fill:${id}`);
+  if (doFull && (full || !(await getMeta("filling")))) {
+    await resetRows();
+    await dropMeta(...fills);
+    await setMeta("filling", Date.now());
+  }
   let n = 0;
-  if (sent) n += await scanFolder(sent, "sent", doFull, progress);
-  if (inbox) n += await scanFolder(inbox, "received", doFull, progress);
-  if (doFull) await setMeta("built", Date.now());
+  if (sent) n += await scanFolder(sent, "sent", doFull, progress, pace);
+  if (inbox) n += await scanFolder(inbox, "received", doFull, progress, pace);
+  if (doFull) { await setMeta("built", Date.now()); await dropMeta("filling", ...fills); }
   return n;
+}
+
+// How long the first build waits before its next step (0: go now): until after, the time it may
+// start, and then until the user has left the app alone for idle ms since their last input
+// (lastInput), unless the tab is hidden. All times in ms.
+export function paceWait({ now, after = 0, lastInput = 0, idle = 0, hidden = false }) {
+  return Math.max(0, after - now, hidden ? 0 : lastInput + idle - now);
 }
 
 export async function isBuilt() { return !!(await getMeta("built")); }

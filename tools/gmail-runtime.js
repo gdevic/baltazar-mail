@@ -1,6 +1,7 @@
-// Runtime test of the Gmail extension: the build in dist/baltazar-mail-gmail loaded into Chromium
-// against the Gmail of gmail-mock.js, driven through sign-in, reading, search, actions with undo,
-// folders, compose, drafts and polling. node tools/gmail-runtime.js
+// Runtime test of the Gmail extension: a build without a Google client of its own (out/test/)
+// loaded into Chromium against the Gmail of gmail-mock.js, driven through the setup guide and
+// sign-in, reading, search, actions with undo, folders, compose, drafts and polling.
+// node tools/gmail-runtime.js
 const path = require("path");
 const fs = require("fs");
 const { launch } = require("./harness");
@@ -11,6 +12,8 @@ const { FX } = require("./gmail-mock.js");
   const h = await launch({ provider: "gmail", gmail: { mime } });
   const { ctx, page, extId, profile, gmail, errors, cspViolations, unexpectedHosts } = h;
   const results = {};
+  const CID = "123456789012-abc123def456ghi789.apps.googleusercontent.com";   // the client the user sets up
+  const REDIRECT = `https://${extId}.chromiumapp.org/`;
   const expect = (c, w) => { if (!c) errors.push("assert: " + w); };
   const frameText = async () => page.frameLocator("#r-body").locator("body").innerText({ timeout: 3000 }).catch(() => "FRAME-ERR");
   const folder = async name => { await page.locator("#folder-list .folder", { hasText: name }).first().click(); await page.waitForTimeout(600); };
@@ -19,18 +22,94 @@ const { FX } = require("./gmail-mock.js");
   const partsOf = up => mime.listParts(Buffer.from(up.raw, "latin1")).parts.map(p => [p.partId, p.type, p.filename]);
   const headersOf = up => { const o = {}; for (const line of up.raw.split("\r\n\r\n")[0].replace(/\r\n[ \t]+/g, " ").split("\r\n")) { const c = line.indexOf(":"); if (c > 0) o[line.slice(0, c).toLowerCase()] = line.slice(c + 1).trim(); } return o; };
 
-  // without a token the sign-in page asks, with the provider's wording, and opens no window
+  // without a Google client the sign-in page is the setup guide, for this copy's redirect address,
+  // and opens no window
   await page.goto(`chrome-extension://${extId}/mail.html`);
-  await page.waitForSelector("#signin:not(.hidden)", { timeout: 20000 });
-  results.signIn = { title: await page.locator("#signin-title").textContent(), text: await page.locator("#signin-text").textContent(), button: await page.locator("#retry").textContent(),
-    link: await page.locator("#signin-link").isHidden(), app: await page.locator("#app").isHidden(), tab: await page.title(), brand: await page.locator("#brand").textContent(), fails: await page.locator("#signin-fail").isHidden() };
-  await h.signIn();
+  await page.waitForSelector("#signin:not(.hidden) .g-step.now", { timeout: 20000 });
+  const guideState = () => page.evaluate(() => {
+    const q = s => document.querySelector(s), state = li => ["now", "done", "todo"].find(c => li.classList.contains(c));
+    return { steps: [...document.querySelectorAll(".g-step")].map(li => `${li.dataset.step}:${state(li)}`).join(), copy: q(".g-step.now .g-copy-value")?.textContent ?? null,
+      open: q(".g-step.now .g-open")?.href ?? null, focus: document.activeElement?.closest?.(".g-step")?.dataset.step ?? null, button: !!q("#signin-guide #retry") && !!q("#retry").offsetParent };
+  });
+  results.signIn = { title: await page.locator("#signin-title").textContent(), text: await page.locator("#signin-text").textContent(), app: await page.locator("#app").isHidden(), tab: await page.title(),
+    brand: await page.locator("#brand").textContent(), fails: await page.locator("#signin-fail").isHidden(), ...(await guideState()), flows: gmail.signIns.length };
+  // Copy puts the address on the clipboard, and the button says so
+  await page.evaluate(() => { window.copied = []; navigator.clipboard.writeText = async t => { window.copied.push(t); }; });
+  await page.locator(".g-step.now .g-copy-btn").click();
+  results.copied = { values: await page.evaluate(() => window.copied), label: await page.locator(".g-step.now .g-copy-btn").textContent() };
+  // Google's page opens in a tab of its own
+  const [consoleTab] = await Promise.all([ctx.waitForEvent("page"), page.locator(".g-step.now .g-open").click()]);
+  await consoleTab.waitForLoadState().catch(() => {});
+  results.opened = { url: consoleTab.url(), noted: [...gmail.consolePages] };
+  await consoleTab.close(); await page.bringToFront();
+  // on to the paste step: keys typed into the box are not shortcuts, and each wrong value says why
+  await page.locator(".g-step.now .g-next").click();
+  results.pasteStep = await guideState();
+  await page.locator("#g-paste-in").focus();
+  await page.keyboard.type("c,?t");
+  results.keys = { compose: await page.locator("#compose").isHidden(), settings: await page.locator("#settings").isHidden(), help: await page.locator("#help").isHidden(), typed: await page.locator("#g-paste-in").inputValue() };
+  const verdictOf = async v => { await page.locator("#g-paste-in").fill(v); return { msg: await page.locator("#g-paste-msg").textContent(), ok: await page.locator("#g-paste-ok").isEnabled() }; };
+  results.paste = { redirect: await verdictOf(REDIRECT), secret: await verdictOf("GOCSPX-abc"), good: await verdictOf(CID) };
+  await page.locator("#g-paste-in").press("Enter");
+  await page.waitForSelector('.g-step.now[data-step="api"]', { timeout: 5000 });
+  results.apiStep = await guideState();
+  // a reload carries on where the guide stood
+  await page.reload();
+  await page.waitForSelector('.g-step.now[data-step="api"]', { timeout: 20000 });
+  results.resumed = await guideState();
+  await page.locator(".g-step.now .g-next").click();
+  await page.waitForSelector('.g-step.now[data-step="signin"]', { timeout: 5000 });
+  results.signinStep = { ...(await guideState()), label: await page.locator("#retry").textContent(), notes: await page.locator(".g-step.now .g-lines li").count() };
+  // Google's window closed before the end: the page says so, offers what Google's window may have said, and stays
+  const flowsAtGuide = gmail.signIns.length;
+  gmail.flowAnswer = { reject: "The user did not approve access." };
+  await page.locator("#retry").click();
+  await page.waitForSelector("#signin-alert:not(.hidden)", { timeout: 5000 });
+  results.closed = { flows: gmail.signIns.slice(flowsAtGuide), alert: await page.locator("#signin-alert").textContent(), help: await page.locator("#signin-help:not(.hidden) .g-help-item").count(),
+    enabled: await page.locator("#retry").isEnabled(), steps: (await guideState()).steps };
+  // Google gives a token, but the Gmail API is off: the page links to it, and Continue needs no window
+  gmail.flowAnswer = { fragment: "access_token=test&token_type=Bearer&expires_in=3600" };
+  gmail.fail = { status: 403, times: 1, body: { error: { code: 403, message: "Gmail API has not been used in project 123456789012 before or it is disabled.", status: "PERMISSION_DENIED", errors: [{ reason: "accessNotConfigured" }], details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "SERVICE_DISABLED" }] } } };
+  await page.locator("#retry").click();
+  await page.waitForFunction(() => /Gmail API/.test(document.getElementById("signin-alert").textContent), null, { timeout: 5000 });
+  results.apiOff = { alert: await page.locator("#signin-alert").textContent(), link: await page.locator("#signin-alert .g-open").getAttribute("href"), button: await page.locator("#retry").textContent() };
+  const flowsHeld = gmail.signIns.length;
+  await page.locator("#retry").click();
   await page.waitForSelector("#rows .row", { timeout: 20000 });
+  results.continued = { flows: gmail.signIns.length - flowsHeld, setup: await page.evaluate(async () => (await chrome.storage.local.get("gmSetup")).gmSetup ?? null), client: await page.evaluate(async () => (await chrome.storage.local.get("gmClientId")).gmClientId) };
+  const flowsAtMailbox = gmail.signIns.length;
   await page.evaluate(async () => { for (let i = 0; i < 100 && !(await chrome.storage.local.get("updateCheck")).updateCheck; i++) await new Promise(r => setTimeout(r, 100)); });
   await page.evaluate(() => chrome.storage.local.set({ settings: { pollSec: 5, undoSendSec: 2 } }));
   await page.reload();
   await page.waitForSelector("#rows .row", { timeout: 20000 });
   results.signedIn = { account: await page.locator("#account").textContent(), tab: await page.title(), flows: gmail.calls.filter(c => c.path === "/profile").length > 0 };
+
+  // the address book: nothing is read for it in the first minutes, and the page keeps when it may
+  // start; a build cut short carries on with what is left, a small page at a time, once nobody
+  // uses the app (its pages ask for 20 rows, the user's lists for more)
+  const abMeta = (op, key, value) => page.evaluate(([op, key, value]) => new Promise((ok, no) => {
+    const r = indexedDB.open("baltazar-mail");
+    r.onerror = () => no(r.error);
+    r.onsuccess = () => {
+      const t = r.result.transaction("meta", op === "get" ? "readonly" : "readwrite"), s = t.objectStore("meta");
+      const q = op === "get" ? s.get(key) : s.put({ key, value });
+      t.oncomplete = () => { r.result.close(); ok(op === "get" ? q.result?.value ?? null : true); };
+      t.onerror = () => no(t.error);
+    };
+  }), [op, key, value]);
+  const listsOf = (calls, label, n) => calls.filter(c => c.path === "/messages" && c.q.labelIds === label && (!n || c.q.maxResults === n)).length;
+  await page.waitForTimeout(1500);
+  results.abWait = { after: (await page.evaluate(async () => (await chrome.storage.local.get("contactsAfter")).contactsAfter)) - Date.now(), sent: listsOf(gmail.calls, "SENT"), built: await abMeta("get", "built") };
+  // a build that had read all of Sent before the tab closed
+  await abMeta("put", "filling", Date.now());
+  await abMeta("put", "fill:SENT", { offset: 8, newest: 1, seen: 3, done: true });
+  await page.evaluate(() => chrome.storage.local.set({ contactsAfter: 1 }));
+  const callsBeforeBuild = gmail.calls.length;
+  await page.reload();
+  await page.waitForSelector("#rows .row", { timeout: 20000 });
+  for (let i = 0; i < 220 && !(await abMeta("get", "built")); i++) await page.waitForTimeout(500);
+  const buildCalls = gmail.calls.slice(callsBeforeBuild);
+  results.abBuilt = { built: !!(await abMeta("get", "built")), sent: listsOf(buildCalls, "SENT", "20"), inbox: listsOf(buildCalls, "INBOX", "20"), bookmark: !!(await abMeta("get", "scan:SENT")), filling: await abMeta("get", "filling") };
 
   // the folder tree: Gmail's labels as folders, Starred after Inbox, All Mail for the archive
   results.tree = { names: await page.locator("#folder-list .folder .nm").allTextContents(), counts: await page.locator("#folder-list .folder .ct").allTextContents(),
@@ -382,22 +461,45 @@ const { FX } = require("./gmail-mock.js");
   page.once("dialog", d => d.accept());
   await page.locator("#signout").click();
   await page.waitForSelector("#signin:not(.hidden)", { timeout: 8000 });
-  results.signOut = { panel: await page.locator("#signin-none").isVisible(), app: await page.locator("#app").isHidden(), revoked: gmail.calls.some(c => c.path === "/revoke"), token: await page.evaluate(async () => (await chrome.storage.session.get("gmToken")).gmToken ?? null) };
+  await page.waitForSelector("#signin-text:has-text('Sign in with your')", { timeout: 5000 }).catch(() => {});
+  results.signOut = { panel: await page.locator("#signin-none").isVisible(), app: await page.locator("#app").isHidden(), revoked: gmail.calls.some(c => c.path === "/revoke"), token: await page.evaluate(async () => (await chrome.storage.session.get("gmToken")).gmToken ?? null),
+    guide: await page.locator("#signin-guide").isHidden(), text: await page.locator("#signin-text").textContent(), button: await page.locator("#retry").textContent(), reset: await page.locator("#signin-reset").isVisible(),
+    notes: await page.locator("#signin-notes li").count(), client: await page.evaluate(async () => (await chrome.storage.local.get("gmClientId")).gmClientId) };
+  await page.locator("#signin-trouble").click();
+  results.signOut.help = await page.locator("#signin-help:not(.hidden) .g-help-item").count();
 
-  // only the button starts a sign-in: no flow so far, and one that may show Google's window once it is pressed
+  // only the button starts a sign-in: none since the mailbox loaded, and one, for the user's client, once it is pressed
   const flowsBefore = gmail.signIns.length;
   await page.locator("#retry").click();
   for (let i = 0; i < 50 && gmail.signIns.length === flowsBefore; i++) await page.waitForTimeout(100);
-  await page.waitForTimeout(500);
-  results.signInFlows = { before: gmail.signIns.slice(0, flowsBefore), pressed: gmail.signIns.slice(flowsBefore), panel: await page.locator("#signin").isVisible() };
+  await page.waitForSelector("#signin-alert:not(.hidden)", { timeout: 8000 }).catch(() => {});
+  results.signInFlows = { before: gmail.signIns.slice(flowsAtMailbox, flowsBefore), pressed: gmail.signIns.slice(flowsBefore), panel: await page.locator("#signin").isVisible(), alert: await page.locator("#signin-alert").isVisible() };
 
   results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });
 
+  expect(h.firstRun === 1, "the first install opened the mail tab once: " + h.firstRun);
   const s = results.signIn;
-  expect(s.title === "Baltazar Mail for Gmail™" && /Sign in with your Google™ account/.test(s.text) && s.button === "Sign in with Google" && s.link && s.app && s.tab === "Baltazar Mail for Gmail™" && s.brand === "Baltazar Mail for Gmail™" && s.fails, "the sign-in page in Gmail's words: " + JSON.stringify(s));
+  expect(s.title === "Baltazar Mail for Gmail™" && /^Welcome! .*Gmail™.*Google™.*Client ID/.test(s.text) && s.app && s.tab === "Baltazar Mail for Gmail™" && s.brand === "Baltazar Mail for Gmail™" && s.fails &&
+    s.steps === "create:now,paste:todo,api:todo,signin:todo" && s.copy === REDIRECT && s.open === "https://console.cloud.google.com/auth/overview/personal" && !s.button && s.flows === 0 && extId === "enejfhgeailmbkfpdgfdlajlfhnnbafd",
+    "without a Google client the sign-in page is the guide, for this copy's redirect address and the id the committed key pins: " + JSON.stringify({ s, extId }));
+  expect(results.copied.values.join() === REDIRECT && results.copied.label === "Copied" && results.opened.url === s.open && results.opened.noted.includes(s.open), "the address is copied, and Google's page opens in a tab of its own: " + JSON.stringify([results.copied, results.opened]));
+  const ps = results.paste, kb = results.keys;
+  expect(results.pasteStep.steps === "create:done,paste:now,api:todo,signin:todo" && results.pasteStep.focus === "paste" && kb.compose && kb.settings && kb.help && kb.typed === "c,?t", "the next step opens with the focus, and keys typed into it are not shortcuts: " + JSON.stringify([results.pasteStep, kb]));
+  expect(/redirect address/.test(ps.redirect.msg) && !ps.redirect.ok && /client secret/.test(ps.secret.msg) && !ps.secret.ok && /That is a Client ID/.test(ps.good.msg) && ps.good.ok, "the paste box says what was pasted: " + JSON.stringify(ps));
+  expect(results.apiStep.steps === "create:done,paste:done,api:now,signin:todo" && results.apiStep.open === "https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=123456789012" && results.apiStep.focus === "api" && results.resumed.steps === results.apiStep.steps,
+    "a Client ID leads to the Gmail API of its project, and a reload carries on there: " + JSON.stringify([results.apiStep, results.resumed]));
+  expect(results.signinStep.steps.endsWith("signin:now") && results.signinStep.button && results.signinStep.label === "Sign in with Google" && results.signinStep.notes === 3, "the last step holds the sign-in button and what Google will ask: " + JSON.stringify(results.signinStep));
+  const cl = results.closed;
+  expect(cl.flows.length === 1 && cl.flows[0].interactive && cl.flows[0].prompt === "select_account consent" && cl.flows[0].client === CID && cl.flows[0].redirect === REDIRECT && /closed before/.test(cl.alert) && cl.help === 10 && cl.enabled && cl.steps.endsWith("signin:now"),
+    "a window closed before the end is explained, with what Google may have said, and the page stays: " + JSON.stringify(cl));
+  expect(/Gmail API is still off/.test(results.apiOff.alert) && results.apiOff.link === "https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=123456789012" && results.apiOff.button === "Continue" && results.continued.flows === 0 && results.continued.setup === null && results.continued.client === CID,
+    "the Gmail API being off is named and linked, and Continue signs in with the token Google gave, without a window: " + JSON.stringify([results.apiOff, results.continued]));
+  const aw = results.abWait, abb = results.abBuilt;
+  expect(aw.after > 90e3 && aw.after <= 120e3 && aw.sent === 0 && !aw.built, "the address book is not built in the first minutes, and when it may start is kept: " + JSON.stringify(aw));
+  expect(abb.built && abb.sent === 0 && abb.inbox === 1 && abb.bookmark && abb.filling === null, "a build cut short carries on with what is left, in small pages, once the app is left alone: " + JSON.stringify(abb));
   expect(results.signedIn.account === "me@gmail.com" && /Baltazar Mail for Gmail™$/.test(results.signedIn.tab), "signed in with the planted token: " + JSON.stringify(results.signedIn));
   const t = results.tree;
   expect(t.names.join(",") === "Inbox,Starred,Drafts,Sent,All Mail,Spam,Trash,Projects,Travel" && t.unread.join() === "Inbox,Projects" && t.counts.join() === "4,2,1,8,32,2,1,3," && t.rows === 8 && t.clips === "00100100" && t.unreadRows === 4, "folder tree from labels: " + JSON.stringify(t));
@@ -454,8 +556,9 @@ const { FX } = require("./gmail-mock.js");
   expect(/^Sign out of me@gmail\.com\? /.test(sk.asked) && sk.settings && sk.app && !sk.revoked, "sign out asks first, and Cancel keeps the sign-in: " + JSON.stringify(sk));
   const so = results.signOut;
   expect(so.panel && so.app && so.revoked && so.token === null, "sign out: " + JSON.stringify(so));
+  expect(so.guide && /^Sign in with your Google™ account/.test(so.text) && so.button === "Sign in with Google" && so.reset && so.notes === 3 && so.client === CID && so.help === 10, "after sign-out the Client ID stays, so the page is one button with help at hand: " + JSON.stringify(so));
   const sf = results.signInFlows;
-  expect(sf.before.length === 0 && sf.pressed.length === 1 && sf.pressed[0].how === "flow" && sf.pressed[0].interactive && sf.pressed[0].prompt === "select_account consent" && sf.panel, "no sign-in starts by itself; the button starts one: " + JSON.stringify(sf));
+  expect(sf.before.length === 0 && sf.pressed.length === 1 && sf.pressed[0].how === "flow" && sf.pressed[0].interactive && sf.pressed[0].prompt === "select_account consent" && sf.pressed[0].client === CID && sf.panel && sf.alert, "no sign-in starts by itself; the button starts one, and its failure is shown: " + JSON.stringify(sf));
   // Blocked on purpose: the sandbox's own fetch (tried above, of an address nothing else asks
   // for), images where the reader has them off (Trash), and a cid: source that was never meant to
   // load from the network.

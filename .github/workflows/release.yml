@@ -121,7 +121,7 @@ jobs:
           1. Download the ZIP and unzip it into a folder you will keep, such as Documents; it contains one folder, \`baltazar-mail-yahoo\` or \`baltazar-mail-gmail\`.
           2. Open \`edge://extensions\` (or \`chrome://extensions\`) and turn on **Developer mode**.
           3. Click **Load unpacked** and select that folder.
-          4. Yahoo™: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail: click the Baltazar Mail for Gmail toolbar icon and sign in with Google™ when asked (see docs/google-setup.md for the OAuth client an unpacked copy needs).
+          4. Yahoo™: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail: the extension opens its tab when first loaded; its sign-in page guides you through making a free Google™ client of your own (about two minutes, once; docs/gmail-sign-in.md shows each step), then Sign in with Google.
 
           ### Verify (optional)
           The ZIPs were built by GitHub Actions from the tagged commit, and GitHub signed a record of that. With the GitHub CLI: \`gh attestation verify baltazar-mail-yahoo-$version.zip -R $REPO\` (or \`baltazar-mail-gmail-$version.zip\`)

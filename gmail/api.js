@@ -8,8 +8,9 @@
 // the target's; its other labels stay. Drafts keep a draft id across saves while their message id
 // changes, so the client's csid is the draft id.
 
-import { getToken, forget, signOut as revoke, NotSignedIn } from "./auth.js";
+import { getToken, forget, signOut as revoke, NotSignedIn, client, setClient, redirectAddress, refusal, account } from "./auth.js";
 import { build, parseAddresses, messageIdOf, replyHeaders } from "./rfc822.js";
+import { read, guide, help, explain, notes, projectOf, INTRO, ROUTES } from "./setup.js";
 import { sniffImage } from "./bytes.js";
 import { remember } from "./cache.js";
 import { clean, isoDate } from "./query.js";
@@ -35,16 +36,20 @@ export class Timeout extends Error {
 }
 
 // The button keeps the exact text Google's sign-in branding prescribes, without a trademark sign.
+// waiting: what the page says while Google's window is open.
 export const PROVIDER = {
   id: "gmail", name: "Gmail",
-  signIn: { text: "Sign in with your Google™ account to read and write your Gmail here. The permission can be withdrawn at any time in your Google account's security settings.", link: null, button: "Sign in with Google" },
+  signIn: { text: "Sign in with your Google™ account to read and write your Gmail here. The permission can be withdrawn at any time in your Google account's security settings.", link: null, button: "Sign in with Google",
+    waiting: "Waiting for Google's window... If you do not see it, it may be behind this one." },
   trademark: "Gmail™ and Google™ are trademarks of Google LLC. Baltazar Mail for Gmail is not created by, affiliated with, or endorsed by Google LLC.",
 };
 // Gmail's API returns the sender's own HTML, so remote images load straight from their hosts.
 export const IMAGE_SRC = "https:";
-// messageBytes: Gmail's send limit for attachments; scanMax: rows per folder a full address-book
-// scan reads, since every row costs API quota.
-export const LIMITS = { messageBytes: 25 * 1048576, scanMax: 2000 };
+// messageBytes: Gmail's send limit for attachments. The address book's first build reads every row
+// at a quota cost, so it is kept out of the user's way: scanMax rows per folder, scanPage rows a
+// step, the first step no sooner than scanAfter (ms) from when the mailbox was first opened, and
+// each step only once the user has left the app alone for scanIdle (ms).
+export const LIMITS = { messageBytes: 25 * 1048576, scanMax: 2000, scanPage: 20, scanAfter: 2 * 60e3, scanIdle: 60e3 };
 
 // An image still addressed as cid: (a part that could not be inlined) could not load for anyone.
 export const isStrayImage = src => /^cid:/i.test(String(src || "").trim());
@@ -125,11 +130,55 @@ export async function bootstrap(force = false) {
   session = { email: t.email, at: Date.now() };
   return session;
 }
+// The sign-in button. A sign-in that succeeds ends the setup guide.
 export async function signIn() {
   const t = await getToken({ interactive: true });
   session = { email: t.email, at: Date.now() };
+  await chrome.storage.local.remove(SETUP);
   return session;
 }
+
+// The sign-in page's setup of the user's own Google client (the guide's text is in setup.js).
+// The guide shows while there is no Client ID, and from a change of Client ID until a sign-in
+// succeeds; where it stands is kept in local storage, so a closed tab carries on at the same step.
+const SETUP = "gmSetup";   // { route, step }
+const progress = async () => (await chrome.storage.local.get(SETUP))[SETUP] || null;
+export const setup = {
+  // What the page shows: { kind: "guide" | "ready" | "ended", own, account, text, route, step,
+  // steps, other, jump, notes, help }. ready: a Client ID and nobody signed in; ended: the
+  // sign-in of account ended (Google's session, or the permission withdrawn).
+  async view() {
+    const [{ id, own }, was, at] = await Promise.all([client(), account(), progress()]);
+    const redirect = redirectAddress(), project = projectOf(id);
+    const kind = !id || at ? "guide" : was ? "ended" : "ready";
+    const route = ROUTES.includes(at?.route) ? at.route : "quick";
+    const g = guide({ route, redirect, project });
+    const step = g.steps.some(s => s.id === at?.step) ? at.step : g.steps[0].id;
+    const text = kind === "guide" ? INTRO : kind === "ended" ? `Your Google™ sign-in as ${was} has ended. Sign in again to carry on.` : PROVIDER.signIn.text;
+    return { kind, own, clientId: own ? id : "", account: was, text, ...g, step, notes: notes(own), help: help({ redirect, project }),
+      reset: own ? "Use a different Client ID" : "Use a Client ID of your own", trouble: "Trouble signing in?" };
+  },
+  // A pasted Client ID: { id } or { id, warn } when it is one, { error } when not, {} for nothing.
+  check: text => read(text, redirectAddress()),
+  // Keeps a pasted Client ID and moves the guide past the paste step; answers as check does.
+  async paste(text, route = "quick") {
+    const r = read(text, redirectAddress());
+    if (!r.id) return r;
+    await setClient(r.id);
+    const steps = guide({ route }).steps, i = steps.findIndex(s => s.id === "paste");
+    await chrome.storage.local.set({ [SETUP]: { route, step: steps[i + 1].id } });
+    return r;
+  },
+  // Where the guide stands.
+  at: (route, step) => chrome.storage.local.set({ [SETUP]: { route, step } }),
+  // Forgets the user's Client ID and opens the guide at the paste step.
+  async reset() {
+    await setClient("");
+    await chrome.storage.local.set({ [SETUP]: { route: "quick", step: "paste" } });
+  },
+  // A failed sign-in in words (setup.js, explain).
+  async explain(e) { return explain(e, { project: projectOf((await client()).id) }); },
+};
 // Ends the sign-in at Google, then forgets everything learnt about the mailbox.
 export async function signOut() {
   await revoke();
@@ -138,32 +187,50 @@ export async function signOut() {
 }
 
 // ---------- transport ----------
-async function timed(what, url, init, ms, read) {
-  const signal = AbortSignal.timeout(ms);
+// cap: the pace the request keeps; the user's own requests are counted while they run, so
+// background work can stand aside (see quota).
+async function timed(what, url, init, ms, read, cap = FOREGROUND) {
+  const signal = AbortSignal.timeout(ms), mine = cap !== BACKGROUND;
+  if (mine) { foregroundBusy++; lastForeground = Date.now(); }
   try {
     const resp = await fetch(url, { ...init, signal });
     return { resp, body: await read(resp) };
   } catch (e) { throw signal.aborted && e.name === "TimeoutError" ? new Timeout(what, ms) : e; }
+  finally { if (mine) { foregroundBusy--; lastForeground = Date.now(); } }
 }
 
 // Quota: a Google Cloud project gives each user 6,000 units a minute by default (Gmail's documents
-// say 15,000; a project gets what its quota page shows). Every call is paced under a sliding
-// minute: what the user does may use up to FOREGROUND, background work (the address-book build)
-// only up to BACKGROUND, so it never takes the room browsing needs.
-const FOREGROUND = 5500, BACKGROUND = 2500;
-const spent = [];            // [time, units] of the calls of the last minute, oldest first
-let blockedUntil = 0;        // Gmail refused for quota: nothing goes before its minute is over
+// say 15,000; a project gets what its quota page shows), and Gmail also refuses a user's requests
+// that come too fast or too many at once. Every call is paced under a sliding minute: what the user
+// does, and all calls together, may use up to FOREGROUND. Background work (the address-book build)
+// keeps far below that and out of the way: at most BACKGROUND a minute of its own,
+// BACKGROUND_BATCH rows to a batch, one request every BACKGROUND_GAP, and none while a request of
+// the user's runs or for YIELD after one, so it never comes in bursts and nothing the user does
+// waits behind it.
+const FOREGROUND = 5500, BACKGROUND = 750;
+const BACKGROUND_BATCH = 10, BACKGROUND_GAP = 4000, YIELD = 2000;
+const spent = [];            // [time, units, background] of the calls of the last minute, oldest first
+let blockedUntil = 0;        // Gmail refused one of the user's calls for quota: nothing goes before its minute is over
+let backgroundUntil = 0;     // Gmail refused background work for quota: only background work waits
+let foregroundBusy = 0, lastForeground = 0, lastBackground = 0;
 async function quota(units, cap = FOREGROUND) {
+  const background = cap === BACKGROUND;
   for (;;) {
     const now = Date.now();
-    if (now < blockedUntil) { await sleep(blockedUntil - now); continue; }
+    const until = background ? Math.max(blockedUntil, backgroundUntil, lastBackground + BACKGROUND_GAP, lastForeground + YIELD) : blockedUntil;
+    if (now < until) { await sleep(until - now); continue; }
+    if (background && foregroundBusy) { await sleep(250); continue; }
     while (spent.length && now - spent[0][0] >= 60000) spent.shift();
-    const used = spent.reduce((n, s) => n + s[1], 0);
-    if (!spent.length || used + units <= cap) { spent.push([now, units]); return; }
-    // wait until enough of the oldest spending is a minute old
-    let over = used + units - cap, at = now;
-    for (const [t, u] of spent) { at = t; over -= u; if (over <= 0) break; }
-    await sleep(at + 60000 - now + 50);
+    // how long until enough of this spending is a minute old for the call to fit under limit
+    const wait = (list, limit) => {
+      let over = list.reduce((n, s) => n + s[1], 0) + units - limit, at = now;
+      if (over <= 0 || !list.length) return 0;
+      for (const [t, u] of list) { at = t; over -= u; if (over <= 0) break; }
+      return at + 60000 - now + 50;
+    };
+    const ms = Math.max(wait(spent, FOREGROUND), background ? wait(spent.filter(s => s[2]), BACKGROUND) : 0);
+    if (!ms) { spent.push([now, units, background]); if (background) lastBackground = now; return; }
+    await sleep(ms);
   }
 }
 // A refusal for quota names the minute it counted in (ErrorInfo window_start_time, in seconds):
@@ -173,10 +240,12 @@ function quotaWait(doc) {
   if (!info) return 0;
   return Math.min(61000, Math.max(1000, (Number(info.metadata.window_start_time) + 60) * 1000 - Date.now() + 500));
 }
-// The pause before asking again after a refusal. A quota refusal holds every call until Gmail's
-// minute is over (quota() waits for it); anything else waits Retry-After or a growing backoff.
-function pauseFor(resp, doc, left) {
+// The pause before asking again after a refusal. A quota refusal of background work holds
+// background work alone until Gmail's minute is over, and one of the user's calls holds every
+// call (quota() waits for either); anything else waits Retry-After or a growing backoff.
+function pauseFor(resp, doc, left, background = false) {
   const w = quotaWait(doc);
+  if (w && background) { backgroundUntil = Math.max(backgroundUntil, Date.now() + w); return 0; }
   if (w) { blockedUntil = Math.max(blockedUntil, Date.now() + w); spent.length = 0; return 0; }
   return Number(resp?.headers.get("retry-after")) * 1000 || backoff(left);
 }
@@ -186,11 +255,6 @@ const sleep = ms => new Promise(ok => setTimeout(ok, ms));
 const reasonOf = doc => doc?.error?.errors?.[0]?.reason || doc?.error?.status || "";
 // Rate limits (429, or a 403 that says so) and server errors pass; they are asked again.
 const retriable = (status, doc) => RETRIABLE.has(status) || (status === 403 && /rateLimit|userRateLimit/i.test(reasonOf(doc)));
-// A 403 for a token without the mail permission (left unticked on Google's consent page, or
-// withdrawn since): insufficientPermissions among its errors, and
-// ACCESS_TOKEN_SCOPE_INSUFFICIENT in its details.
-const lacksScope = doc => (doc?.error?.errors || []).some(e => e?.reason === "insufficientPermissions")
-  || (doc?.error?.details || []).some(d => d?.reason === "ACCESS_TOKEN_SCOPE_INSUFFICIENT");
 const backoff = left => Math.min(8000, 500 * 2 ** (3 - left)) + Math.random() * 300;
 // URL parameters; a list (labelIds) is repeated, as Gmail reads it; null and undefined are left out.
 function addQuery(url, query) {
@@ -214,16 +278,17 @@ async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
   if (json != null) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(json); }
   else if (body != null) { headers["Content-Type"] = type; payload = body; }
   const what = `${method} ${path}`;
-  const { resp, body: text } = await timed(what, url, { method, headers, body: payload }, timeout, r => r.text());
+  const { resp, body: text } = await timed(what, url, { method, headers, body: payload }, timeout, r => r.text(), cap);
   if (resp.status === 401 && tries.auth) { await forget(); await getToken({ force: true }); return call(method, path, opts, { ...tries, auth: false }); }
   if (resp.status === 401) { await forget(); throw new NotSignedIn(); }
   let doc = null;
   if (text) { try { doc = JSON.parse(text); } catch { doc = null; } }
   if (retriable(resp.status, doc) && tries.again > 0) {
-    await sleep(pauseFor(resp, doc, tries.again));
+    await sleep(pauseFor(resp, doc, tries.again, cap === BACKGROUND));
     return call(method, path, opts, { ...tries, again: tries.again - 1 });
   }
-  if (resp.status === 403 && lacksScope(doc)) { await forget(); throw new NotSignedIn("the sign-in lacks the needed permission; sign in again"); }
+  // a token without the mail permission (left unticked on Google's consent page, or withdrawn since)
+  if (resp.status === 403 && refusal(doc) === "scope") { await forget(); throw new NotSignedIn("the sign-in lacks the needed permission; sign in again", "scope"); }
   if (!resp.ok) throw new ApiError(`${what}: HTTP ${resp.status} ${String(doc?.error?.message || text).slice(0, 160)}`, { status: resp.status, error: doc?.error || text.slice(0, 300) });
   // Gmail leaves empty fields out, so an answer with nothing to say (a list with no entries under
   // a fields mask, a 204) has no body at all: an empty object, read like any other answer.
@@ -232,21 +297,22 @@ async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
 
 // Several calls in one HTTP round trip (multipart/mixed). reqs: [{ method, path, query, json }];
 // returns [{ status, json }] in the same order. Gmail caps a batch at 100 and rate-limits big
-// ones, so 50 go at a time. Gmail may refuse single items of a batch that itself succeeds (rate
-// limits, server errors): those are asked again, after a pause, in a batch of their own.
+// ones, so 50 go at a time, and background work's BACKGROUND_BATCH. Gmail may refuse single items
+// of a batch that itself succeeds (rate limits, server errors): those are asked again, after a
+// pause, in a batch of their own.
 const BATCH_SIZE = 50, ITEM_TRIES = 3;
 async function batch(reqs, units = 5, cap = FOREGROUND) {
-  const out = new Array(reqs.length);
+  const out = new Array(reqs.length), background = cap === BACKGROUND, size = background ? BACKGROUND_BATCH : BATCH_SIZE;
   let todo = reqs.map((r, i) => i);
   for (let left = ITEM_TRIES; ; left--) {
-    for (let i = 0; i < todo.length; i += BATCH_SIZE) {
-      const idx = todo.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < todo.length; i += size) {
+      const idx = todo.slice(i, i + size);
       const got = await batchOnce(idx.map(k => reqs[k]), units, cap);
       idx.forEach((k, j) => { out[k] = got[j]; });
     }
     todo = todo.filter(k => out[k].status === 0 || retriable(out[k].status, out[k].json));
     if (!todo.length || left === 0) return out;
-    await sleep(Math.max(...todo.map(k => pauseFor(null, out[k].json, left))));
+    await sleep(Math.max(...todo.map(k => pauseFor(null, out[k].json, left, background))));
   }
 }
 async function batchOnce(reqs, units, cap, tries = { auth: true, again: 3 }) {
@@ -255,12 +321,12 @@ async function batchOnce(reqs, units, cap, tries = { auth: true, again: 3 }) {
   const t = await getToken();
   const boundary = `batch_${crypto.randomUUID()}`;
   const body = encodeBatch(reqs, boundary);
-  const { resp, body: text } = await timed("batch", BATCH_URL, { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": `multipart/mixed; boundary=${boundary}` }, body }, TIMEOUTS.batch, r => r.text());
+  const { resp, body: text } = await timed("batch", BATCH_URL, { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": `multipart/mixed; boundary=${boundary}` }, body }, TIMEOUTS.batch, r => r.text(), cap);
   if (resp.status === 401 && tries.auth) { await forget(); await getToken({ force: true }); return batchOnce(reqs, units, cap, { ...tries, auth: false }); }
   if (resp.status === 401) { await forget(); throw new NotSignedIn(); }
   if (!resp.ok && tries.again > 0) {
     let doc = null; try { doc = JSON.parse(text); } catch { doc = null; }
-    if (retriable(resp.status, doc)) { await sleep(pauseFor(resp, doc, tries.again)); return batchOnce(reqs, units, cap, { ...tries, again: tries.again - 1 }); }
+    if (retriable(resp.status, doc)) { await sleep(pauseFor(resp, doc, tries.again, cap === BACKGROUND)); return batchOnce(reqs, units, cap, { ...tries, again: tries.again - 1 }); }
   }
   if (!resp.ok) throw new ApiError(`batch: HTTP ${resp.status} ${text.slice(0, 160)}`, { status: resp.status, error: text.slice(0, 300) });
   const m = (resp.headers.get("content-type") || "").match(/boundary="?([^";]+)"?/);

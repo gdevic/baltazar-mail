@@ -1,7 +1,8 @@
 // README screenshots: the real extension in Chromium against a mocked Yahoo backend filled with
 // invented mail, so no real names, addresses or messages appear. node tools/screenshots.js
-// Writes docs/screenshots/{light,viewer,dark,settings}.png. With --store, writes the same scenes at
-// the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo and the 440x280 and 1400x560
+// Writes docs/screenshots/{light,viewer,dark,settings}.png, and the Gmail edition's sign-in page
+// for docs/gmail-sign-in.md as docs/screenshots/signin-*.png. With --store, writes the Yahoo scenes
+// at the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo and the 440x280 and 1400x560
 // promotional tiles, to store/.
 const { chromium } = require("playwright");
 const path = require("path");
@@ -398,5 +399,60 @@ function listFor(q) {
 
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });
+  if (!STORE) await signInShots();
   console.log("wrote", fs.readdirSync(OUT).join(", "));
 })().catch(e => { console.error(e); process.exit(1); });
+
+// The Gmail edition's sign-in page, for docs/gmail-sign-in.md: a build that carries no Google
+// client, as a release does, taken through its setup guide against the mocked Gmail of the browser
+// suites. Light theme only; each picture is the page's column alone. The Client ID is invented.
+async function signInShots() {
+  const { launch } = require("./harness.js");
+  const h = await launch({ provider: "gmail", gmail: { mime: await import("../ext/mime.js") } });
+  const { page, extId, gmail } = h;
+  const WIDTH = 900;
+  await page.setViewportSize({ width: WIDTH, height: 900 });
+  await page.goto(`chrome-extension://${extId}/mail.html`);
+  await page.evaluate(() => chrome.storage.local.set({ settings: { theme: "light", lightTheme: "light" } }));
+  await page.reload();
+  await page.waitForSelector("#signin:not(.hidden) .g-step.now");
+  // The window grows until the whole column fits, then the picture is cut to the column.
+  const shot = async file => {
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.mouse.move(2, 2);
+    const need = await page.evaluate(() => document.getElementById("signin").scrollHeight);
+    if (need > page.viewportSize().height) await page.setViewportSize({ width: WIDTH, height: need });
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => {
+      const rs = [...document.querySelectorAll("#signin > *")].filter(e => e.offsetParent).map(e => e.getBoundingClientRect());
+      return { x: Math.min(...rs.map(b => b.left)), y: Math.min(...rs.map(b => b.top)), right: Math.max(...rs.map(b => b.right)), bottom: Math.max(...rs.map(b => b.bottom)) };
+    });
+    const pad = 20;
+    await page.screenshot({ path: path.join(OUT, file), clip: { x: r.x - pad, y: r.y - pad, width: r.right - r.x + 2 * pad, height: r.bottom - r.y + 2 * pad } });
+  };
+  const at = step => page.waitForSelector(`.g-step.now[data-step="${step}"]`);
+
+  await shot("signin-guide.png");
+  await page.locator(".g-step.now .g-next").click();
+  await page.locator("#g-paste-in").fill("GOCSPX-x1y2z3");
+  await shot("signin-paste.png");
+  await page.locator("#g-paste-in").fill("123456789012-abc123def456ghi789.apps.googleusercontent.com");
+  await page.locator("#g-paste-in").press("Enter");
+  await at("api");
+  await shot("signin-api.png");
+  await page.locator(".g-step.now .g-next").click();
+  await at("signin");
+  await shot("signin-button.png");
+  // Google's window closed early, with the entry for its most common error open
+  gmail.flowAnswer = { reject: "The user did not approve access." };
+  await page.locator("#retry").click();
+  await page.waitForSelector("#signin-alert:not(.hidden)");
+  await page.locator('#signin-help details[data-help="redirect_uri_mismatch"] summary').click();
+  await shot("signin-help.png");
+  // the page once the setup is done and the user has signed out
+  await page.evaluate(() => chrome.storage.local.remove("gmSetup"));
+  await page.reload();
+  await page.waitForSelector("#signin:not(.hidden) #signin-notes:not(.hidden)");
+  await shot("signin-ready.png");
+  await h.close();
+}

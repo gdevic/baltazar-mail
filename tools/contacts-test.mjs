@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait } = await import("../dist/baltazar-mail-yahoo/contacts.js");
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",
@@ -62,6 +62,18 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   for (let i = 0; i < 30; i++) noteName(f, `Spam ${i}`, "others");
   noteName(f, "Spam 29", "others");
   check(Object.keys(f.nameBy.others).length === 8 && bestName(f) === "Spam 29" && "Spam 28" in f.nameBy.others, "at most 8 names per source, newest kept: " + JSON.stringify(f.nameBy.others));
+}
+// The first build of a provider that paces it: not before its start time, then only once the user
+// has been idle long enough, at once when the tab is hidden, and without limits where none are set.
+{
+  const now = 1_000_000_000, idle = 60e3;
+  const wait = o => paceWait({ now, idle, ...o });
+  check(wait({ after: now + 120e3, lastInput: now - 90e3 }) === 120e3, "nothing before the start time, however idle the user is");
+  check(wait({ after: now + 120e3, lastInput: now - 90e3, hidden: true }) === 120e3, "a hidden tab does not start the build early");
+  check(wait({ after: now - 1, lastInput: now - 5e3 }) === 55e3, "after the start time, it waits until the user has been idle long enough");
+  check(wait({ after: now - 1, lastInput: now - 5e3, hidden: true }) === 0, "a hidden tab is a user away");
+  check(wait({ after: now - 1, lastInput: now - 60e3 }) === 0 && wait({ after: 0, lastInput: now - 90e3 }) === 0, "an idle user lets it go");
+  check(paceWait({ now, lastInput: now }) === 0, "no start time and no idle time: no wait");
 }
 console.log(fail ? `${fail} FAIL` : `PASS (${machine.length} machine, ${person.length} person)`);
 process.exit(fail ? 1 : 0);

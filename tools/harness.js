@@ -7,9 +7,12 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { createGmail } = require("./gmail-mock.js");
-const { build } = require("./build.js");
+const { build, EDITIONS, ROOT } = require("./build.js");
 
-const built = {};   // edition -> its folder in dist/, built once per run
+// edition -> its folder, built once per run without the edition's local.json and into out/test/,
+// so every machine tests the same extension and the copy a browser has loaded from dist/ is left alone
+const built = {};
+const buildForTest = edition => build(edition, { local: {}, to: path.join(ROOT, "out", "test", EDITIONS[edition].folder) });
 const now = Math.floor(Date.now() / 1000);
 // Every third message has a file; message 4 has only images built into its body, which are not files.
 // Projects/FPGA (32) carries bidi controls in its names, subjects and filenames.
@@ -39,13 +42,25 @@ const accounts = [{ id: "1", email: "me@yahoo.com", sendingName: "Me Myself", is
 
 async function launch(opts = {}) {
   const provider = opts.provider || "yahoo";
-  const ext = built[provider] ||= build(provider);
+  const ext = built[provider] ||= buildForTest(provider);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-profile-"));
   // No host outside the mocks resolves, so nothing can reach the real network.
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true,
     args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
+  // The Gmail extension opens its mail tab when it is first installed, before any route here is
+  // set: that tab is closed and what it stored forgotten, so a suite starts from an install that
+  // was never opened. firstRun counts the tabs it opened.
+  let firstRun = 0;
+  if (provider === "gmail") {
+    const mailPage = `chrome-extension://${extId}/mail.html`;
+    for (let i = 0; i < 100 && !firstRun; i++) {
+      for (const p of ctx.pages().filter(p => p.url().startsWith(mailPage))) { await p.close(); firstRun++; }
+      if (!firstRun) await new Promise(r => setTimeout(r, 100));
+    }
+    await sw.evaluate(() => Promise.all([chrome.storage.local.clear(), chrome.storage.session.clear()]));
+  }
   // Requests to hosts without a mock are recorded and refused (later routes take precedence).
   const unexpectedHosts = new Set();
   await ctx.route(/^https?:\/\//, r => { unexpectedHosts.add(new URL(r.request().url()).hostname); return r.abort(); });
@@ -214,8 +229,11 @@ async function launch(opts = {}) {
   // from Google planted by signIn() (the sign-in window itself is out of reach of a test, so the
   // first load shows the sign-in page). The window of a sign-in flow is opened by the browser
   // outside the pages routed here, where no host resolves, so a flow fails at once; each one the
-  // page starts is noted before it goes (gmail.signIns), as is any request of the page's own to
-  // Google's sign-in host, so a sign-in the app started by itself is seen.
+  // page starts is noted before it goes (gmail.signIns: its prompt, client and redirect address),
+  // as is any request of the page's own to Google's sign-in host, so a sign-in the app started by
+  // itself is seen. A test may answer the next flow itself instead (gmail.flowAnswer: { reject:
+  // the browser's message } or { fragment: Google's answer }). Pages of Google's console, which
+  // the setup guide links to, are answered with an empty page and noted (gmail.consolePages).
   let gmail = null;
   const signIn = async () => {
     await page.evaluate(() => chrome.storage.session.set({ gmToken: { access_token: "test", expires: Date.now() + 3600e3, email: "me@gmail.com" } }));
@@ -235,14 +253,23 @@ async function launch(opts = {}) {
     });
     await ctx.route("https://oauth2.googleapis.com/**", route => { gmail.calls.push({ method: route.request().method(), path: new URL(route.request().url()).pathname }); return route.fulfill({ status: 200, body: "" }); });
     await ctx.route("https://accounts.google.com/**", route => { gmail.signIns.push({ prompt: new URL(route.request().url()).searchParams.get("prompt"), how: "request" }); return route.fulfill({ status: 500, body: "no sign-in window in a test" }); });
-    await ctx.exposeBinding("noteSignInFlow", (source, flow) => { gmail.signIns.push({ ...flow, how: "flow" }); });
+    gmail.flowAnswer = null;
+    gmail.consolePages = [];
+    await ctx.route("https://console.cloud.google.com/**", route => { gmail.consolePages.push(route.request().url()); return route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Google Cloud console</title>" }); });
+    await ctx.exposeBinding("noteSignInFlow", (source, flow) => { gmail.signIns.push({ ...flow, how: "flow" }); const a = gmail.flowAnswer; gmail.flowAnswer = null; return a; });
     await ctx.addInitScript(() => {
       const identity = globalThis.chrome?.identity;
       if (!identity?.launchWebAuthFlow || !globalThis.noteSignInFlow) return;
       const launch = identity.launchWebAuthFlow.bind(identity);
-      // only the prompt is noted: the rest of the address names the OAuth client
-      const promptOf = url => { try { return new URL(url).searchParams.get("prompt"); } catch { return null; } };
-      identity.launchWebAuthFlow = details => { globalThis.noteSignInFlow({ prompt: promptOf(details?.url), interactive: !!details?.interactive }); return launch(details); };
+      // the test build carries no client of its own, so the client noted is the one the test gave
+      const param = (url, k) => { try { return new URL(url).searchParams.get(k); } catch { return null; } };
+      identity.launchWebAuthFlow = async details => {
+        const url = details?.url;
+        const answer = await globalThis.noteSignInFlow({ prompt: param(url, "prompt"), client: param(url, "client_id"), redirect: param(url, "redirect_uri"), interactive: !!details?.interactive });
+        if (answer?.reject) throw new Error(answer.reject);
+        if (answer?.fragment) return `${param(url, "redirect_uri")}#${answer.fragment}&state=${param(url, "state")}`;
+        return launch(details);
+      };
     });
     // A sender's image host, for mail that shows a remote picture: what was asked for, by which
     // frame and with what referrer.
@@ -263,6 +290,9 @@ async function launch(opts = {}) {
     if (/^https:\/\/ecp\.yusercontent\.com\//.test(m.location()?.url || "") && /ERR_TUNNEL|ERR_NAME|ERR_PROXY/.test(t)) return;
     // The inline part Yahoo cannot render answers 501, as in production; the browser logs it.
     if (/\/parts\/@\.id==5\/thumbnail/.test(m.location()?.url || "") && /status of 501/.test(t)) return;
+    // Gmail's profile answers 403 for a project with the Gmail API off, which the setup guide's
+    // test provokes on purpose; the browser logs it.
+    if (/\/gmail\/v1\/users\/me\/profile$/.test(m.location()?.url || "") && /status of 403/.test(t)) return;
     // Playwright adds its own listeners to a frame it has looked into; in the reader frame, where
     // no script may run, the browser blocks them and says so on every click and key.
     if (/^about:srcdoc/.test(m.location()?.url || "") && t.includes("the 'allow-scripts' permission is not set")) return;
@@ -273,7 +303,7 @@ async function launch(opts = {}) {
   page.on("console", onConsole);
   const open = async () => page.goto(`chrome-extension://${extId}/mail.html`);
   const close = async () => { await ctx.close(); fs.rmSync(profile, { recursive: true, force: true }); };
-  return { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, open, close, FX, thumbPng, provider, gmail, signIn };
+  return { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, open, close, FX, thumbPng, provider, gmail, signIn, firstRun };
 }
 
 module.exports = { launch, msg, accounts, now };

@@ -130,7 +130,15 @@
   <h1 id="signin-title">Baltazar Mail</h1>
   <div id="signin-none">
     <p id="signin-text"></p>
-    <p><a id="signin-link" target="_blank" rel="noopener"></a><span id="signin-then"></span><button id="retry">retry</button><span id="signin-end"></span></p>
+    <div id="signin-guide" class="hidden"></div>
+    <div id="signin-ready">
+      <p><a id="signin-link" target="_blank" rel="noopener"></a><span id="signin-then"></span><button id="retry">retry</button><span id="signin-end"></span></p>
+      <p id="signin-wait" class="hidden" role="status"></p>
+      <div id="signin-alert" class="hidden" role="alert"></div>
+      <ul id="signin-notes" class="hidden"></ul>
+      <p id="signin-more" class="hidden"><button id="signin-trouble" type="button" class="link"></button><button id="signin-reset" type="button" class="link"></button></p>
+      <div id="signin-help" class="hidden"></div>
+    </div>
   </div>
   <div id="signin-fail" class="hidden" role="alert">
     <p id="fail-text"></p>

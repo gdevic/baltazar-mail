@@ -238,10 +238,10 @@ function createGmail(opts = {}) {
       paths.push(pth.replace(/^\/gmail\/v1\/users\/me/, "").split("?")[0]);
       const jsonAt = it.indexOf("Content-Type: application/json");
       const inner = jsonAt >= 0 ? it.slice(jsonAt).split("\r\n\r\n")[1].trim() : null;
-      // failItems: { status, times, match? }: that many items answered with that status, as Gmail
-      // refuses single items of a batch under load
+      // failItems: { status, times, match?, body? }: that many items answered with that status (and
+      // that error document), as Gmail refuses single items of a batch under load
       const f = state.failItems;
-      const r = f?.times > 0 && (!f.match || f.match.test(pth)) ? (f.times--, err(f.status, "injected item failure")) : respond(m, "https://gmail.googleapis.com" + pth, inner, h);
+      const r = f?.times > 0 && (!f.match || f.match.test(pth)) ? (f.times--, f.body ? { status: f.status, json: f.body } : err(f.status, "injected item failure")) : respond(m, "https://gmail.googleapis.com" + pth, inner, h);
       return `--resp\r\nContent-Type: application/http\r\nContent-ID: <response-item${i}>\r\n\r\nHTTP/1.1 ${r.status} X\r\nContent-Type: application/json\r\n\r\n${r.json == null ? "" : JSON.stringify(r.json)}\r\n`;
     });
     inBatch = false;

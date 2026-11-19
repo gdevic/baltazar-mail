@@ -8,6 +8,7 @@ import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { esc, noBidi } from "./text.js";
 import { cleanLink } from "./links.js";
+import { drawGuide, drawHelp, focusStep, rich, pageLink } from "./guide.js";
 
 const $ = id => document.getElementById(id);
 // The name the page shows: the adapter's title where it gives one, otherwise the extension's name
@@ -186,7 +187,7 @@ const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? `${api.P
 // Errors that mean "no session" show the sign-in panel; others a notice, or with quiet (a
 // background check that simply runs again) only the status line.
 function handleError(e, what, { quiet = false } = {}) {
-  if (e instanceof api.NotSignedIn) { showSignIn(); return; }
+  if (e instanceof api.NotSignedIn) { showSignIn(e); return; }
   console.error(what, e);
   if (quiet) status(`${what}: ${cause(e)}`);
   else notify(FAILED[what] || `Something went wrong (${what}).`, { detail: cause(e), err: e, what });
@@ -1225,6 +1226,7 @@ function setFrame(doc, bg = "#fff") {
   f.addEventListener("load", () => {
     const doc = f.contentDocument;
     doc?.addEventListener("keydown", e => { if (!SCROLL_KEYS.has(e.key) || e.ctrlKey || e.metaKey) onKey(e); });
+    for (const t of ACTIVITY) doc?.addEventListener(t, markActive, { capture: true, passive: true });
     // An in-message anchor (#section) would resolve against the app's URL and load it into the
     // frame; the app scrolls to the target instead.
     doc?.addEventListener("click", e => {
@@ -1955,6 +1957,8 @@ const SYMBOL_KEYS = new Set(["#", "!", "?", "/", "*", ","]);
 const REPEATLESS = new Set(["e", "#", "Delete", "Backspace", "!", "p", "s", "u", "v", "x", "z", "Z", "c", "r", "a", "f", "R"]);
 function onKey(e) {
   if (e.target.closest && e.target.closest("#compose")) return;
+  // keys typed into the sign-in page (its paste box, its buttons and links) are the page's own
+  if (e.target.closest && e.target.closest("#signin")) return;
   if (viewer.isOpen()) { viewer.onKey(e); return; }
   const openModal = modals.find(id => !$(id).classList.contains("hidden"));
   if (openModal) {
@@ -2078,11 +2082,15 @@ const EYE = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-w
 const EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 3.8A6.4 6.4 0 0 1 8 3.5c4.1 0 6.5 4.5 6.5 4.5a11 11 0 0 1-1.6 2.1M10.1 10.6A2 2 0 0 1 7 8.4M4.2 5A11 11 0 0 0 1.5 8S3.9 12.5 8 12.5c1 0 1.9-.3 2.7-.7M2 2l12 12"/></svg>`;
 let abTab = "all", abAll = [];
 
+// The first build of a provider that paces it (api.LIMITS.scanAfter) can take a long while, so
+// the summary says it is still under way.
 async function renderAbSummary() {
   const list = await contacts.all();
   const hidden = list.filter(c => c.hidden).length;
+  const building = !!api.LIMITS.scanAfter && !(await contacts.isBuilt());
   $("ab-summary").textContent = list.length
-    ? `${list.length.toLocaleString()} addresses learned from Inbox and Sent${hidden ? ` · ${hidden.toLocaleString()} hidden from suggestions` : ""}`
+    ? `${list.length.toLocaleString()} addresses learned from Inbox and Sent${hidden ? ` · ${hidden.toLocaleString()} hidden from suggestions` : ""}${building ? " · still being built, a little at a time while you are not using the app" : ""}`
+    : building ? "Learned from your Inbox and Sent headers, a little at a time while you are not using the app, starting two minutes after you first sign in; nothing collected yet."
     : "Learned from your Inbox and Sent headers; nothing collected yet.";
 }
 
@@ -2188,6 +2196,7 @@ function wireSettings() {
       if (!(await compose.close(true))) return;
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
       await contacts.clear().catch(() => {});
+      await chrome.storage.local.remove(CONTACTS_AFTER).catch(() => {});
       location.reload();
     };
   }
@@ -2282,13 +2291,92 @@ function fillSignIn() {
   $("signin-end").textContent = s.link ? "." : "";
 }
 
-function showSignIn() {
+// e: the NotSignedIn that brought the panel, which a provider with a setup guide may explain.
+function showSignIn(e) {
   state.signedIn = false;
   startPolling();
   clearTimeout(startRetry);
   $("signin-none").classList.remove("hidden"); $("signin-fail").classList.add("hidden");
   $("signin").classList.remove("hidden");
   $("app").classList.add("hidden");
+  if (api.setup) drawSignIn({ error: e }).catch(err => console.error("sign-in page", err));
+}
+
+// The sign-in page of a provider with a setup guide (api.setup): the guide while there is no
+// Client ID or a new one is being set up, its last step holding the sign-in button; otherwise the
+// button alone, with what Google will ask and help at hand. The same view is not drawn twice, so
+// calls that arrive together (several requests failing at once) keep what is typed and where the
+// focus is; a failure to explain is shown either way.
+let signInView = null, signInDrawn = "";
+async function drawSignIn({ error = null, force = false, focus = false } = {}) {
+  const view = await api.setup.view();
+  const advice = error ? await api.setup.explain(error) : null;
+  const key = JSON.stringify([view.kind, view.route, view.step, view.clientId, view.account]);
+  if (key === signInDrawn && !force && !advice) return;
+  signInView = view; signInDrawn = key;
+  $("signin").classList.add("rich");
+  $("signin-none").append($("signin-ready"));      // home again before the guide is drawn anew
+  $("signin-text").replaceChildren(rich(view.text));
+  const guide = view.kind === "guide", step = guide ? view.steps.find(s => s.id === view.step) : null;
+  $("signin-guide").classList.toggle("hidden", !guide);
+  if (guide) {
+    drawGuide($("signin-guide"), view, {
+      step: id => moveGuide(view.route, id),
+      route: route => moveGuide(route, null),
+      check: api.setup.check,
+      paste: async text => {
+        const r = await api.setup.paste(text, view.route);
+        if (r.id) { await drawSignIn({ force: true, focus: true }); if (r.warn) showAdvice({ text: r.warn, note: true }); }
+        return r;
+      },
+    });
+    if (step?.signIn) $("signin-guide").querySelector(".g-slot")?.append($("signin-ready"));
+  }
+  $("signin-ready").classList.toggle("hidden", guide && !step?.signIn);
+  $("signin-notes").classList.toggle("hidden", guide);
+  $("signin-notes").replaceChildren(...view.notes.map(t => holding("li", rich(t))));
+  $("signin-trouble").textContent = view.trouble;
+  $("signin-reset").textContent = view.reset;
+  $("signin-reset").classList.toggle("hidden", guide);
+  $("signin-more").classList.remove("hidden");
+  $("signin-help").classList.add("hidden");
+  showAdvice(advice);
+  if (focus) focusStep($("signin-guide"));
+}
+async function moveGuide(route, step) {
+  await api.setup.at(route, step);
+  await drawSignIn({ force: true, focus: true });
+}
+// A failed sign-in in words (null clears it): the sentence and its page to open, the list of
+// what Google's window may have said, and the button's label for a press that needs no window.
+const holding = (tag, ...kids) => { const n = document.createElement(tag); n.append(...kids); return n; };
+function showAdvice(a) {
+  const box = $("signin-alert");
+  box.classList.toggle("hidden", !a);
+  box.classList.toggle("note", !!a?.note);
+  box.replaceChildren(...(a ? [holding("p", rich(a.text))] : []), ...(a?.open ? [holding("p", pageLink(a.open))] : []));
+  $("retry").textContent = a?.held ? a.button : api.PROVIDER.signIn.button;
+  if (a?.help && signInView) { drawHelp($("signin-help"), signInView.help, { pick: a.pick }); $("signin-help").classList.remove("hidden"); }
+}
+// The sign-in button of a provider with a setup guide: it says it is waiting while Google's window
+// is open, and a sign-in that fails stays on the page with its reason; only one that succeeds goes
+// on to load the mailbox.
+async function pressSignIn() {
+  const b = $("retry"), wait = $("signin-wait");
+  if (b.disabled) return;
+  b.disabled = true;
+  showAdvice(null);
+  wait.textContent = api.PROVIDER.signIn.waiting || "";
+  wait.classList.toggle("hidden", !wait.textContent);
+  let failed = null;
+  try { await api.signIn(); } catch (e) { failed = e; }
+  b.disabled = false;
+  wait.classList.add("hidden");
+  if (!failed) { start(); return; }
+  if (!(failed instanceof api.NotSignedIn)) { showStartError(failed); return; }
+  console.warn("sign-in", failed.code, failed.message);
+  if (failed.code === "setup") { await drawSignIn({ force: true, focus: true }); return; }
+  showAdvice(await api.setup.explain(failed));
 }
 
 // The mailbox could not be loaded (offline, the service down): the reason is shown on a page of
@@ -2337,11 +2425,29 @@ async function startUp() {
     await openFolder(inboxId());
     noteMissed();
     syncContacts();
-  } catch (e) { if (e instanceof api.NotSignedIn) showSignIn(); else showStartError(e); }
+  } catch (e) { if (e instanceof api.NotSignedIn) showSignIn(e); else showStartError(e); }
   checkUpdate().catch(() => {});
 }
 
 // Address book: full build on first run, then incremental on each poll that sees Inbox or Sent change.
+// A provider whose requests cost quota (Gmail: api.LIMITS.scanAfter) builds it out of the way:
+// not before scanAfter has passed since the mailbox was first opened, when the user is likely
+// trying the app, and then a step at a time, each once the user has left the app alone for
+// api.LIMITS.scanIdle (no click, key or wheel, here or in a message) or the tab is hidden. The time
+// the build may start is kept, so a reload does not start the wait again; Sign out forgets it.
+const CONTACTS_AFTER = "contactsAfter";
+let lastInput = Date.now();
+const markActive = () => { lastInput = Date.now(); };
+const ACTIVITY = ["pointerdown", "keydown", "wheel"];
+for (const t of ACTIVITY) document.addEventListener(t, markActive, { capture: true, passive: true });
+async function untilIdle() {
+  for (;;) {
+    const after = (await chrome.storage.local.get(CONTACTS_AFTER))[CONTACTS_AFTER] || 0;
+    const wait = contacts.paceWait({ now: Date.now(), after, lastInput, idle: api.LIMITS.scanIdle, hidden: document.hidden });
+    if (!wait) return;
+    await new Promise(ok => setTimeout(ok, Math.min(wait, 30e3) + 50));
+  }
+}
 let contactsBusy = false;
 async function syncContacts(full = false) {
   if (contactsBusy) return;
@@ -2351,7 +2457,9 @@ async function syncContacts(full = false) {
     try { own.push(...(await api.accounts()).accounts.map(a => a.email)); } catch {}
     contacts.setOwnAddresses(own);
     const first = !(await contacts.isBuilt());
-    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, full,
+    const slow = first && !!api.LIMITS.scanAfter;
+    if (slow && !(await chrome.storage.local.get(CONTACTS_AFTER))[CONTACTS_AFTER]) await chrome.storage.local.set({ [CONTACTS_AFTER]: Date.now() + api.LIMITS.scanAfter });
+    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, full, pace: slow ? untilIdle : null,
       progress: first ? (fid, seen) => status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}...`) : null });
     // The routine learn after a poll says nothing: a status would cover one the user is reading,
     // such as the confirmation of a send.
@@ -2366,7 +2474,17 @@ document.title = APP;
 $("brand").textContent = APP;
 $("app-trademark").textContent = api.PROVIDER.trademark;
 fillSignIn();
-$("retry").onclick = () => api.signIn().then(start, start);
+$("retry").onclick = () => api.setup ? pressSignIn() : api.signIn().then(start, start);
+$("signin-trouble").onclick = () => {
+  const help = $("signin-help"), show = help.classList.contains("hidden");
+  if (show && signInView) drawHelp(help, signInView.help);
+  help.classList.toggle("hidden", !show);
+};
+$("signin-reset").onclick = async () => {
+  await api.setup.reset();
+  await drawSignIn({ force: true });
+  $("g-paste-in")?.focus();
+};
 $("fail-retry").onclick = () => start();
 $("fail-copy").onclick = () => copyReport(startReport, $("fail-copy"));
 $("folder-filter").oninput = () => { state.kbFolder = -1; renderFolders(); };

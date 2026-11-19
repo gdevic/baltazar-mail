@@ -24,12 +24,6 @@
     "storage",
     "identity"
   ],
-  "oauth2": {
-    "client_id": "CLIENT_ID.apps.googleusercontent.com",
-    "scopes": [
-      "https://mail.google.com/"
-    ]
-  },
   "content_security_policy": {
     "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src blob:; font-src 'self' data:; connect-src 'self' https://gmail.googleapis.com https://oauth2.googleapis.com https://api.github.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'",
     "sandbox": "sandbox allow-scripts; default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'"
@@ -38,5 +32,6 @@
     "pages": [
       "render.html"
     ]
-  }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs8EwF1r1sRvG6rmHiJSygZI0kVxiu8+t0K1bOdnbmzRLObNB3NV4OQHLBvjTJi5mdSdQ91pXLDZae98ynLRpq1R4J4bCoCLiqxyD7+i13hTWC27347EmFqiO5Kiw9crR49UGFpCWhw++/S1Wqs1I5SW5DRKHXSvyaiWjHYmzXxaflhX/hwIHvme/v6ljjqTWLkEKfVAk9QqA0dlYUUzvn/zosUSB/kqC2Rj2F1UqGREm7PH+/qqAe6ppS1nw8OzTYGvQsG17UT7qdShbg3fUYJ+cIrEdz+TVUOGL7jjFp9cWgtW/ieig11HXBT3r9ebIgRcMK5vCSdNUT4ewdRxZ6wIDAQAB"
 }

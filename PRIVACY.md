@@ -30,6 +30,8 @@ Baltazar Mail for Gmail, with the Google™ sign-in you give it:
 | `oauth2.googleapis.com` | revoking the sign-in when you click Sign out in Settings; the token goes in the request's body |
 | the senders' own servers | images in messages, when the setting lets them load: Gmail's API hands over the message as the sender wrote it, so each image is fetched from wherever the sender put it, which tells that server your address and that the message was opened. The default is to load them automatically except in Spam and Trash; Settings can limit that to when you ask |
 
+The setup guide on the Gmail extension's sign-in page links to pages of the Google Cloud™ console (`console.cloud.google.com`), where you make the Google client the extension signs in through. Each opens in a tab of its own when you click it, like any link; the extension itself sends nothing there.
+
 The extension's Content Security Policy (in its `manifest.json`) makes the browser block any other destination for the extension's own requests, so mail and everything else the extension sends goes only to these hosts. The Yahoo extension's pages may load images only from Yahoo's image proxy. The Gmail extension's pages may load images (including those a message's styles name) from any `https:` host, which is what lets a message's images load from their senders' servers. Such a request is made by the message's own HTML and styles, so it can tell that server what the message itself is able to (that it was opened, your IP address and browser); it carries no referrer and never your Google sign-in.
 
 ## What is stored on your computer
@@ -40,10 +42,12 @@ The extension's Content Security Policy (in its `manifest.json`) makes the brows
 | When you last looked at the mail tab | the extension's local storage | so a tab that opens in the background shows the new-mail dot for mail that arrived while the browser was closed |
 | The latest release number and when it was checked | the extension's local storage | to ask GitHub once a day, or an hour later after a failed check |
 | For each draft saved here, whether it was written in HTML or plain text (keyed by the draft's id, removed when it is sent or discarded, at most 200 kept) | the extension's local storage | to reopen the draft in the same format |
-| Address book: names, addresses, the last date mail went either way and the last date you wrote to each, and whether you hid it from suggestions, with the address of the account it belongs to | the extension's IndexedDB; started afresh when another account signs in, and cleared by Sign out (Gmail) | address suggestions while writing; built from the headers of your own Inbox and Sent |
+| Address book: names, addresses, the last date mail went either way and the last date you wrote to each, and whether you hid it from suggestions, with the address of the account it belongs to and how far its first build has come | the extension's IndexedDB; started afresh when another account signs in, and cleared by Sign out (Gmail) | address suggestions while writing; built from the headers of your own Inbox and Sent |
 | Yahoo: the session values and the mailbox id | the extension's session storage, cleared when the browser closes | to call Yahoo without reloading its page |
 | Gmail: the access token Google gave the extension, with its expiry and your address | the extension's session storage, cleared when the browser closes; revoked at Google by Sign out | to call the Gmail API; it is renewed silently an hour at a time |
 | Gmail: the address of the Google account you signed in with | the extension's local storage, removed by Sign out | so a silent renewal asks Google for that account only, and refuses a token for any other |
+| Gmail: when the address book's first build may start, two minutes after the mailbox first opened | the extension's local storage, removed by Sign out | so the build waits while you try the app, also across reloads |
+| Gmail: the Client ID of the Google client you set up and, while the setup is under way, the step its guide is at | the extension's local storage; the Client ID is kept through Sign out until you use a different one, and the step is removed by the first sign-in | so the sign-in goes through your own client, and a tab closed during the setup carries on at the same step |
 | A message being printed | session storage, removed as soon as the print page reads it | to hand it to the print page |
 
 Message contents are not stored; they are fetched from the mail service when you open a message. Removing an extension from the browser deletes all of the above for it.
@@ -64,7 +68,7 @@ Baltazar Mail for Gmail:
 |---|---|
 | Access to `gmail.googleapis.com` and `oauth2.googleapis.com` | to call the Gmail API, and to revoke the sign-in |
 | `identity` | to open Google's sign-in window and receive the token it answers with |
-| `storage` | settings, the release check, the token, the account address and print hand-off described above |
+| `storage` | settings, the release check, the token, the account address, the Client ID and print hand-off described above |
 | The Gmail permission you grant at sign-in (`https://mail.google.com/`) | the one that lets the extension read, write and permanently delete mail, which Empty Trash, Empty Spam and Delete in Trash need; it can be withdrawn at any time in your Google account's security settings |
 
 ## Contact

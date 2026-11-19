@@ -1,7 +1,10 @@
 // The build's own machinery: reading a file's code without its comments, which the check that no
-// edition names another edition's hosts rests on, and bringing a finished build into its folder.
+// edition names another edition's hosts rests on, bringing a finished build into its folder, and
+// the manifest it writes.
 // node tools/build-test.mjs
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,6 +64,26 @@ ok(named('{ "a": "/* x", "host": "yahoo", "b": "*/" }', "json") && named('{ "hos
   }
   let err = ""; try { build("nope"); } catch (e) { err = e.message; }
   ok(/unknown edition/.test(err), "an unknown edition is refused: " + err);
+}
+
+// ---------- the manifest: the key that pins the id, and the OAuth client ----------
+{
+  // Chrome's extension id: the SHA-256 of the key's bytes, its first 16 bytes written as letters a to p.
+  const idOf = key => [...crypto.createHash("sha256").update(Buffer.from(key, "base64")).digest().subarray(0, 16)].map(b => String.fromCharCode(97 + (b >> 4), 97 + (b & 15))).join("");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-manifest-"));
+  const manifestOf = (opts, n) => JSON.parse(fs.readFileSync(path.join(build("gmail", { ...opts, to: path.join(root, String(n)) }), "manifest.json"), "utf8"));
+  const refusal = local => { try { manifestOf({ local }, "bad"); return ""; } catch (e) { return e.message; } };
+  try {
+    const plain = manifestOf({ local: {} }, 1);
+    ok(idOf(plain.key) === "enejfhgeailmbkfpdgfdlajlfhnnbafd" && !("oauth2" in plain), "a Gmail build carries the key of the golden id and, without a client id, no oauth2 block: " + JSON.stringify({ id: plain.key && idOf(plain.key), oauth2: plain.oauth2 }));
+    const client = manifestOf({ local: { client_id: "123456789012-abc123.apps.googleusercontent.com" } }, 2);
+    ok(client.oauth2?.client_id === "123456789012-abc123.apps.googleusercontent.com" && client.oauth2.scopes.join() === "https://mail.google.com/", "a client id in local.json becomes the oauth2 block: " + JSON.stringify(client.oauth2));
+    ok(!("key" in manifestOf({ local: {}, store: true }, 3)), "a store build leaves the key out");
+    ok(/not a Google OAuth client id/.test(refusal({ client_id: "CLIENT_ID.apps.googleusercontent.com" })) && /not a Google OAuth client id/.test(refusal({ client_id: "GOCSPX-secret" })), "a client id that is not one is refused");
+    ok(!fs.readdirSync(root).some(n => n.endsWith(".tmp")), "a refused build leaves no staging folder");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  // Yahoo's copies keep the ids they have: its key, where there is one, comes only from local.json.
+  ok(!("key" in JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "yahoo", "manifest.json"), "utf8"))), "the Yahoo manifest carries no key");
 }
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

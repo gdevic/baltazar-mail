@@ -117,20 +117,26 @@ ok(messageIdOf(" <abc@x.com> ") === "<abc@x.com>" && messageIdOf("none") === "",
 // ---------- the adapter, built ----------
 require("./build.js").build("gmail");
 
-// chrome: session storage, the manifest with a client id, and a Google sign-in window that answers
-// a token (silently only when the test allows it).
+// chrome: session and local storage, a manifest that carries no client id (as a release's does),
+// and a Google sign-in window that answers a token (silently only when the test allows it; the
+// button's answer can be set with pressed).
 const store = {}, local = {};
+const manifest = { name: "Baltazar Mail for Gmail™", version: "0.18.0" };
 const flows = [];
+const CID = "123456789012-abc123def456ghi789.apps.googleusercontent.com";   // the user's own client
 let silentOk = false, silentDown = "", silentRefusal = "", tokens = 0;
+let pressed = null;        // { reject: the browser's message } or { fragment: Google's answer } for the next interactive flow
 const area = o => ({ get: async k => ({ [k]: o[k] }), set: async x => Object.assign(o, x), remove: async k => { delete o[k]; } });
 globalThis.chrome = {
   storage: { session: area(store), local: area(local) },
-  runtime: { getManifest: () => ({ name: "Baltazar Mail for Gmail™", version: "0.18.0", oauth2: { client_id: "cid.apps.googleusercontent.com" } }) },
+  runtime: { getManifest: () => manifest },
   identity: {
     getRedirectURL: () => "https://extid.chromiumapp.org/",
     launchWebAuthFlow: async ({ url, interactive }) => {
       flows.push({ interactive, url });
       const u = new URL(url);
+      if (interactive && pressed?.reject) throw new Error(pressed.reject);
+      if (interactive && pressed?.fragment) return `https://extid.chromiumapp.org/#${pressed.fragment}&state=${u.searchParams.get("state")}`;
       if (!interactive && silentDown) throw new Error(silentDown);
       if (!interactive && silentRefusal) return `https://extid.chromiumapp.org/#error=${silentRefusal}&state=${u.searchParams.get("state")}`;
       if (!interactive && !silentOk) throw new Error("The user did not approve access.");
@@ -143,7 +149,9 @@ globalThis.FileReader = class { readAsDataURL(blob) { blob.arrayBuffer().then(b 
 
 const gm = createGmail({ mime: { listParts, extract } });
 const mock = gm.state;
+const fetched = [];        // { at, url } of every request, for the pacing of background work
 globalThis.fetch = async (url, init = {}) => {
+  fetched.push({ at: Date.now(), url: String(url) });
   const method = init.method || "GET", headers = init.headers || {};
   let body = init.body;
   if (body instanceof Blob) body = Buffer.from(await body.arrayBuffer()).toString("latin1");
@@ -179,12 +187,27 @@ const lastMod = () => modsOf().at(-1);
   const dec = api.decodeBatch(`--R\r\nContent-Type: application/http\r\nContent-ID: <response-item1>\r\n\r\nHTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{"error":{"code":404}}\r\n--R\r\nContent-Type: application/http\r\nContent-ID: <response-item0>\r\n\r\nHTTP/1.1 200 OK\r\n\r\n{"id":"INBOX","messagesTotal":10}\r\n--R--\r\n`, "R", 2);
   ok(dec[0].status === 200 && dec[0].json.messagesTotal === 10 && dec[1].status === 404 && dec[1].json.error.code === 404, "answers matched to their items by Content-ID: " + JSON.stringify(dec));
 }
-// sign-in: nothing opens by itself; the button does, and the token is kept
+// sign-in: nothing opens by itself; without a Google client the button opens nothing either and
+// the guide shows; a pasted Client ID is kept, and the button then opens Google's window with it
 {
   const a = await outcome(api.bootstrap());
-  ok(a.e instanceof api.NotSignedIn && flows.length === 0, "with no account signed in, nothing is tried and no window opens: " + JSON.stringify({ e: a.e?.name, flows: flows.length }));
+  ok(a.e instanceof api.NotSignedIn && flows.length === 0 && (await api.setup.explain(a.e)) === null, "with no account signed in, nothing is tried, no window opens and there is nothing to explain: " + JSON.stringify({ e: a.e?.name, flows: flows.length }));
+  const none = await outcome(api.signIn());
+  const v0 = await api.setup.view();
+  ok(none.e?.code === "setup" && flows.length === 0 && v0.kind === "guide" && v0.route === "quick" && v0.step === "create" && v0.steps.map(s => s.id).join() === "create,paste,api,signin" && v0.steps[0].copy.value === "https://extid.chromiumapp.org/" && /Client ID/.test(v0.text),
+    "without a Google client the button opens no window, and the guide starts with this copy's redirect address: " + JSON.stringify({ code: none.e?.code, flows: flows.length, kind: v0.kind, step: v0.step, copy: v0.steps[0]?.copy }));
+  const bad = await api.setup.paste("GOCSPX-abc");
+  ok(/client secret/.test(bad.error) && !local.gmClientId && !local.gmSetup, "a client secret is not taken for a Client ID: " + JSON.stringify(bad));
+  const good = await api.setup.paste(`  ${CID}\n`);
+  const v1 = await api.setup.view(), apiStep = v1.steps.find(s => s.id === "api");
+  ok(good.id === CID && local.gmClientId === CID && JSON.stringify(local.gmSetup) === '{"route":"quick","step":"api"}' && v1.kind === "guide" && v1.step === "api" && v1.own && v1.clientId === CID && apiStep.open.href.endsWith("/apis/library/gmail.googleapis.com?project=123456789012"),
+    "a Client ID is kept and the guide moves on to the Gmail API of its project: " + JSON.stringify({ good, setup: local.gmSetup, step: v1.step, href: apiStep?.open.href }));
+  await api.setup.at("quick", "signin");
+  ok((await api.setup.view()).step === "signin", "the guide is where it was put");
   const s = await api.signIn();
-  ok(s.email === "me@gmail.com" && flows.length === 1 && flows[0].interactive && /prompt=select_account\+consent/.test(flows[0].url) && store.gmToken?.access_token === "tok1" && local.gmAccount === "me@gmail.com", "the sign-in button opens Google's window and keeps the token and the account: " + JSON.stringify({ s, token: store.gmToken, local }));
+  const u = new URL(flows[0].url).searchParams;
+  ok(s.email === "me@gmail.com" && flows.length === 1 && flows[0].interactive && u.get("prompt") === "select_account consent" && u.get("client_id") === CID && u.get("redirect_uri") === "https://extid.chromiumapp.org/" && store.gmToken?.access_token === "tok1" && local.gmAccount === "me@gmail.com" && !local.gmSetup,
+    "the button opens Google's window for the pasted client, keeps the token and the account, and ends the guide: " + JSON.stringify({ s, client: u.get("client_id"), token: store.gmToken, local }));
   const b = await api.bootstrap();
   ok(b.email === "me@gmail.com" && flows.length === 1, "a stored token is reused without a flow");
 }
@@ -446,6 +469,29 @@ const lastMod = () => modsOf().at(-1);
   const g3 = await api.send({ ...plain, csid: g2.message.csid }, "SENT");
   ok(/^sent\d+$/.test(g3.message.id) && mock.uploads.at(-1).path === "/upload/messages/send", "a send of a draft gone elsewhere is sent on its own: " + mock.uploads.at(-1).path);
 }
+// background work (the address-book build): small batches, one request every few seconds, out of
+// the way of the user's own calls; Gmail refusing it for quota holds it alone
+{
+  for (let i = 1; i <= 15; i++) mock.deliver(`bg${i}`, `Background ${i}`);
+  const from = fetched.length, batchesFrom = mock.batches.length;
+  // the last batch (the oldest rows) has one row refused for a quota minute that ends seconds later
+  mock.failItems = { status: 429, times: 1, match: /\/messages\/bg1\?/, body: { error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded", errors: [{ reason: "rateLimitExceeded" }],
+    details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RATE_LIMIT_EXCEEDED", metadata: { quota_limit_value: "6000", window_start_time: String(Math.floor(Date.now() / 1000) - 45) } }] } } };
+  const bg = outcome(api.list("INBOX", 15, 0, { background: true }));
+  for (let i = 0; i < 400 && mock.failItems.times > 0; i++) await new Promise(r => setTimeout(r, 50));
+  const refusedAt = Date.now();
+  const f0 = Date.now(), fg = await outcome(api.body("bg15")), fgMs = Date.now() - f0;
+  const r = await bg;
+  mock.failItems = null;
+  const own = fetched.slice(from).filter(x => !/\/messages\/bg15\?/.test(x.url));
+  const gaps = own.slice(1).map((x, i) => x.at - own[i].at);
+  const sizes = mock.batches.slice(batchesFrom).map(b => b.length);
+  const retryAt = own.at(-1).at;
+  ok(r.value?.messages.length === 15 && fg.value?.message && fgMs < 1500 && retryAt - refusedAt >= 900,
+    "a quota refusal of background work holds it alone; the user's call goes at once: " + JSON.stringify({ rows: r.value?.messages.length, e: r.e?.message || fg.e?.message, fgMs, retryAfter: retryAt - refusedAt }));
+  ok(sizes.length >= 3 && sizes.every(n => n <= 10) && sizes.reduce((a, b) => a + b, 0) === 16 && gaps.every(g => g >= 3900),
+    "background work goes in batches of at most 10, one request every 4 seconds: " + JSON.stringify({ sizes, gaps }));
+}
 // tokens: a 401 renews once silently; a second one means signed out; rate limits are retried
 {
   silentOk = true;
@@ -453,7 +499,7 @@ const lastMod = () => modsOf().at(-1);
   mock.fail = { status: 401, times: 1 };
   const r = await api.folders();
   const hint = new URL(flows.at(-1).url).searchParams;
-  ok(r.folders.length > 0 && store.gmToken.access_token === "tok2" && mock.calls.some(c => c.auth === "Bearer tok2") && !flows.at(-1).interactive && hint.get("prompt") === "none" && hint.get("login_hint") === "me@gmail.com", "a 401 gets one silent renewal for the same account and the call is repeated: " + JSON.stringify({ token: store.gmToken?.access_token, url: flows.at(-1).url }));
+  ok(r.folders.length > 0 && store.gmToken.access_token === "tok2" && mock.calls.some(c => c.auth === "Bearer tok2") && !flows.at(-1).interactive && hint.get("prompt") === "none" && hint.get("login_hint") === "me@gmail.com" && hint.get("client_id") === CID, "a 401 gets one silent renewal for the same account and client, and the call is repeated: " + JSON.stringify({ token: store.gmToken?.access_token, url: flows.at(-1).url }));
   // a renewal Google answers for another account is refused, and the account is kept
   mock.profile.emailAddress = "other@gmail.com";
   mock.fail = { status: 401, times: 1 };
@@ -518,6 +564,51 @@ const lastMod = () => modsOf().at(-1);
   const n = flows.length;
   const r5 = await outcome(api.bootstrap());
   ok(r5.e instanceof api.NotSignedIn && flows.length === n, "after sign-out nothing signs in again until the button is pressed: " + JSON.stringify({ e: r5.e?.name, flows: flows.length - n }));
+  const after = await api.setup.view();
+  ok(local.gmClientId === CID && after.kind === "ready" && after.own && /Sign in with your Google™ account/.test(after.text), "sign-out keeps the Client ID, so the page is one button: " + JSON.stringify({ kind: after.kind, client: local.gmClientId }));
+}
+// the button's failures, each with its code and its words; a token whose account could not be
+// confirmed is held, and the next press confirms it without a window
+{
+  const press = async answer => { pressed = answer; const r = await outcome(api.signIn()); pressed = null; return r; };
+  const n0 = flows.length;
+  const closed = await press({ reject: "The user did not approve access." });
+  const unloaded = await press({ reject: "Authorization page could not be loaded." });
+  const denied = await press({ fragment: "error=access_denied" });
+  const refused = await press({ fragment: "error=redirect_uri_mismatch" });
+  const odd = await press({ fragment: "error=%3Cb%3Ex" });
+  ok([closed, unloaded, denied, refused, odd].map(r => r.e?.code).join() === "closed,unreachable,denied,refused,refused" && refused.e.google === "redirect_uri_mismatch" && odd.e.google === "" && flows.length === n0 + 5 && !store.gmToken && !local.gmAccount,
+    "each way the button's sign-in fails has its code: " + JSON.stringify([closed, unloaded, denied, refused, odd].map(r => [r.e?.code, r.e?.google, r.e?.message])));
+  const [aClosed, aUnloaded, aDenied, aRefused] = await Promise.all([closed, unloaded, denied, refused].map(r => api.setup.explain(r.e)));
+  ok(aClosed.help && !aClosed.held && /closed before/.test(aClosed.text) && /could not be loaded/.test(aUnloaded.text) && !aUnloaded.help && /cancelled/.test(aDenied.text) && aRefused.help && aRefused.pick === "redirect_uri_mismatch",
+    "each failure has its own words, and help where Google's window may have said more: " + JSON.stringify([aClosed, aUnloaded, aDenied, aRefused]));
+  // Google gives a token, but the Gmail API is off in the client's project
+  mock.fail = { status: 403, times: 1, body: { error: { code: 403, message: "Gmail API has not been used in project 123456789012 before or it is disabled.", status: "PERMISSION_DENIED", errors: [{ reason: "accessNotConfigured", domain: "usageLimits" }], details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "SERVICE_DISABLED", domain: "googleapis.com" }] } } };
+  const off = await press(null);
+  const aOff = await api.setup.explain(off.e);
+  ok(off.e?.code === "api-off" && off.e.held && !store.gmToken && aOff.held && aOff.button === "Continue" && aOff.open.href.endsWith("?project=123456789012"), "a sign-in into a project without the Gmail API says so, holds the token, and links to the API: " + JSON.stringify({ code: off.e?.code, aOff }));
+  const n1 = flows.length, heldToken = `tok${tokens}`;
+  const on = await outcome(api.signIn());
+  ok(on.value?.email === "me@gmail.com" && flows.length === n1 && store.gmToken?.access_token === heldToken, "the next press confirms the held token, with no window: " + JSON.stringify({ e: on.e?.message, flows: flows.length - n1, token: store.gmToken?.access_token }));
+  // the account check cannot be made: the token is held too
+  mock.fail = { status: 503, times: 1 };
+  const down = await press(null);
+  const n2 = flows.length;
+  const again = await outcome(api.signIn());
+  ok(down.e?.code === "unconfirmed" && down.e.held && /HTTP 503/.test(down.e.message) && (await api.setup.explain(down.e)).button === "Continue" && again.value && flows.length === n2, "a check that could not be made holds the token for the next press: " + JSON.stringify({ code: down.e?.code, message: down.e?.message, flows: flows.length - n2 }));
+  // the user's own client wins over one the build carries; Use a different Client ID goes back to the build's
+  manifest.oauth2 = { client_id: "999999999999-builtin000000.apps.googleusercontent.com", scopes: ["https://mail.google.com/"] };
+  await press(null);
+  const ownFlow = new URL(flows.at(-1).url).searchParams.get("client_id");
+  await api.setup.reset();
+  const reset = await api.setup.view();
+  await press(null);
+  const builtFlow = new URL(flows.at(-1).url).searchParams.get("client_id");
+  ok(ownFlow === CID && !local.gmClientId && reset.kind === "guide" && reset.step === "paste" && !reset.own && builtFlow === "999999999999-builtin000000.apps.googleusercontent.com", "the user's own Client ID wins over the build's, and without it the build's is used: " + JSON.stringify({ ownFlow, builtFlow, reset: [reset.kind, reset.step] }));
+  // a remembered account whose sign-in ended is named
+  delete manifest.oauth2; await api.setup.paste(CID); delete local.gmSetup; local.gmAccount = "me@gmail.com";
+  const ended = await api.setup.view();
+  ok(ended.kind === "ended" && /me@gmail\.com/.test(ended.text), "a sign-in that ended names its account: " + JSON.stringify([ended.kind, ended.text]));
 }
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);
