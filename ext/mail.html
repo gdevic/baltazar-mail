@@ -180,6 +180,9 @@
     <label><input type="number" id="poll" min="5" max="600" step="5" style="width:60px"> seconds between new-mail checks</label>
     <label><input type="number" id="markread" min="0" max="60" step="1" style="width:60px"> seconds after opening before a message is marked read (blank: never)</label>
     <label><input type="number" id="undosend" min="0" max="60" step="1" style="width:60px"> seconds to hold a message before sending, so it can be undone (0: send at once)</label>
+    <label title="A browser may put a tab left in the background to sleep, and a sleeping tab checks no mail. Kept awake, this tab goes on checking, at the cost of a little power."><input type="checkbox" id="awake"> Keep this tab awake in the background, so mail is still checked</label>
+    <div id="awake-row" class="set-row"><span id="awake-status" role="status"></span><button id="awake-how" type="button" class="link" aria-expanded="false" aria-controls="awake-steps">Browser's own setting</button></div>
+    <div id="awake-steps" class="hidden"></div>
     <b>Address book</b>
     <div class="set-row"><span id="ab-summary">Learned from your Inbox and Sent headers.</span><button id="ab-open">Manage...</button></div>
     <p id="update-note" class="hidden"></p>

@@ -38,7 +38,7 @@ export async function copyText(value, button, shown) {
 }
 
 // A value with its label and a Copy button.
-function copyRow({ label, value }) {
+export function copyRow({ label, value }) {
   const code = el("code", { className: "g-copy-value", textContent: value });
   const button = el("button", { type: "button", className: "g-copy-btn", textContent: "Copy" });
   button.setAttribute("aria-label", `Copy ${label.toLowerCase()}`);

@@ -688,6 +688,50 @@ const { launch } = require("./harness");
   await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
   await page.waitForFunction(() => document.title === "(5) Baltazar Mail for Yahoo™", null, { timeout: 2000 }).catch(() => {});
   results.wake = { title: await page.title(), ms: Date.now() - woke };
+
+  // The tab keeps itself awake with a Web Lock; a sleep the browser forces all the same is
+  // recorded, told once in a notice, and Settings then gives the browser's own setting. The page
+  // is sent the events a browser sends when it freezes and thaws it, and its clock is moved on in
+  // between, so a sleep of three hours takes no time here.
+  {
+    const locks = () => page.evaluate(async () => (await navigator.locks.query()).held.map(l => l.name));
+    const sleep = () => page.evaluate(() => { document.dispatchEvent(new Event("freeze")); document.dispatchEvent(new Event("resume")); });
+    const stored = () => page.evaluate(async () => { const s = await chrome.storage.local.get(["sleeps", "sleepNoted"]); return { sleeps: s.sleeps || [], noted: !!s.sleepNoted }; });
+    const a = results.awake = { locks: await locks() };
+    await page.locator("#list").focus(); await page.keyboard.press(",");
+    a.before = { checked: await page.locator("#awake").isChecked(), status: await page.locator("#awake-status").textContent(), how: await page.locator("#awake-how").textContent(), steps: await page.locator("#awake-steps").isVisible() };
+    // the browser's own setting can be looked up at any time, and is folded away when Settings opens again
+    await page.locator("#awake-how").click();
+    a.before.lead = await page.locator("#awake-steps > p").first().textContent();
+    await page.keyboard.press("Escape");
+    await page.locator("#list").focus(); await page.keyboard.press(",");
+    a.before.refolded = !(await page.locator("#awake-steps").isVisible());
+    await page.keyboard.press("Escape");
+    await sleep(); await page.waitForTimeout(300);
+    a.brief = await stored();
+    await page.evaluate(() => { const real = Date.now.bind(Date); let skip = 0; Date.now = () => real() + skip; document.addEventListener("freeze", () => { skip += 3 * 3600e3; }); });
+    await sleep();
+    await page.waitForSelector("#notice:not(.hidden)", { timeout: 3000 }).catch(() => {});
+    a.long = { ...(await stored()), notice: await page.locator("#notice-text").textContent(), info: await page.locator("#notice.info").count() };
+    await page.locator("#notice-text button").click();
+    await page.waitForSelector("#awake-steps:not(.hidden)", { timeout: 3000 }).catch(() => {});
+    a.told = { settings: await page.locator("#settings").isVisible(), notice: await page.locator("#notice").isVisible(), status: await page.locator("#awake-status").textContent(),
+      how: await page.locator("#awake-how").textContent(), expanded: await page.locator("#awake-how").getAttribute("aria-expanded"), address: await page.locator("#awake-steps .g-copy-value").textContent(), lines: await page.locator("#awake-steps li").count(), open: await page.locator("#awake-open").count() };
+    await page.evaluate(() => { window.copied = []; navigator.clipboard.writeText = async t => { window.copied.push(t); }; });
+    await page.locator("#awake-steps .g-copy-btn").click();
+    await page.waitForFunction(() => document.querySelector("#awake-steps .g-copy-btn").textContent !== "Copy", null, { timeout: 2000 }).catch(() => {});
+    a.told.copied = await page.locator("#awake-steps .g-copy-btn").textContent() + " " + await page.evaluate(() => window.copied.join());
+    await page.locator("#awake-how").click();
+    a.told.folded = !(await page.locator("#awake-steps").isVisible());
+    await sleep(); await page.waitForTimeout(400);
+    a.again = { count: (await stored()).sleeps.length, notice: await page.locator("#notice").isVisible(), status: await page.locator("#awake-status").textContent() };
+    await page.locator("#awake").uncheck();
+    await page.waitForFunction(() => !document.getElementById("awake-status").textContent.includes("still"), null, { timeout: 2000 }).catch(() => {});
+    a.off = { locks: await locks(), status: await page.locator("#awake-status").textContent(), how: await page.locator("#awake-how").textContent(), saved: await page.evaluate(async () => { await new Promise(r => setTimeout(r, 300)); return (await chrome.storage.local.get("settings")).settings.awake; }) };
+    await page.locator("#awake").check();
+    a.on = { locks: (await locks()).length };
+    await page.keyboard.press("Escape");
+  }
   results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
@@ -814,6 +858,19 @@ const { launch } = require("./harness");
   expect(k.serverError.open && /could not be saved: draft save failed/.test(k.serverError.notice) && k.serverError.copy && k.serverError.body.includes("do not lose this"), "failed save keeps composer and text, with a report to copy: " + JSON.stringify(k.serverError));
   expect(k.closed && k.status === "message saved to Drafts" && k.noticeAfter === "" && k.savedSubject === "Keep me", "successful save closes composer and clears the notice: " + JSON.stringify(k));
   expect(results.clickAway.composerHidden && results.clickAway.readerText.startsWith("Body of") && results.clickAway.draftSaved, "click-away saves draft and shows message: " + JSON.stringify(results.clickAway));
+  {
+    const a = results.awake, ours = `chrome-extension://${extId}/`;
+    expect(a.locks.length === 1 && /^awake-[0-9a-f-]{36}$/.test(a.locks[0]) && a.before.checked && a.before.status === "Kept awake: the browser has not put this tab to sleep in the last 7 days." && a.before.how === "Browser's own setting" && !a.before.steps && a.before.lead.startsWith("The browser has a list") && a.before.refolded,
+      "the signed-in tab holds a lock of its own, and Settings says it has stayed awake and keeps the browser's own setting at hand: " + JSON.stringify(a));
+    expect(!a.brief.sleeps.length && !a.brief.noted, "a sleep of a moment is not recorded: " + JSON.stringify(a.brief));
+    expect(a.long.sleeps.length === 1 && a.long.sleeps[0][2] === true && Math.round(a.long.sleeps[0][1] / 60e3) === 180 && a.long.noted && a.long.info === 1 &&
+      a.long.notice === "The browser put this tab to sleep for 3 h, so mail was not checked. What to do", "a long sleep under the lock is recorded and told in a notice: " + JSON.stringify(a.long));
+    expect(a.told.settings && !a.told.notice && a.told.status === "The browser still put this tab to sleep once in the last 7 days, for 3 h." && a.told.how === "How to stop that" && a.told.expanded === "true" && a.told.address === ours && a.told.lines === 2 && a.told.open === 0 &&
+      a.told.copied === "Copied " + ours && a.told.folded, "the notice leads to Settings, which gives this copy's address to add: " + JSON.stringify(a.told));
+    expect(a.again.count === 2 && !a.again.notice && a.again.status === "The browser still put this tab to sleep 2 times in the last 7 days, for 3 h at the longest.", "a second sleep is counted and not told again: " + JSON.stringify(a.again));
+    expect(!a.off.locks.length && a.off.saved === false && a.off.status === "The browser put this tab to sleep 2 times in the last 7 days, for 3 h at the longest." && a.off.how === "Browser's own setting" && a.on.locks === 1,
+      "switched off, the lock is given back; switched on, it is taken again: " + JSON.stringify({ off: a.off, on: a.on }));
+  }
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }
   console.log("PASS");
 })().catch(e => { console.error(e); process.exit(1); });

@@ -8,7 +8,8 @@ import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { esc, noBidi } from "./text.js";
 import { cleanLink } from "./links.js";
-import { drawGuide, drawHelp, focusStep, rich, pageLink } from "./guide.js";
+import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow } from "./guide.js";
+import * as awake from "./awake.js";
 
 const $ = id => document.getElementById(id);
 // The name the page shows: the adapter's title where it gives one, otherwise the extension's name
@@ -19,7 +20,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, scaledImages: "full", images: "safe", links: "asis", readerOriginal: false, messageZoom: 100, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, awake: true, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, scaledImages: "full", images: "safe", links: "asis", readerOriginal: false, messageZoom: 100, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -73,6 +74,7 @@ function syncSettingsForm() {
   $("contrast-n").textContent = settings.contrast;
   for (const el of document.querySelectorAll("#settings input[type=radio]")) el.checked = settings[el.name] === el.value;
   $("poll").value = settings.pollSec;
+  $("awake").checked = settings.awake;
   $("density").value = settings.rowPct;
   $("textpct").value = settings.textPct;
   $("markread").value = settings.markReadSec == null ? "" : settings.markReadSec;
@@ -136,13 +138,15 @@ const plainSubject = s => noBidi(s || "(no subject)").replace(/\^_/g, "");
 
 // What the user must not miss (something failed or did not happen) appears in a notice above the
 // status bar until dismissed; routine progress stays in the status line. A notice given a key is
-// also cleared by clearNotice(key) once its cause is resolved. Errors offer a copyable report.
+// also cleared by clearNotice(key) once its cause is resolved. Errors offer a copyable report; an
+// action ({ label, run }) is a link after the text.
 let noticeKey = null, noticeReport = "";
-function notify(text, { info = false, key = null, err = null, what = "", detail = "" } = {}) {
+function notify(text, { info = false, key = null, err = null, what = "", detail = "", action = null } = {}) {
   status(detail ? `${text} ${detail}` : text);
   const tech = document.createElement("span");
   tech.className = "tech"; tech.textContent = detail;
-  $("notice-text").replaceChildren(text, ...(detail ? [" ", tech] : []));
+  const act = action && Object.assign(document.createElement("button"), { type: "button", className: "link", textContent: action.label, onclick: action.run });
+  $("notice-text").replaceChildren(text, ...(detail ? [" ", tech] : []), ...(act ? [" ", act] : []));
   $("notice").classList.toggle("info", info);
   noticeKey = key;
   noticeReport = err ? errorReport(what, err) : "";
@@ -2071,7 +2075,7 @@ function toggleTheme() {
 
 function openSettings(show) {
   $("settings").classList.toggle("hidden", !show);
-  if (show) { showAddressBook(false); renderAbSummary(); }
+  if (show) { showAddressBook(false); renderAbSummary(); showAwakeSteps(false); renderAwake(); }
 }
 
 // ---------- address book manager ----------
@@ -2172,6 +2176,8 @@ function wireSettings() {
   for (const el of document.querySelectorAll("#settings input[type=radio]"))
     el.onchange = () => { settings[el.name] = el.value; applySettings(); saveSettings(); if (el.name === "links") relinkBody(); };
   $("poll").onchange = () => { settings.pollSec = Math.max(5, Number($("poll").value) || 20); applySettings(); saveSettings(); };
+  $("awake").onchange = () => { settings.awake = $("awake").checked; applyAwake(); saveSettings(); renderAwake(); };
+  $("awake-how").onclick = () => showAwakeSteps($("awake-steps").classList.contains("hidden"));
   $("composeFont").onchange = () => { settings.composeFont = $("composeFont").value; saveSettings(); };
   $("composeSize").onchange = () => { settings.composeSize = Number($("composeSize").value) || 13; saveSettings(); };
   $("undosend").onchange = () => { settings.undoSendSec = Math.min(60, Math.max(0, Number($("undosend").value) || 0)); saveSettings(); };
@@ -2242,6 +2248,41 @@ let lastPoll = 0, polling = false;
 function pollNow() { if (state.signedIn && !polling && Date.now() - lastPoll > 3000) { poll(); startPolling(); } }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollNow(); });
 document.addEventListener("resume", pollNow);
+
+// ---------- staying awake ----------
+// While signed in, the tab holds the lock that keeps a browser from putting it to sleep
+// (ext/awake.js), unless Settings says otherwise. A sleep that happens all the same is recorded
+// for Settings to tell; the first long one of a tab that was to stay awake is also told in a
+// notice, once, with the way to the browser's own setting, which Settings always offers.
+function applyAwake() { if (settings.awake && state.signedIn) awake.hold(); else awake.release(); }
+awake.watch(async (start, length) => {
+  if (!state.signedIn) return;
+  const wasHeld = awake.held();
+  await awake.note(start, length, wasHeld).catch(() => {});
+  if (!$("settings").classList.contains("hidden")) renderAwake();
+  if (wasHeld && length >= awake.LONG && await awake.noteOnce().catch(() => false))
+    notify(awake.wakeNote(length), { info: true, key: "sleep", action: { label: "What to do", run: async () => { clearNotice("sleep"); openSettings(true); await renderAwake(); showAwakeSteps(true); } } });
+});
+async function renderAwake() {
+  const r = awake.report(await awake.sleeps().catch(() => []), { now: Date.now(), on: settings.awake });
+  $("awake-status").textContent = r.text;
+  $("awake-how").textContent = r.steps ? "How to stop that" : "Browser's own setting";
+}
+// The browser's own list of pages it keeps awake: this copy's address to add, and where. A page of
+// the browser's settings cannot be linked to, so its button opens it in a tab.
+function showAwakeSteps(show) {
+  const box = $("awake-steps");
+  $("awake-how").setAttribute("aria-expanded", String(show));
+  box.classList.toggle("hidden", !show);
+  if (!show) return;
+  const s = awake.steps(awake.browser(), chrome.runtime.id);
+  const list = holding("ol", ...s.lines.map(t => holding("li", rich(t))));
+  list.className = "g-lines";
+  const open = s.open && Object.assign(document.createElement("button"), { type: "button", id: "awake-open", textContent: s.open.label,
+    onclick: () => chrome.tabs.create({ url: s.open.url }).catch(() => status(`open ${s.open.url} from the address bar`)) });
+  box.replaceChildren(holding("p", s.lead), copyRow(s.copy), list, ...(open ? [holding("p", open)] : []));
+  box.scrollIntoView({ block: "nearest" });
+}
 
 async function poll() {
   if (busy || polling) return;
@@ -2422,6 +2463,7 @@ async function startUp() {
     await loadFolders();
     state.signedIn = true;
     startPolling();
+    applyAwake();
     await openFolder(inboxId());
     noteMissed();
     syncContacts();
