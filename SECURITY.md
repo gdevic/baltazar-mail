@@ -8,7 +8,7 @@ This is a one-person project; expect an acknowledgement within a few days and a 
 
 ## Supported versions
 
-Only the latest release receives fixes. Store installs are updated by the browser; for a ZIP install, put the new release's files into the same folder and click Reload on the extensions page (the README explains how).
+Only the latest release receives fixes. Store installs are updated by the browser; for a ZIP install, put the new release's files into the same folder and click Reload on the extensions page (`docs/install.md` explains how).
 
 ## What is in scope
 
