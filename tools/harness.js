@@ -310,4 +310,4 @@ async function launch(opts = {}) {
   return { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, open, close, FX, thumbPng, provider, gmail, signIn, firstRun };
 }
 
-module.exports = { launch, msg, accounts, now };
+module.exports = { launch, msg, accounts, now, buildForTest };

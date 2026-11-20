@@ -367,11 +367,6 @@ const { launch } = require("./harness");
   await page.waitForTimeout(600);
   results.clickAway = { composerHidden: await page.locator("#compose").isHidden(), readerText: (await frameText()).slice(0, 20), draftSaved: calls.some(c => c.name === "messages.saveV3") };
 
-
-  // new message with attachment, send with 2 s hold, cancel, then send again
-  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("address book:"), null, { timeout: 15000 }).catch(() => {});
-  results.addressBook = await page.locator("#st-msg").textContent();
-
   // a message that cannot be saved is never thrown away: Escape and clicking another message
   // leave the composer open with the reason in a notice, until the save succeeds
   const saves = () => calls.filter(c => c.name === "messages.saveV3").length;
@@ -538,7 +533,8 @@ const { launch } = require("./harness");
     await page.locator("#c-editor").focus(); await page.keyboard.type(`${subject} text`);
     await page.waitForFunction(s => document.getElementById("c-editor").innerText.includes(s), `${subject} text`, { timeout: 3000 }).catch(() => {});
     await page.keyboard.press("Control+Enter");
-    await page.waitForFunction(s => document.getElementById("st-undo").textContent.includes(s), subject, { timeout: 5000 }).catch(() => {});
+    // held for undo, or with no hold sent at once
+    await page.waitForFunction(s => document.getElementById("st-undo").textContent.includes(s) || document.getElementById("st-msg").textContent.startsWith(`sent: "${s}"`), subject, { timeout: 5000 }).catch(() => {});
   };
   const subjectsSent = () => calls.filter(c => c.name === "messages.saveAndSend").map(c => c.envelope.requests[0].payloadParts[0].payload.message.headers.subject);
   const subjectsSaved = () => calls.filter(c => c.name === "messages.saveV3").map(c => c.envelope.requests[0].payloadParts[0].payload.message.headers.subject);

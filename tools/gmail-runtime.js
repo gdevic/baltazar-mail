@@ -105,9 +105,20 @@ const { FX } = require("./gmail-mock.js");
   await abMeta("put", "fill:SENT", { offset: 8, newest: 1, seen: 3, done: true });
   await page.evaluate(() => chrome.storage.local.set({ contactsAfter: 1 }));
   const callsBeforeBuild = gmail.calls.length;
+  // reloaded as a tab in the background, which nobody is using, so the build goes on without a
+  // minute's wait for the app to be left alone; the tab shows again once it is built
+  await page.addInitScript(() => {
+    try {
+      if (window.top !== window || !sessionStorage.getItem("hiddenTab")) return;
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    } catch {}
+  });
+  await page.evaluate(() => sessionStorage.setItem("hiddenTab", "1"));
   await page.reload();
   await page.waitForSelector("#rows .row", { timeout: 20000 });
   for (let i = 0; i < 220 && !(await abMeta("get", "built")); i++) await page.waitForTimeout(500);
+  await page.evaluate(() => { sessionStorage.removeItem("hiddenTab"); delete document.hidden; delete document.visibilityState; document.dispatchEvent(new Event("visibilitychange")); });
   const buildCalls = gmail.calls.slice(callsBeforeBuild);
   results.abBuilt = { built: !!(await abMeta("get", "built")), sent: listsOf(buildCalls, "SENT", "20"), inbox: listsOf(buildCalls, "INBOX", "20"), bookmark: !!(await abMeta("get", "scan:SENT")), filling: await abMeta("get", "filling") };
 
@@ -360,7 +371,6 @@ const { FX } = require("./gmail-mock.js");
   const sent = lastUpload();
   results.send.upload = { path: sent.path, headers: headersOf(sent), parts: partsOf(sent), cid: /src=(3D)?"cid:/.test(sent.raw), uploads: gmail.uploads.length - uploadsBefore, sentLabel: [...gmail.messages.values()].some(m => m.labelIds.includes("SENT") && m.payload.headers.some(x => x.name === "Subject" && x.value === "Gmail runtime test")) };
   results.send.closed = await page.locator("#compose").isHidden();
-  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("address book:"), null, { timeout: 15000 }).catch(() => {});
 
   // a draft: opened with its file and inline image, saved again under the same draft id with a
   // new message id, reopened, discarded

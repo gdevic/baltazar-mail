@@ -1,5 +1,7 @@
 // Browser tests for review findings: each scenario runs on a fresh profile against the mocked
-// Yahoo in harness.js, so no scenario depends on another's state. node tools/review.js [filter]
+// Yahoo in harness.js, so no scenario depends on another's state, and several processes can each
+// run a share of them at once (--shard=k/n: every nth scenario from the kth; tools/check.js).
+// node tools/review.js [filter] [--shard=k/n]
 const { launch, msg } = require("./harness");
 
 const scenarios = [];
@@ -1211,9 +1213,12 @@ scenario("saving again does not upload attachments again", async ({ page, calls,
 
 // ---------- runner ----------
 (async () => {
-  const only = process.argv[2];
+  const args = process.argv.slice(2);
+  const only = args.find(a => !a.startsWith("--"));
+  const [k, n] = (args.find(a => /^--shard=\d+\/\d+$/.test(a))?.slice(8) || "1/1").split("/").map(Number);
   const failed = [];
-  for (const s of scenarios) {
+  for (const [i, s] of scenarios.entries()) {
+    if (i % n !== k - 1) continue;
     if (only && !s.name.includes(only)) continue;
     const h = await launch(s.opts);
     const local = [];
