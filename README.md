@@ -14,7 +14,7 @@ No server, no analytics, no ads: your mail goes only between your browser and yo
 Everything a mail client does, and:
 
 - **Attachments open in place:** PDF, Office documents, spreadsheets, pictures and ZIP listings, without downloading.
-- **A folder's files in one list:** right-click a folder › Show files lists every attachment in its mail, with its subfolders' if you like, such as the tickets and itineraries of a trip.
+- **A folder's attachments in one list:** right-click a folder › Show attachments lists every attachment in its mail, with its subfolders' if you like, such as the tickets and itineraries of a trip.
 - **Sixteen light and dark palettes**, with a dark mode that darkens the messages to match.
 - **Undo for everything:** several levels of undo and redo for mailbox actions, and undo-send.
 - **Tracking removed from links**, when you switch it on.

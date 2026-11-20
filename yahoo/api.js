@@ -43,8 +43,8 @@ export const queries = {
   starred: (unreadOnly = false) => `is:flagged ${LIST_FILTER}${unreadOnly ? " is:unread" : ""}`,
   unreadIn: folderId => `folderId:${folderId} is:unread`,
   person: email => { const e = bareAddress(email); return `(from:("${e}") OR to:("${e}"))`; },
-  // mail with attachments, for a folder's Files (searchScoped raw); its rows carry each file's
-  // partId, size, type, links and objectId (verified 2026-11-20)
+  // mail with attachments, for a folder's list of attachments (searchScoped raw); its rows carry
+  // each file's partId, size, type, links and objectId (verified 2026-11-20)
   files: () => "has:attachment",
 };
 

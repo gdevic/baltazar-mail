@@ -1,4 +1,4 @@
-// What a folder's Files lists from search rows (ext/files.js). node tools/files-test.mjs
+// What a folder's list of attachments takes from search rows (ext/files.js). node tools/files-test.mjs
 import { filesOf, isFile } from "../ext/files.js";
 
 let fail = 0;

@@ -184,7 +184,7 @@ const FAILED = {
   spam: "Could not mark the messages as spam.", notspam: "Could not mark the messages as not spam.",
   create: "Could not create the folder.", rename: "Could not rename the folder.", "move folder": "Could not move the folder.",
   "delete folder": "Could not delete the folder.", empty: "Could not empty the folder.", "mark all read": "Could not mark the folder read.",
-  "sign out": "Could not sign out.", files: "Could not list the folder's files.",
+  "sign out": "Could not sign out.", files: "Could not list the folder's attachments.",
 };
 // A request that never reached the mail service fails with the browser's bare "Failed to fetch".
 const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? `${api.PROVIDER.name} could not be reached; check the connection.` : e.message;
@@ -329,17 +329,26 @@ const parentChoices = f => state.folders.filter(p => canParent(p) && sameAcct(p,
 function showFolderMenu(f, x, y) {
   if (f && f !== "head") f = state.byId.get(f.id) || f;
   const t = f === "head" ? "" : f ? folderType(f) : "STARRED";
-  // a folder's menu opens with what reads it: Mark all read, then Show files
-  const markRead = ["mark-read", "Mark all read"];
-  const showFiles = ["files", "Show files", "", "List every attachment in the folder's mail in place of its messages, until you leave it"];
+  // A folder's menu opens with Show attachments, which only looks, where a hasty click lands. Mark
+  // all read, which cannot be undone, follows in a group of its own. What cannot apply is greyed out,
+  // with the reason as its tooltip: Mark all read with nothing unread, Delete while the folder or
+  // a subfolder holds mail, Empty when there is nothing in it. Delete and Empty check again when
+  // chosen, with the folder list read afresh.
+  const real = f && f !== "head";
+  const markRead = real && !f.unread ? ["mark-read", "Mark all read", "", "Nothing in it is unread", true] : ["mark-read", "Mark all read"];
+  const showFiles = ["files", "Show attachments", "", "List every attachment in the folder's mail in place of its messages, until you leave it"];
+  const full = real ? [f, ...subfolders(f)].filter(x => (x.total || 0) > 0) : [];
+  const held = full.reduce((s, x) => s + x.total, 0);
+  const del = full.length ? ["delete", "Delete", "", `Only an empty folder can be deleted: ${full.length > 1 || full[0] !== f ? "it and its subfolders hold" : "it holds"} ${plural(held, "message")}`, true] : ["delete", "Delete"];
+  const empty = label => real && !f.total ? ["empty", label, "", "It is already empty", true] : ["empty", label];
   const items = f === "head" ? [["new", "New folder..."], null, ["expand", "Expand all"], ["collapse", "Collapse all"]]
     : !f ? [markRead]
-    : managed(f) ? [markRead, showFiles, null, ["move", "Move..."], ["rename", "Rename..."], ["sub", "Create subfolder..."], null, ["delete", "Delete"]]
-    : t === "TRASH" ? [markRead, showFiles, null, ["empty", "Empty Trash..."]]
-    : t === "BULK" ? [markRead, showFiles, null, ["empty", "Empty Spam..."]]
+    : managed(f) ? [showFiles, null, markRead, null, ["move", "Move..."], ["rename", "Rename..."], ["sub", "Create subfolder..."], null, del]
+    : t === "TRASH" ? [showFiles, null, markRead, null, empty("Empty Trash...")]
+    : t === "BULK" ? [showFiles, null, markRead, null, empty("Empty Spam...")]
     : t === "DRAFT" ? [showFiles]
-    : t === "INBOX" && f.id === folderByType("INBOX")?.id ? [markRead, showFiles, null, ["sub", "Create subfolder..."]]
-    : [markRead, showFiles];
+    : t === "INBOX" && f.id === folderByType("INBOX")?.id ? [showFiles, null, markRead, null, ["sub", "Create subfolder..."]]
+    : [showFiles, null, markRead];
   openMenu(x, y, items, act => {
     if (act === "files") openFiles(f.id);
     else if (act === "new") createFolderIn(null);
@@ -653,7 +662,8 @@ const TRASH_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h
 // cannot cover the confirmation of what the user just did; one the user asked for (R) does.
 async function loadList(mode = "fresh", focusId = null, { told = mode !== "refresh" } = {}) {
   const v = state.view;
-  // Files keeps a list of its own: what would refresh the message list refreshes that one
+  // a folder's attachments keep a list of their own: what would refresh the message list
+  // refreshes that one
   if (v.kind === "files") { if (mode === "refresh") await files.reload(told); return; }
   const token = ++state.listToken;
   const prevView = state.prevView;
@@ -872,7 +882,7 @@ function syncAria() {
     const m = state.messages[Number(el.dataset.i)];
     el.setAttribute("aria-selected", String(state.marked.size ? state.marked.has(m?.id) : Number(el.dataset.i) === state.selected));
   });
-  // in a folder's Files the list's active descendant is the selected file (files.js)
+  // in a folder's attachments the list's active descendant is the selected attachment (files.js)
   if (state.view.kind === "files") {}
   else if (state.selected >= 0 && rowEl(state.selected)) $("list").setAttribute("aria-activedescendant", `row-${state.selected}`);
   else $("list").removeAttribute("aria-activedescendant");
@@ -1197,7 +1207,7 @@ async function open(i, how = "user") {
   const m = state.messages[i];
   if (m) await openMessage(m, how);
 }
-// m: a row of the list, or of the Files list, whose rows are not in it.
+// m: a row of the list, or of a folder's attachments, whose rows are not in it.
 async function openMessage(m, how = "user") {
   if (how === "user") keptUnread.delete(m.id);
   if (!(await compose.close(true))) return;
@@ -1299,7 +1309,8 @@ async function renderMessage(m, r, how = "user") {
         try {
           const r2 = await api.setRead([m.id], true);
           applyFlags(r2.ok, { read: true });
-          // a message shown from Files is no row of the list, so its folder is counted here
+          // a message shown from a folder's attachments is no row of the list, so its folder is
+          // counted here
           if (r2.ok.includes(m.id) && !state.messages.includes(m)) {
             if (!m.flags?.read) bumpFolder(m.folder?.id, 0, -1);
             m.flags = { ...(m.flags || {}), read: true };
@@ -1779,14 +1790,15 @@ function showContextMenu(x, y) {
     else runAction(act);
   });
 }
-// A context menu at (x, y). items: [action, label, shortcut, tooltip], or null for a separator.
+// A context menu at (x, y). items: [action, label, shortcut, tooltip, disabled], or null for a
+// separator. A disabled item is greyed out, and a click on it leaves the menu open.
 function openMenu(x, y, items, onPick) {
   const ctx = $("ctx");
-  ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}"${it[3] ? ` title="${esc(it[3])}"` : ""}><span>${esc(it[1])}</span>${it[2] ? `<kbd>${esc(it[2])}</kbd>` : ""}</div>` : "<hr>").join("");
+  ctx.innerHTML = items.map(it => it ? `<div data-act="${it[0]}"${it[4] ? ' class="off" aria-disabled="true"' : ""}${it[3] ? ` title="${esc(it[3])}"` : ""}><span>${esc(it[1])}</span>${it[2] ? `<kbd>${esc(it[2])}</kbd>` : ""}</div>` : "<hr>").join("");
   ctx.classList.remove("hidden");
   ctx.style.left = Math.min(x, innerWidth - ctx.offsetWidth - 4) + "px";
   ctx.style.top = Math.min(y, innerHeight - ctx.offsetHeight - 4) + "px";
-  ctx.onclick = e => { const a = e.target.closest("[data-act]"); hideContextMenu(); if (a) onPick(a.dataset.act); };
+  ctx.onclick = e => { const a = e.target.closest("[data-act]"); if (a?.classList.contains("off")) return; hideContextMenu(); if (a) onPick(a.dataset.act); };
 }
 function hideContextMenu() { $("ctx").classList.add("hidden"); }
 // Reply or forward a row from the menu: the row is opened first, as the composer answers the
@@ -1895,10 +1907,10 @@ async function openFolder(id) {
   focusListIfStill(from);
 }
 
-// Files of a folder (its menu: Show files): its own list in the message list's place (files.js),
-// with the folder highlighted in the tree, until another view is opened (Esc: the folder's
-// messages). The message list is emptied, so message actions find nothing to act on; the reader
-// shows a selected file's message.
+// Attachments of a folder (its menu: Show attachments): their own list in the message list's
+// place (files.js), with the folder highlighted in the tree, until another view is opened (Esc:
+// the folder's messages). The message list is emptied, so message actions find nothing to act
+// on; the reader shows a selected attachment's message.
 function showFilesPane(on) {
   $("app").classList.toggle("files-view", on);
   if (on) files.resume(); else files.hide();
@@ -1946,6 +1958,8 @@ const filesHooks = {
   where: filesWhere,
   date: fmtDate,
   openRow: (m, how) => openMessage(m, how),
+  // shown, or on its way: not while the composer has the reader's place
+  isOpen: id => state.openId === id && !$("reader").classList.contains("hidden"),
   menu: openMenu,
   goTo: m => goToMessage(m, m.headers?.from?.[0]?.email || ""),
   status,
@@ -2066,7 +2080,7 @@ function onKey(e) {
   if (e.key === "Escape") {
     if (inSearch) {
       $("search").value = ""; $("search").blur();
-      // a search begun in a folder's Files returns to the folder's messages
+      // a search begun in a folder's attachments returns to the folder's messages
       if (state.view.kind === "search" && !state.view.starred) { const b = state.view.back; b?.starred ? openStarred() : openFolder((b?.kind === "files" ? b.of : b?.folderId) || inboxId()); }
       return;
     }

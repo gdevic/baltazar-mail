@@ -259,7 +259,7 @@ const lastMod = () => modsOf().at(-1);
   ok(r.messages.map(x => x.id).join() === "m1,m2,m3" && m.headers.subject === "Subject m-1" && m.headers.from[0].name === "Sender 1" && m.headers.from[0].email === "s1@x.com" && Number(m.headers.date) === Math.floor(Number(mock.messages.get("m1").internalDate) / 1000) && m.flags.read === false && m.flags.flagged === false, "rows: " + JSON.stringify({ ids: r.messages.map(x => x.id), m }));
   ok(m.folder.id === "INBOX" && m.folder.name === "Inbox" && m.attachments.length === 1 && m.attachments[0].disposition === "inline" && m.attachmentCount === 0 && r.messages[2].attachmentCount === 7, "folder and attachments from the parts: " + JSON.stringify([m.folder, m.attachments, r.messages[2].attachmentCount]));
   ok(r.messages[1].flags.read === true && r.messages[1].flags.flagged === true && r.messages[1].folder.id === "INBOX", "a read, starred message listed in Inbox stays in Inbox");
-  // a row names each file as body() does, so a folder's Files can fetch it from the row alone
+  // a row names each file as body() does, so a folder's list of attachments can fetch it from the row alone
   const pdfRow = r.messages[2].attachments.find(a => a.filename === "report.pdf");
   ok(JSON.stringify(pdfRow) === JSON.stringify({ partId: "1", filename: "report.pdf", size: mock.attachments.get("att-m3-1").length, type: "application", subtype: "pdf", disposition: "attachment" }), "a row's file has its part, size and type: " + JSON.stringify(pdfRow));
   const fromRow = await api.partBytes("m3", pdfRow);

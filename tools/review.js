@@ -224,9 +224,20 @@ scenario("folder menus offer what fits each folder", async ({ page }, expect) =>
   menus.starred = await menuOf(page, folderRow(page, "Starred")); await page.keyboard.press("Escape");
   menus.pane = await menuOf(page, page.locator(".folders-head")); await page.keyboard.press("Escape");
   menus.draggable = await page.locator("#folder-list .folder").evaluateAll(fs => fs.some(f => f.draggable));
-  expect(menus.user.join("|") === "Mark all read|Show files|---|Move...|Rename...|Create subfolder...|---|Delete", "a user folder's menu: " + menus.user.join("|"));
-  expect(menus.inbox.join("|") === "Mark all read|Show files|---|Create subfolder..." && menus.starred.join("|") === "Mark all read" && menus.draft.join("|") === "Show files", "system folders: " + JSON.stringify([menus.inbox, menus.starred, menus.draft]));
-  expect(menus.trash.join("|") === "Mark all read|Show files|---|Empty Trash..." && menus.spam.join("|") === "Mark all read|Show files|---|Empty Spam...", "Trash and Spam: " + JSON.stringify([menus.trash, menus.spam]));
+  // greyed out, and a click on it leaves the menu open: Trash has nothing unread, Inbox has 3
+  const greyed = async name => {
+    await menuOf(page, folderRow(page, name));
+    const item = page.locator('#ctx [data-act="mark-read"]'), off = await item.evaluate(e => e.classList.contains("off"));
+    if (off) await item.click();
+    const open = await page.locator("#ctx").isVisible();
+    await page.keyboard.press("Escape");
+    return off && open;
+  };
+  menus.greyed = { trash: await greyed("Trash"), inbox: await greyed("Inbox") };
+  expect(menus.user.join("|") === "Show attachments|---|Mark all read|---|Move...|Rename...|Create subfolder...|---|Delete", "a user folder's menu: " + menus.user.join("|"));
+  expect(menus.inbox.join("|") === "Show attachments|---|Mark all read|---|Create subfolder..." && menus.starred.join("|") === "Mark all read" && menus.draft.join("|") === "Show attachments", "system folders: " + JSON.stringify([menus.inbox, menus.starred, menus.draft]));
+  expect(menus.trash.join("|") === "Show attachments|---|Mark all read|---|Empty Trash..." && menus.spam.join("|") === "Show attachments|---|Mark all read|---|Empty Spam...", "Trash and Spam: " + JSON.stringify([menus.trash, menus.spam]));
+  expect(JSON.stringify(menus.greyed) === JSON.stringify({ trash: true, inbox: false }), "Mark all read is greyed out, and does nothing, in a folder with nothing unread: " + JSON.stringify(menus.greyed));
   expect(menus.pane.join("|") === "New folder...|---|Expand all|Collapse all", "the Folders heading: " + menus.pane.join("|"));
   expect(!menus.draggable, "folders cannot be dragged");
 });
@@ -278,9 +289,13 @@ scenario("create, rename, move and delete folders", async (h, expect) => {
   await menuOf(page, folderRow(page, "Plans")); await pickMenu(page, "Move...");
   await page.locator("#move-filter").fill("Hobb"); await page.keyboard.press("Enter"); await page.waitForTimeout(700);
   r.tree = await page.locator("#folder-list .folder .nm").allTextContents();
-  // not empty: refused with a notice, nothing deleted
-  await menuOf(page, folderRow(page, "Projects")); await pickMenu(page, "Delete"); await page.waitForTimeout(500);
-  r.notEmpty = await page.locator("#notice").textContent();
+  // not empty: Delete is greyed out with the reason, and a click on it deletes nothing
+  await menuOf(page, folderRow(page, "Projects"));
+  const del = page.locator('#ctx [data-act="delete"]');
+  r.notEmpty = { off: await del.evaluate(e => e.classList.contains("off")), title: await del.getAttribute("title") };
+  await del.click(); await page.waitForTimeout(500);
+  r.notEmpty.open = await page.locator("#ctx").isVisible();
+  await page.keyboard.press("Escape");
   // empty with an empty subfolder: both go, innermost first
   let asked = ""; page.once("dialog", d => { asked = d.message(); d.accept(); });
   await menuOf(page, folderRow(page, "Hobbies")); await pickMenu(page, "Delete"); await page.waitForTimeout(900);
@@ -291,7 +306,7 @@ scenario("create, rename, move and delete folders", async (h, expect) => {
   expect(/already exists/.test(r.duplicate) && /cannot contain \//.test(r.slash), "names are checked in the dialog: " + JSON.stringify([r.duplicate, r.slash]));
   expect(r.renameValue === "Ideas" && r.targets[0] === "Folders" && !r.targets.includes("Hobbies") && !r.targets.some(t => /Plans/.test(t)), "rename starts from the name; Move offers the top level, not the current parent or the folder itself: " + JSON.stringify(r.targets));
   expect(JSON.stringify(ops.slice(0, 5)) === JSON.stringify([["create", "Hobbies"], ["create", "Hobbies/Ideas"], ["rename", ids["Hobbies/Ideas"], "Hobbies/Plans"], ["rename", ids["Hobbies/Ideas"], "Plans"], ["rename", ids["Hobbies/Ideas"], "Hobbies/Plans"]]), "the calls: " + JSON.stringify(ops));
-  expect(/is not empty/.test(r.notEmpty) && !ops.some(o => o[0] === "delete" && o[1] === "31"), "a folder with mail is not deleted: " + r.notEmpty);
+  expect(r.notEmpty.off && r.notEmpty.open && r.notEmpty.title === "Only an empty folder can be deleted: it and its subfolders hold 8 messages" && !ops.some(o => o[0] === "delete" && o[1] === "31"), "a folder with mail cannot be deleted: " + JSON.stringify(r.notEmpty));
   expect(/Hobbies.*1 empty subfolder/.test(r.asked) && JSON.stringify(ops.filter(o => o[0] === "delete")) === JSON.stringify([["delete", ids["Hobbies/Ideas"]], ["delete", ids.Hobbies]]) && r.gone === 0, "an empty folder goes with its empty subfolder: " + JSON.stringify(r));
 }, { settings: { pollSec: 600 } });
 

@@ -592,9 +592,9 @@ const { FX } = require("./gmail-mock.js");
   expect(results.cap.own === "data:image/png" && results.cap.others === 70, "references to parts a message does not have take none of its 60 inline images: " + JSON.stringify(results.cap));
   expect(results.svg.width === 40 && results.svg.height === 20 && results.svg.blob && results.svg.density && results.svg.opened === "image/png", "an SVG attachment is shown, and opens, as a bitmap: " + JSON.stringify(results.svg));
   const fl = results.files;
-  expect(/^No files in Travel\..*subfolder is not included/.test(fl.empty) && fl.q0?.labelIds === "Label_4" && fl.q0?.q === "has:attachment" && fl.q1 === '(label:"Travel" OR label:"Travel/2025") has:attachment' && fl.bodies === 0 &&
+  expect(/^No attachments in Travel\..*subfolder is not included/.test(fl.empty) && fl.q0?.labelIds === "Label_4" && fl.q0?.q === "has:attachment" && fl.q1 === '(label:"Travel" OR label:"Travel/2025") has:attachment' && fl.bodies === 0 &&
     fl.rows.join() === ["logo.svg", "report.pdf", "data.csv", "src.zip", "photo.png", "cv.docx", "budget.xlsx", "deck.pptx", "ticket.txt"].map(n => n + "2025").join() && fl.tiles.join() === "IMG,PDF,CSV,ZIP,IMG,DOC,XLS,PPT,TXT",
-    "Files lists a folder's files from its search rows, each named with its subfolder, also one whose message is in Inbox too: " + JSON.stringify(fl));
+    "a folder's attachments are listed from its search rows, each named with its subfolder, also one whose message is in Inbox too: " + JSON.stringify(fl));
   expect(fl.subject === "Subject v-3" && fl.viewer.name === "report.pdf" && /2 of 9/.test(fl.viewer.meta) && fl.viewer.fetched && !fl.off.pane && fl.off.title === "Travel",
     "a file's message on a click, its preview, and Esc back to the folder's messages: " + JSON.stringify([fl.subject, fl.viewer, fl.off]));
   expect(JSON.stringify(fl.saved) === '[["Label_4"]]' && JSON.stringify(results.signOut.files) === "{}",

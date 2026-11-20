@@ -81,7 +81,7 @@ export const queries = {
   starred: (unreadOnly = false) => `is:starred${unreadOnly ? " is:unread" : ""}`,
   unreadIn: folderId => opaque({ labelIds: folderId === ALL ? [] : [String(folderId)], q: "is:unread" }),
   person: email => { const e = bareAddress(email); return `(from:${e} OR to:${e} OR cc:${e})`; },
-  // mail with attachments, for a folder's Files (searchScoped raw)
+  // mail with attachments, for a folder's list of attachments (searchScoped raw)
   files: () => "has:attachment",
 };
 
@@ -519,7 +519,7 @@ const isFile = p => !!(p.filename || contentIdOf(p));
 const dispositionOf = (p, html) => contentIdOf(p) && html.toLowerCase().includes(`cid:${contentIdOf(p).toLowerCase()}`) ? "inline" : "attachment";
 // A row has no HTML to look in; there a Content-ID part inside multipart/related (the text's own
 // images) counts as inline. Each file is named as body() names it, so a file listed from a row
-// (a folder's Files) can be fetched and shown without the message's body.
+// (a folder's list of attachments) can be fetched and shown without the message's body.
 function rowFiles(node, related = false, out = []) {
   if (!node) return out;
   if (node.parts?.length) {

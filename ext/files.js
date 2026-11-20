@@ -1,6 +1,7 @@
-// Files: the attachments of a folder's mail in one list, shown in the message list's place when
-// asked for (the folder's menu: Show files) until another view is opened. Its Subfolders box adds
-// the subfolders' files; the folders that have it ticked are kept per account on this computer.
+// A folder's attachments ("Files" in the code): the files attached to its mail in one list, shown
+// in the message list's place when asked for (the folder's menu: Show attachments) until another
+// view is opened. Its Subfolders box adds the subfolders' attachments; the folders that have it
+// ticked are kept per account on this computer.
 // The list comes from the provider's search for mail with attachments in those folders, a page of
 // PAGE messages at a time. List rows already name each message's files, so no message is fetched
 // to build the list; a file's bytes are fetched only to preview or save it, and selecting a file
@@ -13,6 +14,8 @@ const $ = id => document.getElementById(id);
 export const PAGE = 100;
 const KEY = "folderFiles";
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+// "2 attachments", or "100+ attachments" while more pages remain
+const counted = () => `${st.items.length}${st.more ? "+" : ""} attachment${st.items.length === 1 && !st.more ? "" : "s"}`;
 
 // ---------- what is listed ----------
 // Images built into a message's text (disposition inline) are not files, and neither is a picture
@@ -70,8 +73,8 @@ export function clear() { mine = {}; return store(); }
 // ---------- the pane ----------
 // hooks: { storage, search(ids, count, offset) -> { messages, ms }, scope(folderId, subs) -> { ids,
 //   name, full, subs } | null, listed(a), who(row) -> { name, email }, where(row, folderId) -> the
-//   subfolder a row is in, or "", date(epoch), openRow(row, how), menu(x, y, items, onPick),
-//   goTo(row), status(msg, ms), fail(e) }
+//   subfolder a row is in, or "", date(epoch), openRow(row, how), isOpen(msgId) -> whether the
+//   reader shows that message, menu(x, y, items, onPick), goTo(row), status(msg, ms), fail(e) }
 let hooks = null;
 const st = { folderId: null, items: [], rows: 0, more: false, loading: false, token: 0, selected: -1, seen: new Map(), shown: false };
 const memory = new Map();        // folder id -> key of the entry last selected there, this session
@@ -82,8 +85,8 @@ export function init(h) {
   $("f-more-btn").onclick = () => load("more");
   const rows = $("f-rows");
   const at = e => { const el = e.target.closest(".frow"); return el ? Number(el.dataset.i) : -1; };
-  rows.onclick = e => { const i = at(e); if (i >= 0) pick(i); };
-  rows.ondblclick = e => { const i = at(e); if (i >= 0) previewAt(i); };
+  rows.onclick = e => { const i = at(e); if (i >= 0) (e.target.closest(".ft") ? previewAt : pick)(i); };
+  rows.ondblclick = e => { const i = at(e); if (i >= 0 && !e.target.closest(".ft")) previewAt(i); };
   rows.oncontextmenu = e => { const i = at(e); if (i < 0) return; e.preventDefault(); select(i); rowMenu(e.clientX, e.clientY); };
 }
 
@@ -119,7 +122,7 @@ async function load(mode, told = mode !== "reload") {
   const keep = mode === "reload" ? st.items[st.selected]?.key : mode === "fresh" ? memory.get(id) : null;
   st.loading = true;
   if (mode === "fresh") { st.items = []; st.rows = 0; st.more = false; st.selected = -1; render(); }
-  if (told) hooks.status(mode === "more" ? "loading more files..." : "loading files...");
+  if (told) hooks.status(mode === "more" ? "loading more attachments..." : "loading attachments...");
   let r;
   try { r = await hooks.search(sc.ids, count, offset); } catch (e) {
     if (token !== st.token) return;
@@ -135,22 +138,22 @@ async function load(mode, told = mode !== "reload") {
   if (keep) st.selected = st.items.findIndex(x => x.key === keep);
   render();
   if (mode === "fresh" && st.selected >= 0) hooks.openRow(st.items[st.selected].row, "auto");
-  if (told) hooks.status(`${sc.name}: ${plural(st.items.length, "file")}${st.more ? "+" : ""} from ${plural(new Set(st.items.map(x => x.msgId)).size, "message")}`, r.ms);
+  if (told) hooks.status(`${sc.name}: ${counted()} from ${plural(new Set(st.items.map(x => x.msgId)).size, "message")}`, r.ms);
 }
 
 function render() {
   const sc = hooks.scope(st.folderId, withSubs(st.folderId));
   const name = noBidi(sc?.full || "");
-  $("f-title").textContent = `Files in ${noBidi(sc?.name || "")}`;
-  $("f-title").title = `Files in the mail of ${name}${withSubs(st.folderId) && sc?.subs ? ` and its ${plural(sc.subs, "subfolder")}` : ""}; Esc goes back to its messages`;
-  $("f-count").textContent = st.loading && !st.items.length ? "" : `${st.items.length}${st.more ? "+" : ""} ${st.items.length === 1 && !st.more ? "file" : "files"}`;
+  $("f-title").textContent = `Attachments in ${noBidi(sc?.name || "")}`;
+  $("f-title").title = `Attachments in the mail of ${name}${withSubs(st.folderId) && sc?.subs ? ` and its ${plural(sc.subs, "subfolder")}` : ""}; Esc goes back to its messages`;
+  $("f-count").textContent = st.loading && !st.items.length ? "" : counted();
   $("f-subs").classList.toggle("hidden", !sc?.subs);
   $("f-subs-box").checked = withSubs(st.folderId);
-  $("f-subs").title = `List the files of its ${plural(sc?.subs || 0, "subfolder")} too; the folder keeps this choice`;
+  $("f-subs").title = `List the attachments of its ${plural(sc?.subs || 0, "subfolder")} too; the folder keeps this choice`;
   const box = $("f-rows"), top = box.scrollTop;
-  box.setAttribute("aria-label", `Files in ${name}`);
+  box.setAttribute("aria-label", `Attachments in ${name}`);
   if (st.items.length) box.innerHTML = st.items.map(rowHtml).join("");
-  else box.innerHTML = `<div class="list-empty">${st.loading ? "<div>Loading files...</div>" : emptyHtml(sc, name)}</div>`;
+  else box.innerHTML = `<div class="list-empty">${st.loading ? "<div>Loading attachments...</div>" : emptyHtml(sc, name)}</div>`;
   box.scrollTop = top;
   $("f-more").classList.toggle("hidden", !st.more);
   syncAria();
@@ -158,18 +161,18 @@ function render() {
 
 function emptyHtml(sc, name) {
   const subs = sc?.subs || 0, on = withSubs(st.folderId);
-  const sub = !subs ? "" : on ? "" : `Its ${plural(subs, "subfolder")} ${subs === 1 ? "is" : "are"} not included: tick Subfolders to list ${subs === 1 ? "its" : "their"} files too.`;
-  return `<div>No files in ${esc(name)}${on && subs ? " or its subfolders" : ""}.</div>${sub ? `<div class="sub">${sub}</div>` : ""}`;
+  const sub = !subs ? "" : on ? "" : `Its ${plural(subs, "subfolder")} ${subs === 1 ? "is" : "are"} not included: tick Subfolders to list ${subs === 1 ? "its" : "their"} attachments too.`;
+  return `<div>No attachments in ${esc(name)}${on && subs ? " or its subfolders" : ""}.</div>${sub ? `<div class="sub">${sub}</div>` : ""}`;
 }
 
 function rowHtml(a, i) {
   const t = tile(a), who = hooks.who(a.row) || {}, where = hooks.where(a.row, st.folderId);
   const name = a.filename || "Untitled", person = who.name || who.email || "", date = hooks.date(a.row.headers?.date);
   const subject = noBidi(a.row.headers?.subject || "(no subject)").replace(/\^_/g, "");
-  const tip = [name, `${person ? `From ${person}: ` : ""}${subject}`, ...(a.copies > 1 ? [`Also in ${plural(a.copies - 1, "older message")}`] : []), "Click to see its message; Enter or double-click to preview"].map(noBidi).join("\n");
+  const tip = [name, `${person ? `From ${person}: ` : ""}${subject}`, ...(a.copies > 1 ? [`Also in ${plural(a.copies - 1, "older message")}`] : []), "Click to see its message; click its badge, press Enter or double-click to open the attachment as well"].map(noBidi).join("\n");
   const label = [name, t.text, a.size ? sizeStr(a.size) : "", person, date, where ? `in ${where}` : ""].filter(Boolean).join(", ");
   return `<div class="frow${i === st.selected ? " sel" : ""}" id="frow-${i}" data-i="${i}" role="option" aria-selected="${i === st.selected}" aria-label="${esc(label)}" title="${esc(tip)}">` +
-    `<span class="ft ${t.cls}">${esc(t.text)}</span>` +
+    `<span class="ft ${t.cls}" title="${esc(`${noBidi(name)}\nClick to open the attachment and show its message (Enter)`)}">${esc(t.text)}</span>` +
     `<span class="fn">${esc(name)}${where ? `<em>${esc(where)}</em>` : ""}</span>` +
     `<span class="fw">${esc(person)}</span>` +
     `<span class="fz">${a.size ? sizeStr(a.size) : ""}</span>` +
@@ -192,14 +195,18 @@ function select(i) {
   syncAria();
 }
 
-// A click selects a file and shows its message in the reader.
+// A click selects a file and shows its message in the reader; a click on its type badge, Enter or
+// a double click also previews the file over it, as a badge under a message does. A message
+// already shown is not fetched again.
+function showMessage(a) { if (!hooks.isOpen(a.msgId)) hooks.openRow(a.row, "user"); }
 function pick(i) {
   select(i);
-  hooks.openRow(st.items[i].row, "user");
+  showMessage(st.items[i]);
 }
 function previewAt(i) {
   if (i < 0 || !st.items[i]) return;
   select(i);
+  showMessage(st.items[i]);
   preview(st.items, i);
 }
 

@@ -117,6 +117,8 @@ body.dragging iframe { pointer-events: none; }
 #ctx div { display: flex; justify-content: space-between; gap: 24px; padding: 3px 14px; cursor: pointer; }
 #ctx kbd { font: inherit; color: var(--fg3); }
 #ctx div:hover { background: var(--sel); }
+#ctx div.off { color: var(--fg3); cursor: default; }
+#ctx div.off:hover { background: none; }
 #ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 #movebox { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 80; }
 #movebox-box { background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; width: 420px; max-height: 70vh; display: flex; flex-direction: column; }
@@ -176,7 +178,10 @@ body.dragging iframe { pointer-events: none; }
 .frow:hover { background: var(--bg3); }
 .frow.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
 .frow > span { overflow: hidden; text-overflow: ellipsis; }
-.frow .ft { height: calc(var(--row-h) - 6px); display: flex; align-items: center; justify-content: center; border-radius: 3px; font: 700 calc(9 * var(--fu)) var(--mono); color: #fff; }
+.frow .ft { height: calc(var(--row-h) - 6px); display: flex; align-items: center; justify-content: center; border-radius: 3px; font: 700 calc(9 * var(--fu)) var(--mono); color: #fff; cursor: pointer; }
+/* the badge opens the file: outlined on the row under the mouse, and in the accent under the mouse itself */
+.frow:hover .ft { outline: 1px solid var(--fg3); outline-offset: 1px; }
+.frow .ft:hover { outline: 2px solid var(--accent); }
 .frow .fn { color: var(--fg); }
 .frow .fn em { font-style: normal; color: var(--fg3); font-size: calc(11 * var(--fu)); margin-left: 6px; }
 .frow .fw { color: var(--fg2); }
@@ -482,12 +487,13 @@ body.dragging iframe { pointer-events: none; }
 /* Windows Contrast themes (forced colours) drop backgrounds and shadows, which is how the cursor,
    marks and the active folder are drawn; there they are outlines in the system's highlight colour. */
 @media (forced-colors: active) {
-  .row.marked, .folder.drop, #ctx div:hover, #move-list div.kb, #move-list div:hover,
+  .row.marked, .folder.drop, #ctx div:hover:not(.off), #move-list div.kb, #move-list div:hover,
   #c-suggest div.kb, #c-suggest div:hover, .ab-seg button.on { outline: 1px dashed Highlight; outline-offset: -2px; }
   .row.sel, .frow.sel, .folder.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .row:hover:not(.sel), .frow:hover:not(.sel), .folder:hover:not(.active) { outline: 1px dotted CanvasText; outline-offset: -2px; }
   #notice { border: 2px solid CanvasText; }
   .row .sb mark { background: Mark; color: MarkText; }
+  #ctx div.off { color: GrayText; }
 }
 
 /* Names and subjects in other scripts keep their own direction; a right-to-left name cannot

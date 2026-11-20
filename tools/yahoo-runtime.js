@@ -765,6 +765,18 @@ const { launch } = require("./harness");
     await page.keyboard.press("Escape"); await page.waitForTimeout(200);
     await page.keyboard.press("j"); await page.waitForTimeout(100);
     f.keys = { sel: await page.locator("#f-rows .frow.sel").evaluate(e => e.dataset.i).catch(() => null), viewer: await page.locator("#viewer").isVisible() };
+    // a row's type badge is outlined under the mouse; clicked, it shows the file's message and opens the file
+    await page.mouse.move(0, 0);
+    const first = page.locator("#f-rows .frow").first(), second = page.locator("#f-rows .frow").nth(1);
+    const outline = loc => loc.locator(".ft").evaluate(e => getComputedStyle(e).outlineStyle);
+    f.badge = { idle: await outline(first) };
+    await first.hover();
+    f.badge.hover = await outline(first);
+    await second.locator(".ft").click();
+    await page.waitForSelector("#viewer:not(.hidden)", { timeout: 3000 }).catch(() => {});
+    await page.waitForFunction(() => document.getElementById("r-subject").textContent === "Subject 1-6", null, { timeout: 5000 }).catch(() => {});
+    Object.assign(f.badge, { subject: await page.locator("#r-subject").textContent(), name: await page.locator("#v-name").textContent(), meta: await page.locator("#v-meta").textContent() });
+    await page.keyboard.press("Escape"); await page.waitForTimeout(200);
     const listed = async () => ({ pane: await page.locator("#files-pane").isVisible(), rows: await page.locator("#rows .row").count(), title: await page.locator("#list-title").textContent() });
     await page.keyboard.press("Escape"); await page.waitForTimeout(600);
     f.esc = await listed();
@@ -934,12 +946,14 @@ const { launch } = require("./harness");
   }
   {
     const f = results.files;
-    expect(f.menu === "Show files" && f.tree.added === 0 && f.tree.active.join() === "1" && f.calls.length === 1 && f.calls[0] === "messageGroups.getList" && /folderId:1 has:attachment/.test(f.query),
-      "Show files lists the folder's files with one search, adding nothing to the tree: " + JSON.stringify(f));
-    expect(f.list.rows.join() === "f.pdf,f.pdf" && f.list.tiles.join() === "PDF,PDF" && f.list.count === "2 files" && f.list.title === "Files in Inbox" && !f.list.messages && !f.list.toolbar && !f.list.subs,
+    expect(f.menu === "Show attachments" && f.tree.added === 0 && f.tree.active.join() === "1" && f.calls.length === 1 && f.calls[0] === "messageGroups.getList" && /folderId:1 has:attachment/.test(f.query),
+      "Show attachments lists the folder's attachments with one search, adding nothing to the tree: " + JSON.stringify(f));
+    expect(f.list.rows.join() === "f.pdf,f.pdf" && f.list.tiles.join() === "PDF,PDF" && f.list.count === "2 attachments" && f.list.title === "Attachments in Inbox" && !f.list.messages && !f.list.toolbar && !f.list.subs,
       "the files of the folder's mail, without images built into the text or a nameless logo, in the message list's place: " + JSON.stringify(f.list));
     expect(f.reader.subject === "Subject 1-3" && !f.reader.del && f.reader.sel === 1 && f.viewer.name === "f.pdf" && /1 of 2/.test(f.viewer.meta) && /2 of 2/.test(f.viewer.next) && f.keys.sel === "1" && !f.keys.viewer,
       "a click shows the file's message, Enter previews it and the viewer steps on to the next message's file: " + JSON.stringify([f.reader, f.viewer, f.keys]));
+    expect(f.badge.idle === "none" && f.badge.hover === "solid" && f.badge.subject === "Subject 1-6" && f.badge.name === "f.pdf" && /2 of 2/.test(f.badge.meta),
+      "a row's badge is outlined under the mouse and opens the file over its message: " + JSON.stringify(f.badge));
     expect(!f.esc.pane && f.esc.rows > 0 && f.esc.title === "Inbox" && !f.left.pane && f.left.rows > 0 && f.left.title === "Inbox",
       "Esc, or another folder, leaves Files for messages: " + JSON.stringify([f.esc, f.left]));
     expect(f.subs.shown && !f.subs.ticked && /folderId:\(31 OR 32\) has:attachment/.test(f.subs.query) && f.subs.after && JSON.stringify(f.saved) === '{"me@yahoo.com":{"31":{"subs":true}}}',
