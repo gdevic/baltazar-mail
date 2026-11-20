@@ -732,6 +732,67 @@ const { launch } = require("./harness");
     a.on = { locks: (await locks()).length };
     await page.keyboard.press("Escape");
   }
+
+  // Files: asked for from a folder's menu, the files of its mail take the message list's place,
+  // listed from the search rows alone and without the nameless logo, while the folder stays
+  // highlighted and nothing is added to the tree; a click shows a file's message, Enter previews
+  // it and the arrows step on to the next message's file; Esc goes back to the folder's messages;
+  // Subfolders widens the search and the folder keeps that choice, across a reload too.
+  {
+    const f = results.files = {};
+    const tree = name => page.locator("#folder-list .folder", { hasText: name }).first();
+    const lists = from => calls.slice(from).filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope?.requests?.[0]?.uri || ""));
+    const showFiles = async name => { await tree(name).click({ button: "right" }); await page.locator('#ctx [data-act="files"]').click(); await page.waitForTimeout(800); };
+    await tree("Inbox").click(); await page.waitForTimeout(500);
+    const folders = await page.locator("#folder-list .folder").count();
+    await tree("Inbox").click({ button: "right" });
+    f.menu = await page.locator('#ctx [data-act="files"]').textContent();
+    const n0 = calls.length;
+    await page.locator('#ctx [data-act="files"]').click();
+    await page.waitForSelector("#f-rows .frow", { timeout: 5000 }).catch(() => {});
+    f.calls = calls.slice(n0).map(c => c.name);
+    f.query = lists(n0)[0] || "";
+    f.tree = { added: (await page.locator("#folder-list .folder").count()) - folders, active: await page.locator("#folder-list .folder.active").evaluateAll(els => els.map(e => e.dataset.id)) };
+    f.list = { rows: await page.locator("#f-rows .frow .fn").allTextContents(), tiles: await page.locator("#f-rows .frow .ft").allTextContents(), count: await page.locator("#f-count").textContent(),
+      title: await page.locator("#f-title").textContent(), messages: await page.locator("#rows").isVisible(), toolbar: await page.locator("#toolbar").isVisible(), subs: await page.locator("#f-subs").isVisible() };
+    await page.locator("#f-rows .frow").first().click(); await page.waitForTimeout(700);
+    f.reader = { subject: await page.locator("#r-subject").textContent(), del: await page.locator("#r-delete").isVisible(), sel: await page.locator("#f-rows .frow.sel").count() };
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#viewer:not(.hidden)", { timeout: 3000 }).catch(() => {});
+    f.viewer = { name: await page.locator("#v-name").textContent(), meta: await page.locator("#v-meta").textContent() };
+    await page.keyboard.press("ArrowRight"); await page.waitForTimeout(300);
+    f.viewer.next = await page.locator("#v-meta").textContent();
+    await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+    await page.keyboard.press("j"); await page.waitForTimeout(100);
+    f.keys = { sel: await page.locator("#f-rows .frow.sel").evaluate(e => e.dataset.i).catch(() => null), viewer: await page.locator("#viewer").isVisible() };
+    const listed = async () => ({ pane: await page.locator("#files-pane").isVisible(), rows: await page.locator("#rows .row").count(), title: await page.locator("#list-title").textContent() });
+    await page.keyboard.press("Escape"); await page.waitForTimeout(600);
+    f.esc = await listed();
+    // a folder with a subfolder offers Subfolders, which adds it to the search and is kept
+    await showFiles("Projects");
+    const box = page.locator("#f-subs-box");
+    f.subs = { shown: await page.locator("#f-subs").isVisible(), ticked: await box.isChecked() };
+    const n1 = calls.length;
+    await box.click(); await page.waitForTimeout(800);
+    f.subs.query = lists(n1)[0] || "";
+    f.subs.after = await box.isChecked();
+    f.saved = await page.evaluate(async () => (await chrome.storage.local.get("folderFiles")).folderFiles);
+    // another folder leaves Files; asked for again, Projects lists its subfolders' files at once
+    await tree("Inbox").click(); await page.waitForTimeout(600);
+    f.left = await listed();
+    const n2 = calls.length;
+    await showFiles("Projects");
+    f.again = { ticked: await box.isChecked(), query: lists(n2)[0] || "" };
+    // a reload opens the Inbox's messages, and the choice is still kept; unticked, it is not
+    await page.reload(); await page.waitForSelector("#rows .row", { timeout: 15000 });
+    f.reloaded = await listed();
+    const n3 = calls.length;
+    await showFiles("Projects");
+    f.reloaded.ticked = await box.isChecked();
+    f.reloaded.query = lists(n3)[0] || "";
+    await box.click(); await page.waitForTimeout(800);
+    f.unticked = await page.evaluate(async () => (await chrome.storage.local.get("folderFiles")).folderFiles);
+  }
   results.cspViolations = cspViolations;
   console.log(JSON.stringify(results, null, 1));
   await ctx.close();
@@ -870,6 +931,21 @@ const { launch } = require("./harness");
     expect(a.again.count === 2 && !a.again.notice && a.again.status === "The browser still put this tab to sleep 2 times in the last 7 days, for 3 h at the longest.", "a second sleep is counted and not told again: " + JSON.stringify(a.again));
     expect(!a.off.locks.length && a.off.saved === false && a.off.status === "The browser put this tab to sleep 2 times in the last 7 days, for 3 h at the longest." && a.off.how === "Browser's own setting" && a.on.locks === 1,
       "switched off, the lock is given back; switched on, it is taken again: " + JSON.stringify({ off: a.off, on: a.on }));
+  }
+  {
+    const f = results.files;
+    expect(f.menu === "Show files" && f.tree.added === 0 && f.tree.active.join() === "1" && f.calls.length === 1 && f.calls[0] === "messageGroups.getList" && /folderId:1 has:attachment/.test(f.query),
+      "Show files lists the folder's files with one search, adding nothing to the tree: " + JSON.stringify(f));
+    expect(f.list.rows.join() === "f.pdf,f.pdf" && f.list.tiles.join() === "PDF,PDF" && f.list.count === "2 files" && f.list.title === "Files in Inbox" && !f.list.messages && !f.list.toolbar && !f.list.subs,
+      "the files of the folder's mail, without images built into the text or a nameless logo, in the message list's place: " + JSON.stringify(f.list));
+    expect(f.reader.subject === "Subject 1-3" && !f.reader.del && f.reader.sel === 1 && f.viewer.name === "f.pdf" && /1 of 2/.test(f.viewer.meta) && /2 of 2/.test(f.viewer.next) && f.keys.sel === "1" && !f.keys.viewer,
+      "a click shows the file's message, Enter previews it and the viewer steps on to the next message's file: " + JSON.stringify([f.reader, f.viewer, f.keys]));
+    expect(!f.esc.pane && f.esc.rows > 0 && f.esc.title === "Inbox" && !f.left.pane && f.left.rows > 0 && f.left.title === "Inbox",
+      "Esc, or another folder, leaves Files for messages: " + JSON.stringify([f.esc, f.left]));
+    expect(f.subs.shown && !f.subs.ticked && /folderId:\(31 OR 32\) has:attachment/.test(f.subs.query) && f.subs.after && JSON.stringify(f.saved) === '{"me@yahoo.com":{"31":{"subs":true}}}',
+      "Subfolders adds the folder's subfolders to the search, and the folder keeps the choice per account: " + JSON.stringify([f.subs, f.saved]));
+    expect(f.again.ticked && /folderId:\(31 OR 32\) has:attachment/.test(f.again.query) && !f.reloaded.pane && f.reloaded.title === "Inbox" && f.reloaded.ticked && /folderId:\(31 OR 32\) has:attachment/.test(f.reloaded.query) && JSON.stringify(f.unticked) === "{}",
+      "asked for again, and after a reload, the kept choice lists the subfolders' files at once; unticked, nothing is kept: " + JSON.stringify([f.again, f.reloaded, f.unticked]));
   }
   if (errors.length) { console.error("FAILED:", errors); process.exit(1); }
   console.log("PASS");

@@ -106,8 +106,8 @@ body.dragging iframe { pointer-events: none; }
 #toolbar button:disabled { opacity: .4; cursor: default; }
 #rows { overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
 #rows > * { flex: none; }
-#rows > .list-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--fg3); }
-#rows > .list-empty .sub { font-size: calc(11 * var(--fu)); }
+#rows > .list-empty, #f-rows > .list-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--fg3); }
+#rows > .list-empty .sub, #f-rows > .list-empty .sub { font-size: calc(11 * var(--fu)); }
 /* Selected rows are a lighter wash with a focus-coloured bar; the cursor row is solid with the accent bar. */
 .row.marked { background: color-mix(in srgb, var(--sel) 55%, var(--bg)); box-shadow: inset 3px 0 var(--sel-line); }
 
@@ -158,6 +158,29 @@ body.dragging iframe { pointer-events: none; }
 .row .sb mark { background: none; color: var(--accent); }
 .day { padding: 2px 8px; color: var(--fg3); font-size: calc(10 * var(--fu)); letter-spacing: .5px; text-transform: uppercase; border-bottom: 1px solid var(--line); background: var(--bg2); position: sticky; top: 0; }
 #more { text-align: center; padding: 6px; border-top: 1px solid var(--line); }
+
+/* Files: a folder's attachments in the message list's place, while the folder stays highlighted */
+#files-pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+#app.files-view #files-pane { display: flex; }
+#app.files-view #list > :not(#files-pane) { display: none; }
+/* the reader shows a file's message; deleting it would take away every file it holds */
+#app.files-view #r-delete, #app.files-view .r-actions .sep { display: none; }
+#f-head { display: flex; align-items: center; gap: 8px; padding: 3px 10px; color: var(--fg2); border-bottom: 1px solid var(--line); background: var(--bg2); font-size: calc(12 * var(--fu)); }
+#f-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+#f-subs { display: flex; align-items: center; gap: 4px; font-size: calc(11 * var(--fu)); cursor: pointer; white-space: nowrap; }
+#f-subs input { margin: 0; accent-color: var(--sel-line); }
+#f-rows { overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
+#f-rows > * { flex: none; }
+#f-more { text-align: center; padding: 6px; border-top: 1px solid var(--line); }
+.frow { display: grid; grid-template-columns: calc(30 * var(--fu)) minmax(0, 1fr) minmax(0, calc(110 * var(--fu))) calc(54 * var(--fu)) calc(72 * var(--fu)); gap: 8px; align-items: center; height: var(--row-h); padding: 0 8px; cursor: pointer; white-space: nowrap; }
+.frow:hover { background: var(--bg3); }
+.frow.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
+.frow > span { overflow: hidden; text-overflow: ellipsis; }
+.frow .ft { height: calc(var(--row-h) - 6px); display: flex; align-items: center; justify-content: center; border-radius: 3px; font: 700 calc(9 * var(--fu)) var(--mono); color: #fff; }
+.frow .fn { color: var(--fg); }
+.frow .fn em { font-style: normal; color: var(--fg3); font-size: calc(11 * var(--fu)); margin-left: 6px; }
+.frow .fw { color: var(--fg2); }
+.frow .fz, .frow .dt { color: var(--fg3); font-family: var(--mono); font-size: calc(11 * var(--fu)); text-align: right; }
 
 #reader { grid-area: reader; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #reader-empty { margin: auto; color: var(--fg3); }
@@ -461,12 +484,12 @@ body.dragging iframe { pointer-events: none; }
 @media (forced-colors: active) {
   .row.marked, .folder.drop, #ctx div:hover, #move-list div.kb, #move-list div:hover,
   #c-suggest div.kb, #c-suggest div:hover, .ab-seg button.on { outline: 1px dashed Highlight; outline-offset: -2px; }
-  .row.sel, .folder.active { outline: 2px solid Highlight; outline-offset: -2px; }
-  .row:hover:not(.sel), .folder:hover:not(.active) { outline: 1px dotted CanvasText; outline-offset: -2px; }
+  .row.sel, .frow.sel, .folder.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .row:hover:not(.sel), .frow:hover:not(.sel), .folder:hover:not(.active) { outline: 1px dotted CanvasText; outline-offset: -2px; }
   #notice { border: 2px solid CanvasText; }
   .row .sb mark { background: Mark; color: MarkText; }
 }
 
 /* Names and subjects in other scripts keep their own direction; a right-to-left name cannot
    reorder the commas, dates and labels around it. */
-.row .fr, .row .sb, .who, .chip span, .card-head b, .card-recent .subj, .ab-name, .att-name, #r-subject, #c-suggest div > span { unicode-bidi: isolate; }
+.row .fr, .row .sb, .frow .fn, .frow .fw, .who, .chip span, .card-head b, .card-recent .subj, .ab-name, .att-name, #r-subject, #c-suggest div > span { unicode-bidi: isolate; }

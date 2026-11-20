@@ -7,7 +7,7 @@ import { asText, hexDump } from "./bytes.js";
 import { esc, noBidi } from "./text.js";
 
 const $ = id => document.getElementById(id);
-const sizeStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
+export const sizeStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
 const extOf = n => (String(n || "").match(/\.([a-z0-9]{1,6})$/i)?.[1] || "").toLowerCase();
 
 const TEXT = new Set(["txt", "log", "md", "markdown", "ini", "cfg", "conf", "yaml", "yml", "toml", "ics", "vcf", "eml", "csv", "tsv", "json", "xml", "srt", "diff", "patch"]);
@@ -20,7 +20,7 @@ const OFFICE_SHEET = new Set(["xls", "xlsx", "ods", "numbers"]);
 const OFFICE_SLIDE = new Set(["ppt", "pptx", "odp", "key"]);
 const ZIP = new Set(["zip", "jar", "apk", "docm"]);
 
-function kindOf(a) {
+export function kindOf(a) {
   const ext = extOf(a.filename), sub = (a.subtype || "").toLowerCase(), type = (a.type || "").toLowerCase();
   if (ext === "pdf" || sub === "pdf") return "pdf";
   if (IMAGE.has(ext) || type === "image") return "image";
@@ -37,12 +37,18 @@ function kindOf(a) {
 }
 const LABEL = { pdf: "PDF", image: "IMG", html: "HTML", audio: "AUD", video: "VID", zip: "ZIP", doc: "DOC", sheet: "XLS", slide: "PPT", code: "CODE", text: "TXT", other: "FILE" };
 const CLASS = { pdf: "k-pdf", image: "k-image", html: "k-html", audio: "k-audio", video: "k-video", zip: "k-zip", doc: "k-doc", sheet: "k-sheet", slide: "k-slide", code: "k-code", text: "k-text", other: "k-other" };
+// The coloured tile a file shows as: its kind's label, or for text and code its own extension.
+export function tile(a) {
+  const k = kindOf(a), ext = extOf(a.filename);
+  return { kind: k, cls: CLASS[k], text: (k === "text" || k === "code") && ext ? ext.toUpperCase().slice(0, 4) : LABEL[k] };
+}
 
 // { thumb(msgId, a) -> data URL | null, bytes(msgId, a) -> { bytes, type, filename }, docPages?(docId, start, end, retry),
 //   extractText?(a) -> string, originalUrl?(a) -> url | null, listed(a) -> whether the strip shows it, cleanHtml(html),
 //   status(msg), providerName }
 let hooks = null;
-let items = [], index = 0, msgId = null;
+// The files the viewer steps through, each with the id of the message it belongs to (msgId).
+let items = [], index = 0;
 let objectUrls = [];
 
 export function init(h) {
@@ -60,6 +66,13 @@ export function init(h) {
 
 export function isOpen() { return !$("viewer").classList.contains("hidden"); }
 
+// Shows file i of list, whose entries carry their message's id (msgId); the arrows step through
+// the list, whichever messages its files come from.
+export function open(list, i) {
+  items = list;
+  show(i);
+}
+
 export function onKey(e) {
   if (e.key === "Escape") close();
   else if (e.key === "ArrowLeft") show(index - 1);
@@ -75,20 +88,19 @@ export function onKey(e) {
 // ---------- strip ----------
 export function renderStrip(message, attachments, isCurrent) {
   const box = $("r-attach");
-  items = attachments.filter(a => a.disposition !== "inline" && hooks.listed(a));
-  msgId = message.id;
-  box.classList.toggle("hidden", !items.length);
-  if (!items.length) { box.innerHTML = ""; return; }
-  const total = items.reduce((s, a) => s + (a.size || 0), 0);
-  box.innerHTML = `<div class="att-head"><b>${items.length} attachment${items.length === 1 ? "" : "s"}</b>${sizeStr(total)}</div>` +
-    items.map((a, i) => {
-      const k = kindOf(a);
+  const strip = attachments.filter(a => a.disposition !== "inline" && hooks.listed(a)).map(a => ({ ...a, msgId: message.id }));
+  box.classList.toggle("hidden", !strip.length);
+  if (!strip.length) { box.innerHTML = ""; return; }
+  const total = strip.reduce((s, a) => s + (a.size || 0), 0);
+  box.innerHTML = `<div class="att-head"><b>${strip.length} attachment${strip.length === 1 ? "" : "s"}</b>${sizeStr(total)}</div>` +
+    strip.map((a, i) => {
+      const t = tile(a);
       return `<div class="att-card" data-i="${i}" title="${esc(a.filename || "attachment")}: click to preview">
-        <span class="att-thumb ${CLASS[k]}" data-i="${i}">${(k === "text" || k === "code") && extOf(a.filename) ? esc(extOf(a.filename).toUpperCase().slice(0, 4)) : LABEL[k]}</span>
+        <span class="att-thumb ${t.cls}" data-i="${i}">${esc(t.text)}</span>
         <span class="att-info"><span class="att-name">${esc(a.filename || "Untitled")}</span><span class="att-size">${sizeStr(a.size)}</span></span></div>`;
     }).join("");
-  box.onclick = e => { const c = e.target.closest(".att-card"); if (c) show(Number(c.dataset.i)); };
-  items.forEach(async (a, i) => {
+  box.onclick = e => { const c = e.target.closest(".att-card"); if (c) open(strip, Number(c.dataset.i)); };
+  strip.forEach(async (a, i) => {
     if (kindOf(a) !== "image") return;
     const src = await hooks.thumb(message.id, a).catch(() => null);
     if (!src || !isCurrent(message.id)) return;
@@ -103,8 +115,8 @@ export function renderStrip(message, attachments, isCurrent) {
 // not settle; anything else is untyped, since an image opened in a tab from the viewer would
 // otherwise show the sender's HTML at the extension's address.
 const MEDIA_TYPE = /^(image\/(png|jpeg|gif|webp|bmp|avif|x-icon|vnd\.microsoft\.icon)|audio\/[\w.+-]+|video\/[\w.+-]+)$/i;
-async function fetchBlob(a, id = msgId) {
-  const { bytes, type } = await hooks.bytes(id, a);
+async function fetchBlob(a) {
+  const { bytes, type } = await hooks.bytes(a.msgId, a);
   return new Blob([bytes], { type: MIME[extOf(a.filename)] || (MEDIA_TYPE.test(type || "") ? type : "application/octet-stream") });
 }
 
@@ -165,7 +177,7 @@ async function show(i) {
   if (!items.length) return;
   teardown();
   index = (i + items.length) % items.length;
-  const a = items[index], k = kindOf(a), id = msgId, at = index;
+  const a = items[index], k = kindOf(a), list = items, at = index;
   $("viewer").classList.remove("hidden");
   $("v-name").textContent = noBidi(a.filename || "Untitled");
   const meta = extra => { $("v-meta").textContent = `${sizeStr(a.size)} · ${LABEL[k]}${extra ? ` · ${extra}` : ""}${items.length > 1 ? ` · ${index + 1} of ${items.length}` : ""}`; };
@@ -173,7 +185,7 @@ async function show(i) {
   $("v-prev").disabled = $("v-next").disabled = items.length < 2;
   const body = $("v-body");
   body.innerHTML = center("Loading...");
-  const stale = () => msgId !== id || index !== at || !isOpen();
+  const stale = () => items !== list || index !== at || !isOpen();
   const ctx = { a, k, body, stale, meta };
   const bytes = async () => (await fetchBlob(a)).arrayBuffer();
   try {
@@ -345,7 +357,7 @@ async function showText(ctx) {
 }
 
 // ---------- download / open ----------
-async function download(a) {
+export async function download(a) {
   try {
     const blob = await fetchBlob(a);
     const link = document.createElement("a");

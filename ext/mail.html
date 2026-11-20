@@ -55,6 +55,11 @@
     </div>
     <div id="rows" role="listbox" aria-multiselectable="true"></div>
     <div id="more" class="hidden"><button id="more-btn">Load more</button></div>
+    <div id="files-pane">
+      <div id="f-head"><span id="f-title"></span><span id="f-count"></span><label id="f-subs" class="hidden"><input type="checkbox" id="f-subs-box"> Subfolders</label></div>
+      <div id="f-rows" role="listbox"></div>
+      <div id="f-more" class="hidden"><button id="f-more-btn">Load more</button></div>
+    </div>
   </section>
   <div id="split2" class="split"></div>
   <section id="reader">
@@ -235,12 +240,12 @@
     <table>
       <tr><td>j / k, ↓ / ↑</td><td>next / previous message</td></tr>
       <tr><td>Home / End</td><td>first / last loaded message</td></tr>
-      <tr><td>Enter, o</td><td>open selected message (in Drafts: edit the draft)</td></tr>
+      <tr><td>Enter, o</td><td>open selected message (in Drafts: edit the draft; in Files: preview the file)</td></tr>
       <tr><td>c</td><td>new message</td></tr>
       <tr><td>r / a / f</td><td>reply / reply all / forward the open message</td></tr>
       <tr><td>Ctrl+Enter</td><td>send (held for the undo-send delay; z cancels)</td></tr>
       <tr><td>Ctrl+S</td><td>save the message being written as a draft (it is also saved by itself)</td></tr>
-      <tr><td>Esc</td><td>close the composer (its draft is kept), the viewer, a dialog, menu or card; clear the search, then the selection</td></tr>
+      <tr><td>Esc</td><td>close the composer (its draft is kept), the viewer, a dialog, menu or card; clear the search, then the selection; leave a folder's files for its messages</td></tr>
       <tr><td>Enter, Tab, comma</td><td>in To / Cc / Bcc: complete the address (↓ / ↑ pick a suggestion; Backspace in an empty field removes the last one)</td></tr>
       <tr><td>Del, Backspace</td><td>in the message being written: remove the selected inline picture</td></tr>
       <tr><td>/</td><td>search (Esc clears)</td></tr>
@@ -270,6 +275,7 @@
       <tr><td>?</td><td>this help</td></tr>
     </table>
     <p>Actions apply to the selected messages, or to the highlighted one if none are selected. Right-click a message for the same actions.</p>
+    <p>Right-click a folder and choose Show files to list every attachment of its mail in place of its messages; click a file to see its message, and press Esc to go back to the messages. Tick Subfolders to include the files of its subfolders; the folder keeps that choice on this computer.</p>
   </div>
 </div>
 <script src="vendor/purify.min.js"></script>

@@ -14,14 +14,18 @@ const { build, EDITIONS, ROOT } = require("./build.js");
 const built = {};
 const buildForTest = edition => build(edition, { local: {}, to: path.join(ROOT, "out", "test", EDITIONS[edition].folder) });
 const now = Math.floor(Date.now() / 1000);
-// Every third message has a file; message 4 has only images built into its body, which are not files.
+// Every third message has a file, named in its list row as Yahoo names one (part, size, type,
+// links, content id); message 6 also carries a nameless logo Yahoo counts as an attachment.
+// Message 4 has only images built into its body, which are not files.
 // Projects/FPGA (32) carries bidi controls in its names, subjects and filenames.
 const RLO = "\u202E", PDF = "\u202C", RLI = "\u2067", PDI = "\u2069";
 const msg = (i, folder) => folder === "32" ? spoofed(plainMsg(i, folder)) : plainMsg(i, folder);
 const spoofed = m => ({ ...m, headers: { ...m.headers, subject: `Pay ${RLO}eulav${PDF} ${m.id.split("_")[1]}`, from: [{ name: `Bob${RLI}evil${PDI}`, email: m.headers.from[0].email }] } });
 const plainMsg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, csid: `csid${i}`,
   attachmentCount: i % 3 === 0 ? 1 : i === 4 ? 2 : 0,
-  attachments: i % 3 === 0 ? [{ disposition: "attachment", filename: "f.pdf" }] : i === 4 ? [{ disposition: "inline" }, { disposition: "inline" }] : [],
+  attachments: i % 3 === 0 ? [{ partId: "2", disposition: "attachment", filename: "f.pdf", size: 52000, type: "application", subtype: "pdf", objectId: `OBJ${folder}_${i}`, downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf" },
+    ...(i === 6 ? [{ partId: "9", disposition: "attachment", filename: "", size: 2109, type: "image", subtype: "png", objectId: "LOGO", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/png" }] : [])]
+    : i === 4 ? [{ disposition: "inline" }, { disposition: "inline" }] : [],
   flags: { read: i % 2 === 0, flagged: false },
   headers: { subject: `Subject ${folder}-${i}`, from: [{ name: `Sender ${i}`, email: `s${i}@x.com` }], to: [{ name: "Me", email: "me@yahoo.com" }], cc: [{ name: "Other", email: "o@x.com" }], date: String(now - i * 40000) },
   folder: { id: folder, name: folder === "1" ? "Inbox" : "Other" }, snippet: "snip" });
@@ -186,7 +190,7 @@ async function launch(opts = {}) {
         if (id && q.method === "DELETE") goneElsewhere.add(id);   // deleted for good, as on the server
       }
       responses = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(m => ({ id: m[1], httpCode: 204 })); }
-    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)).map(m => mock.flags.has(m.id) ? { ...m, flags: { ...m.flags, ...mock.flags.get(m.id) } } : m).filter(m => !/\bis:unread\b/.test(q) || !m.flags?.read), query: {} } } }]; }
+    else { const q = decodeURIComponent(uri.split("q=")[1] || ""); const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1"; const empty = /(^|[^-])folderId:(62|40)\b/.test(q); responses = [{ id: top.id, httpCode: 200, response: { result: { messages: empty ? [] : Array.from({ length: 8 }, (_, i) => msg(i + 1, folder)).filter(m => !goneElsewhere.has(m.id)).map(m => mock.flags.has(m.id) ? { ...m, flags: { ...m.flags, ...mock.flags.get(m.id) } } : m).filter(m => !/\bis:unread\b/.test(q) || !m.flags?.read).filter(m => !/(^|[\s(])has:attachment\b/.test(q) || m.attachments.some(a => a.disposition !== "inline")), query: {} } } }]; }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses, status: {} }, error: null }) });
   });
 

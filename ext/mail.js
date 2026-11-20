@@ -3,6 +3,7 @@ import { THEMES, applyTheme, clampContrast } from "./themes.js";
 import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
+import * as files from "./files.js";
 import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
@@ -183,7 +184,7 @@ const FAILED = {
   spam: "Could not mark the messages as spam.", notspam: "Could not mark the messages as not spam.",
   create: "Could not create the folder.", rename: "Could not rename the folder.", "move folder": "Could not move the folder.",
   "delete folder": "Could not delete the folder.", empty: "Could not empty the folder.", "mark all read": "Could not mark the folder read.",
-  "sign out": "Could not sign out.",
+  "sign out": "Could not sign out.", files: "Could not list the folder's files.",
 };
 // A request that never reached the mail service fails with the browser's bare "Failed to fetch".
 const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? `${api.PROVIDER.name} could not be reached; check the connection.` : e.message;
@@ -221,7 +222,7 @@ function renderFolders() {
   const add = (f, depth, twisty, label = folderName(f).split("/").pop()) => {
     const el = document.createElement("div");
     el.className = "folder" + (f.unread ? " unread" : "") + (folderType(f) ? " sys" : "") +
-      (state.view.kind === "folder" && state.view.folderId === f.id ? " active" : "");
+      ((state.view.kind === "folder" ? state.view.folderId : state.view.kind === "files" ? state.view.of : null) === f.id ? " active" : "");
     el.dataset.id = f.id;
     el.style.paddingLeft = `${8 + depth * 12}px`;
     el.innerHTML = `${twistyHtml(twisty)}<span class="nm" title="${esc(folderName(f))}">${esc(label)}</span><span class="ct"></span>`;
@@ -328,17 +329,20 @@ const parentChoices = f => state.folders.filter(p => canParent(p) && sameAcct(p,
 function showFolderMenu(f, x, y) {
   if (f && f !== "head") f = state.byId.get(f.id) || f;
   const t = f === "head" ? "" : f ? folderType(f) : "STARRED";
+  // a folder's menu opens with what reads it: Mark all read, then Show files
   const markRead = ["mark-read", "Mark all read"];
+  const showFiles = ["files", "Show files", "", "List every attachment in the folder's mail in place of its messages, until you leave it"];
   const items = f === "head" ? [["new", "New folder..."], null, ["expand", "Expand all"], ["collapse", "Collapse all"]]
-    : managed(f) ? [["move", "Move..."], ["rename", "Rename..."], ["sub", "Create subfolder..."], null, markRead, null, ["delete", "Delete"]]
-    : t === "TRASH" ? [markRead, null, ["empty", "Empty Trash..."]]
-    : t === "BULK" ? [markRead, null, ["empty", "Empty Spam..."]]
-    : t === "DRAFT" ? []
-    : t === "INBOX" && f.id === folderByType("INBOX")?.id ? [["sub", "Create subfolder..."], null, markRead]
-    : [markRead];
-  if (!items.length) return;
+    : !f ? [markRead]
+    : managed(f) ? [markRead, showFiles, null, ["move", "Move..."], ["rename", "Rename..."], ["sub", "Create subfolder..."], null, ["delete", "Delete"]]
+    : t === "TRASH" ? [markRead, showFiles, null, ["empty", "Empty Trash..."]]
+    : t === "BULK" ? [markRead, showFiles, null, ["empty", "Empty Spam..."]]
+    : t === "DRAFT" ? [showFiles]
+    : t === "INBOX" && f.id === folderByType("INBOX")?.id ? [markRead, showFiles, null, ["sub", "Create subfolder..."]]
+    : [markRead, showFiles];
   openMenu(x, y, items, act => {
-    if (act === "new") createFolderIn(null);
+    if (act === "files") openFiles(f.id);
+    else if (act === "new") createFolderIn(null);
     else if (act === "expand") setExpandedAll(true);
     else if (act === "collapse") setExpandedAll(false);
     else if (act === "move") openMovePicker([], f);
@@ -419,7 +423,9 @@ async function deleteFolderAsk(f) {
   if (!confirm(`Delete the folder "${folderName(f)}"${subs ? ` and its ${plural(subs, "empty subfolder")}` : ""}?`)) return;
   const order = tree.sort((a, b) => b.name.split("/").length - a.name.split("/").length);
   await folderOp("delete folder", async () => { for (const x of order) await deleteOne(x.id); }, `deleted folder "${leafName(f)}"`, () => {
-    if (state.view.kind === "folder" && tree.some(x => x.id === state.view.folderId)) openFolder(inboxId());
+    const shown = state.view.kind === "files" ? state.view.of : state.view.kind === "folder" ? state.view.folderId : null;
+    files.forget(tree.map(x => x.id));
+    if (tree.some(x => x.id === shown)) openFolder(inboxId());
   });
 }
 
@@ -441,6 +447,7 @@ async function emptyFolderAsk(f) {
   if (!confirm(`Permanently delete all ${plural(f.total, "message")} in ${folderName(f)}? This cannot be undone.`)) return;
   await folderOp("empty", () => api.emptyFolder(f.id, f.total, f.acctId || "1"), `emptied ${folderName(f)}`, () => {
     if (state.view.kind === "folder" && state.view.folderId === f.id) { clearReader(); loadList("fresh"); }
+    else if (state.view.kind === "files" && files.scopeIds().includes(f.id)) { clearReader(); files.reload(); }
   });
 }
 
@@ -562,6 +569,7 @@ const listDirty = new Set(), contactsDirty = new Set();
 async function actOnChanges() {
   const v = state.view;
   if (v.kind === "folder" && listDirty.has(v.folderId) && !busy) { listDirty.clear(); await loadList("refresh"); }
+  else if (v.kind === "files" && !busy && files.scopeIds().some(id => listDirty.has(id))) { listDirty.clear(); await files.reload(); }
   if (contactsDirty.has(inboxId()) || contactsDirty.has(folderByType("SENT")?.id)) { contactsDirty.clear(); syncContacts(); }
 }
 
@@ -645,6 +653,8 @@ const TRASH_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h
 // cannot cover the confirmation of what the user just did; one the user asked for (R) does.
 async function loadList(mode = "fresh", focusId = null, { told = mode !== "refresh" } = {}) {
   const v = state.view;
+  // Files keeps a list of its own: what would refresh the message list refreshes that one
+  if (v.kind === "files") { if (mode === "refresh") await files.reload(told); return; }
   const token = ++state.listToken;
   const prevView = state.prevView;
   const cursorId = state.messages[state.selected]?.id ?? null;
@@ -691,6 +701,7 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
     stillDirty();
     if (mode === "fresh" && prevView) {
       state.view = prevView; Object.assign(state, shown);
+      if (prevView.kind === "files") showFilesPane(true);
       renderFolders(); renderList();
     }
     handleError(e, "list");
@@ -861,7 +872,9 @@ function syncAria() {
     const m = state.messages[Number(el.dataset.i)];
     el.setAttribute("aria-selected", String(state.marked.size ? state.marked.has(m?.id) : Number(el.dataset.i) === state.selected));
   });
-  if (state.selected >= 0 && rowEl(state.selected)) $("list").setAttribute("aria-activedescendant", `row-${state.selected}`);
+  // in a folder's Files the list's active descendant is the selected file (files.js)
+  if (state.view.kind === "files") {}
+  else if (state.selected >= 0 && rowEl(state.selected)) $("list").setAttribute("aria-activedescendant", `row-${state.selected}`);
   else $("list").removeAttribute("aria-activedescendant");
   rows.setAttribute("aria-label", $("list-title").textContent || "Messages");
 }
@@ -1182,7 +1195,10 @@ function showZoomBadge(pane) {
 const keptUnread = new Set();
 async function open(i, how = "user") {
   const m = state.messages[i];
-  if (!m) return;
+  if (m) await openMessage(m, how);
+}
+// m: a row of the list, or of the Files list, whose rows are not in it.
+async function openMessage(m, how = "user") {
   if (how === "user") keptUnread.delete(m.id);
   if (!(await compose.close(true))) return;
   state.openId = m.id;
@@ -1280,7 +1296,16 @@ async function renderMessage(m, r, how = "user") {
       if (state.openId !== m.id || m.flags?.read) return;
       if (document.hidden) { document.addEventListener("visibilitychange", function again() { if (document.hidden) return; document.removeEventListener("visibilitychange", again); if (state.openId === m.id) arm(); }); return; }
       run(async () => {
-        try { const r2 = await api.setRead([m.id], true); applyFlags(r2.ok, { read: true }); }
+        try {
+          const r2 = await api.setRead([m.id], true);
+          applyFlags(r2.ok, { read: true });
+          // a message shown from Files is no row of the list, so its folder is counted here
+          if (r2.ok.includes(m.id) && !state.messages.includes(m)) {
+            if (!m.flags?.read) bumpFolder(m.folder?.id, 0, -1);
+            m.flags = { ...(m.flags || {}), read: true };
+            updateFolderCounts();
+          }
+        }
         catch (e) { handleError(e, "mark read"); }
       });
     };
@@ -1830,6 +1855,7 @@ function wireMovePicker() {
 const viewMemory = new Map();
 const viewKey = v => v.kind === "folder" ? `f:${v.folderId}` : v.starred ? "starred" : null;
 function leaveView() {
+  if (state.view.kind === "files") showFilesPane(false);   // Files remembers its own selection
   const key = viewKey(state.view); if (!key) return;
   viewMemory.set(key, { cursorId: state.messages[state.selected]?.id ?? null, marked: [...state.marked],
     openId: state.openId, scrollTop: $("rows").scrollTop });
@@ -1868,6 +1894,63 @@ async function openFolder(id) {
   if (state.view === v) restoreView();
   focusListIfStill(from);
 }
+
+// Files of a folder (its menu: Show files): its own list in the message list's place (files.js),
+// with the folder highlighted in the tree, until another view is opened (Esc: the folder's
+// messages). The message list is emptied, so message actions find nothing to act on; the reader
+// shows a selected file's message.
+function showFilesPane(on) {
+  $("app").classList.toggle("files-view", on);
+  if (on) files.resume(); else files.hide();
+}
+async function openFiles(id) {
+  if (!state.byId.has(id)) return;
+  const from = focusWhere();
+  leaveView();
+  state.prevView = state.view;
+  state.view = { kind: "files", folderId: null, of: id, term: "" };
+  ++state.listToken;        // a message list still loading is not wanted now
+  Object.assign(state, { messages: [], selected: -1, anchor: -1, more: false, elsewhere: [], loading: false });
+  state.marked.clear();
+  $("search").value = "";
+  scopeOff = false; updateScopeChip();
+  renderFolders(); renderList(); clearReader();
+  $("app").classList.add("files-view");
+  const v = state.view;
+  await files.show(id);
+  if (state.view === v) focusListIfStill(from);
+}
+// The Files hooks: the provider's search in the folder (and its subfolders), and the app's reader,
+// menus, dates and errors.
+function filesScope(id, withSubs) {
+  const f = state.byId.get(id); if (!f) return null;
+  const subs = state.folders.filter(x => x.name.startsWith(f.name + "/") && sameAcct(x, f) && !isHidden(x));
+  return { name: folderName(f).split("/").pop(), full: folderName(f), ids: [f.id, ...(withSubs ? subs.map(x => x.id) : [])], subs: subs.length };
+}
+// The subfolder a file's message is in, named only when the message is not in the folder itself.
+// A row names the folder it is shown in (folder); where a message can be in several folders at
+// once, the row names them all (labelIds), and its folder may be one outside the list, such as Inbox.
+function filesWhere(m, id) {
+  const f = state.byId.get(id); if (!f) return "";
+  const at = [m.folder?.id, ...(m.labelIds || [])].map(x => state.byId.get(x)).filter(x => x && sameAcct(x, f));
+  if (at.some(x => x.id === id)) return "";
+  const sub = at.find(x => x.name.startsWith(f.name + "/"));
+  return sub ? folderName(sub).split("/").pop() : "";
+}
+const outgoingRow = m => ["SENT", "DRAFT"].includes(folderType(state.byId.get(m.folder?.id)));
+const filesHooks = {
+  storage: chrome.storage.local,
+  search: (ids, count, offset) => api.searchScoped("", { raw: api.queries.files(), include: { ids } }, count, offset),
+  scope: filesScope, listed: api.isListed,
+  who: m => (outgoingRow(m) ? m.headers?.to?.[0] : m.headers?.from?.[0]) || {},
+  where: filesWhere,
+  date: fmtDate,
+  openRow: (m, how) => openMessage(m, how),
+  menu: openMenu,
+  goTo: m => goToMessage(m, m.headers?.from?.[0]?.email || ""),
+  status,
+  fail: e => handleError(e, "files"),
+};
 
 const STARRED = "starred";
 const STARRED_Q = api.queries.starred();
@@ -1908,7 +1991,7 @@ let scopeOff = false;
 function scopeOfView(v = state.view) {
   if (v.starred) return { starred: true, name: "Starred" };
   if (v.kind === "search") return v.scope || (v.back ? scopeOfView(v.back) : null);
-  const f = state.byId.get(v.folderId);
+  const f = state.byId.get(v.kind === "files" ? v.of : v.folderId);
   if (!f) return null;
   const subs = state.folders.filter(x => x.name.startsWith(f.name + "/") && !isHidden(x));
   return { id: f.id, name: folderName(f).split("/").pop(), full: folderName(f), ids: [f.id, ...subs.map(x => x.id)], subs: subs.length };
@@ -1983,12 +2066,14 @@ function onKey(e) {
   if (e.key === "Escape") {
     if (inSearch) {
       $("search").value = ""; $("search").blur();
-      if (state.view.kind === "search" && !state.view.starred) { const b = state.view.back; b?.starred ? openStarred() : openFolder(b?.folderId || inboxId()); }
+      // a search begun in a folder's Files returns to the folder's messages
+      if (state.view.kind === "search" && !state.view.starred) { const b = state.view.back; b?.starred ? openStarred() : openFolder((b?.kind === "files" ? b.of : b?.folderId) || inboxId()); }
       return;
     }
     if (inFolderFilter) { state.kbFolder = -1; renderFolders(); $("list").focus(); return; }
     if (!$("ctx").classList.contains("hidden")) { hideContextMenu(); return; }
     if (state.marked.size) { clearMarks(); return; }
+    if (state.view.kind === "files") { openFolder(state.view.of); return; }
   }
   if (inSearch) {
     if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { toggleSearchHelp(false); doSearch($("search").value, e.shiftKey); }
@@ -2030,6 +2115,7 @@ function onKey(e) {
     if (e.key === "*") { e.preventDefault(); openStarred(); return; }
     return;
   }
+  if (state.view.kind === "files" && files.onKey(e)) return;
   switch (e.key) {
     case "j": case "ArrowDown": e.preventDefault(); select(state.selected + 1); break;
     case "k": case "ArrowUp": e.preventDefault(); select(state.selected - 1); break;
@@ -2190,8 +2276,8 @@ function wireSettings() {
   $("density").onchange = () => { settings.rowPct = Math.min(150, Math.max(80, Math.round((Number($("density").value) || 100) / 5) * 5)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
   // A provider the extension signs in to itself (Gmail) can be signed out of here, after a
-  // confirmation, since it withdraws the permission at Google. The address book goes with the
-  // sign-in, and the page loads afresh, so nothing of the mailbox stays in memory; the sign-in
+  // confirmation, since it withdraws the permission at Google. The address book and the folders'
+  // Files choices go with the sign-in, and the page loads afresh, so nothing of the mailbox stays in memory; the sign-in
   // panel then asks again.
   if (api.signOut) {
     $("signout").classList.remove("hidden");
@@ -2203,6 +2289,7 @@ function wireSettings() {
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
       await contacts.clear().catch(() => {});
       await chrome.storage.local.remove(CONTACTS_AFTER).catch(() => {});
+      await files.clear();
       location.reload();
     };
   }
@@ -2459,6 +2546,7 @@ async function startUp() {
     $("account").textContent = s.email;
     // the address book belongs to one account; another one signed in starts it afresh
     if (s.email) await contacts.useAccount(s.email).catch(() => {});
+    await files.useAccount(s.email);
     $("app").classList.remove("hidden");
     await loadFolders();
     state.signedIn = true;
@@ -2536,6 +2624,7 @@ window.addEventListener("resize", () => applyLayout());
 wireMovePicker();
 wireContactCards();
 viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, cleanHtml, status, providerName: api.PROVIDER.name });
+files.init(filesHooks);
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;

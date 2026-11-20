@@ -224,9 +224,9 @@ scenario("folder menus offer what fits each folder", async ({ page }, expect) =>
   menus.starred = await menuOf(page, folderRow(page, "Starred")); await page.keyboard.press("Escape");
   menus.pane = await menuOf(page, page.locator(".folders-head")); await page.keyboard.press("Escape");
   menus.draggable = await page.locator("#folder-list .folder").evaluateAll(fs => fs.some(f => f.draggable));
-  expect(menus.user.join("|") === "Move...|Rename...|Create subfolder...|---|Mark all read|---|Delete", "a user folder's menu: " + menus.user.join("|"));
-  expect(menus.inbox.join("|") === "Create subfolder...|---|Mark all read" && menus.starred.join("|") === "Mark all read" && !menus.draft.length, "system folders: " + JSON.stringify([menus.inbox, menus.starred, menus.draft]));
-  expect(menus.trash.join("|") === "Mark all read|---|Empty Trash..." && menus.spam.join("|") === "Mark all read|---|Empty Spam...", "Trash and Spam: " + JSON.stringify([menus.trash, menus.spam]));
+  expect(menus.user.join("|") === "Mark all read|Show files|---|Move...|Rename...|Create subfolder...|---|Delete", "a user folder's menu: " + menus.user.join("|"));
+  expect(menus.inbox.join("|") === "Mark all read|Show files|---|Create subfolder..." && menus.starred.join("|") === "Mark all read" && menus.draft.join("|") === "Show files", "system folders: " + JSON.stringify([menus.inbox, menus.starred, menus.draft]));
+  expect(menus.trash.join("|") === "Mark all read|Show files|---|Empty Trash..." && menus.spam.join("|") === "Mark all read|Show files|---|Empty Spam...", "Trash and Spam: " + JSON.stringify([menus.trash, menus.spam]));
   expect(menus.pane.join("|") === "New folder...|---|Expand all|Collapse all", "the Folders heading: " + menus.pane.join("|"));
   expect(!menus.draggable, "folders cannot be dragged");
 });
@@ -392,7 +392,7 @@ scenario("folder actions use fresh records after a poll", async (h, expect) => {
   await answer(page, "travel");
   const err = await page.locator("#promptbox").isHidden() ? "" : await page.locator("#prompt-err").textContent();
   await page.keyboard.press("Escape");
-  expect(inbox[0] === "Create subfolder...", "Inbox keeps Create subfolder after a poll: " + JSON.stringify(inbox));
+  expect(inbox.includes("Create subfolder..."), "Inbox keeps Create subfolder after a poll: " + JSON.stringify(inbox));
   expect(!err && ops.some(o => o[0] === "rename" && o[2] === "travel"), "a case-only rename is allowed: " + JSON.stringify({ err, ops }));
 }, { settings: { pollSec: 600 } });
 

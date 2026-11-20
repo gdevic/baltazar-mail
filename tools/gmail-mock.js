@@ -142,6 +142,7 @@ function createGmail(opts = {}) {
       else if (/^rfc822msgid:/.test(t)) all = all.filter(m => m.payload.headers.some(h => h.name === "Message-ID" && h.value === t.slice(12)));
       else if (/^-?(from|to|cc):/.test(t)) { const v = t.replace(/^-?\w+:|[()"]/g, "").toLowerCase(); const f = t.replace(/^-/, "").split(":")[0]; const hit = m => m.payload.headers.some(h => h.name.toLowerCase() === f && h.value.toLowerCase().includes(v)); if (t.startsWith("-")) all = all.filter(m => !hit(m)); else addr.push(hit); }
       else if (t === "OR") continue;
+      else if (t === "has:attachment") all = all.filter(m => m.payload.parts.some(p => p.filename));
       else if (/^has:|^after:|^before:|^subject:/.test(t)) continue;
       else { const w = t.replace(/^-|^"|"$/g, "").toLowerCase(); const hit = m => m.payload.headers.some(h => h.name === "Subject" && h.value.toLowerCase().includes(w)) || (m.id.toLowerCase().includes(w)); all = all.filter(m => t.startsWith("-") ? !hit(m) : hit(m)); }
     }

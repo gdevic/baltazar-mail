@@ -450,6 +450,44 @@ const { FX } = require("./gmail-mock.js");
   await page.keyboard.press("Escape");
   await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
 
+  // Files: a folder's attachments listed from its search rows, with no message body fetched; an
+  // empty folder says its subfolder is not included, and Subfolders adds it by label name; a
+  // file's message shows on a click and the file previews through attachments.get; Esc goes back
+  // to the folder's messages
+  {
+    const f = results.files = {};
+    // the oldest file, in a message also in Inbox: its row is shown in Inbox, its file is Travel/2025's
+    gmail.addMessage({ id: "both1", labels: ["INBOX", "Label_5"], subject: "Both", from: "\"Agent\" <agent@x.com>", cc: "", html: "<p>Your seat.</p>", inline: [],
+      date: Math.floor(Date.now() / 1000) - 10 ** 7, files: [{ name: "ticket.txt", type: "text/plain", bytes: Buffer.from("seat 12A") }] });
+    const travel = page.locator("#folder-list .folder", { hasText: "Travel" }).first();
+    const lists = from => gmail.calls.slice(from).filter(c => c.path === "/messages" && c.method === "GET").map(c => c.q);
+    const c0 = gmail.calls.length;
+    await travel.click({ button: "right" });
+    await menu("files", 800);
+    f.empty = await page.locator("#f-rows .list-empty").textContent().catch(() => "");
+    f.q0 = lists(c0)[0];
+    const c1 = gmail.calls.length;
+    await page.locator("#f-subs-box").click();
+    await page.waitForSelector("#f-rows .frow", { timeout: 5000 }).catch(() => {});
+    f.q1 = lists(c1)[0]?.q;
+    f.bodies = gmail.calls.slice(c0).filter(c => /^\/messages\/[^/]+$/.test(c.path) && c.q?.fields === "id,threadId,labelIds,snippet,internalDate,sizeEstimate,payload").length;
+    f.rows = await page.locator("#f-rows .frow .fn").allTextContents();
+    f.tiles = await page.locator("#f-rows .frow .ft").allTextContents();
+    // the second file, report.pdf of v3 (the SVG test's Vector message, also in Travel/2025, comes first)
+    await page.locator("#f-rows .frow").nth(1).click();
+    await page.waitForFunction(() => document.getElementById("r-subject").textContent === "Subject v-3", null, { timeout: 8000 }).catch(() => {});
+    f.subject = await page.locator("#r-subject").textContent();
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#v-body .v-box", { timeout: 8000 }).catch(() => {});
+    f.viewer = { name: await page.locator("#v-name").textContent(), meta: await page.locator("#v-meta").textContent(), fetched: gmail.calls.slice(c1).some(c => /\/attachments\//.test(c.path)) };
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
+    await page.keyboard.press("Escape"); await page.waitForTimeout(800);
+    f.off = { pane: await page.locator("#files-pane").isVisible(), title: await page.locator("#list-title").textContent() };
+    // the choice was Travel's, and it goes with the account at sign-out below
+    f.saved = await page.evaluate(async () => Object.values((await chrome.storage.local.get("folderFiles")).folderFiles || {}).map(a => Object.keys(a)));
+  }
+
   // sign out: asked first, and Cancel changes nothing; once confirmed the token is revoked and
   // forgotten, and the sign-in page comes back
   await page.locator("#list").focus(); await page.keyboard.press(",");
@@ -464,7 +502,8 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForSelector("#signin-text:has-text('Sign in with your')", { timeout: 5000 }).catch(() => {});
   results.signOut = { panel: await page.locator("#signin-none").isVisible(), app: await page.locator("#app").isHidden(), revoked: gmail.calls.some(c => c.path === "/revoke"), token: await page.evaluate(async () => (await chrome.storage.session.get("gmToken")).gmToken ?? null),
     guide: await page.locator("#signin-guide").isHidden(), text: await page.locator("#signin-text").textContent(), button: await page.locator("#retry").textContent(), reset: await page.locator("#signin-reset").isVisible(),
-    notes: await page.locator("#signin-notes li").count(), client: await page.evaluate(async () => (await chrome.storage.local.get("gmClientId")).gmClientId) };
+    notes: await page.locator("#signin-notes li").count(), client: await page.evaluate(async () => (await chrome.storage.local.get("gmClientId")).gmClientId),
+    files: await page.evaluate(async () => (await chrome.storage.local.get("folderFiles")).folderFiles ?? null) };
   await page.locator("#signin-trouble").click();
   results.signOut.help = await page.locator("#signin-help:not(.hidden) .g-help-item").count();
 
@@ -552,6 +591,14 @@ const { FX } = require("./gmail-mock.js");
     "a remote picture is asked for once, without a referrer: " + JSON.stringify([cs.referrer, cs.page, cs.images, cs.policies]));
   expect(results.cap.own === "data:image/png" && results.cap.others === 70, "references to parts a message does not have take none of its 60 inline images: " + JSON.stringify(results.cap));
   expect(results.svg.width === 40 && results.svg.height === 20 && results.svg.blob && results.svg.density && results.svg.opened === "image/png", "an SVG attachment is shown, and opens, as a bitmap: " + JSON.stringify(results.svg));
+  const fl = results.files;
+  expect(/^No files in Travel\..*subfolder is not included/.test(fl.empty) && fl.q0?.labelIds === "Label_4" && fl.q0?.q === "has:attachment" && fl.q1 === '(label:"Travel" OR label:"Travel/2025") has:attachment' && fl.bodies === 0 &&
+    fl.rows.join() === ["logo.svg", "report.pdf", "data.csv", "src.zip", "photo.png", "cv.docx", "budget.xlsx", "deck.pptx", "ticket.txt"].map(n => n + "2025").join() && fl.tiles.join() === "IMG,PDF,CSV,ZIP,IMG,DOC,XLS,PPT,TXT",
+    "Files lists a folder's files from its search rows, each named with its subfolder, also one whose message is in Inbox too: " + JSON.stringify(fl));
+  expect(fl.subject === "Subject v-3" && fl.viewer.name === "report.pdf" && /2 of 9/.test(fl.viewer.meta) && fl.viewer.fetched && !fl.off.pane && fl.off.title === "Travel",
+    "a file's message on a click, its preview, and Esc back to the folder's messages: " + JSON.stringify([fl.subject, fl.viewer, fl.off]));
+  expect(JSON.stringify(fl.saved) === '[["Label_4"]]' && JSON.stringify(results.signOut.files) === "{}",
+    "the folder keeps its Subfolders choice until the account is signed out: " + JSON.stringify([fl.saved, results.signOut.files]));
   const sk = results.signOutDeclined;
   expect(/^Sign out of me@gmail\.com\? /.test(sk.asked) && sk.settings && sk.app && !sk.revoked, "sign out asks first, and Cancel keeps the sign-in: " + JSON.stringify(sk));
   const so = results.signOut;

@@ -81,6 +81,8 @@ export const queries = {
   starred: (unreadOnly = false) => `is:starred${unreadOnly ? " is:unread" : ""}`,
   unreadIn: folderId => opaque({ labelIds: folderId === ALL ? [] : [String(folderId)], q: "is:unread" }),
   person: email => { const e = bareAddress(email); return `(from:${e} OR to:${e} OR cc:${e})`; },
+  // mail with attachments, for a folder's Files (searchScoped raw)
+  files: () => "has:attachment",
 };
 
 // ---------- search terms ----------
@@ -516,13 +518,17 @@ const isFile = p => !!(p.filename || contentIdOf(p));
 // Content-Disposition does not decide it, since some mailers mark every attachment inline.
 const dispositionOf = (p, html) => contentIdOf(p) && html.toLowerCase().includes(`cid:${contentIdOf(p).toLowerCase()}`) ? "inline" : "attachment";
 // A row has no HTML to look in; there a Content-ID part inside multipart/related (the text's own
-// images) counts as inline.
+// images) counts as inline. Each file is named as body() names it, so a file listed from a row
+// (a folder's Files) can be fetched and shown without the message's body.
 function rowFiles(node, related = false, out = []) {
   if (!node) return out;
   if (node.parts?.length) {
     const r = related || /^multipart\/related$/i.test(node.mimeType || "");
     for (const p of node.parts) rowFiles(p, r, out);
-  } else if (isFile(node)) out.push({ disposition: related && contentIdOf(node) ? "inline" : "attachment", filename: node.filename || "" });
+  } else if (isFile(node)) {
+    const [type, subtype] = String(node.mimeType || "application/octet-stream").split("/");
+    out.push({ partId: String(node.partId ?? ""), filename: node.filename || "", size: node.body?.size || 0, type, subtype: subtype || "", disposition: related && contentIdOf(node) ? "inline" : "attachment" });
+  }
   return out;
 }
 
@@ -537,7 +543,7 @@ function folderOf(labelIds = [], listed = null) {
   return { id, name: labelName.get(id) || id };
 }
 
-const ROW_FIELDS = "id,threadId,labelIds,snippet,internalDate,sizeEstimate,payload(mimeType,filename,headers,parts(partId,mimeType,filename,headers,body/size,parts(partId,mimeType,filename,headers,body/size,parts(partId,mimeType,filename,headers,body/size))))";
+const ROW_FIELDS = "id,threadId,labelIds,snippet,internalDate,sizeEstimate,payload(partId,mimeType,filename,headers,body/size,parts(partId,mimeType,filename,headers,body/size,parts(partId,mimeType,filename,headers,body/size,parts(partId,mimeType,filename,headers,body/size))))";
 function toRow(m, listed = null) {
   const h = headerMap(m.payload?.headers);
   const labels = m.labelIds || [];

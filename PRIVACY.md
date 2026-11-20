@@ -39,6 +39,7 @@ The extension's Content Security Policy (in its `manifest.json`) makes the brows
 | Data | Where | Why |
 |---|---|---|
 | Settings: layout, theme, palettes and contrast, text and row size, the message zoom, pane sizes, expanded folders, writing font, size and HTML or plain text, when images load, whether links in messages are cleaned of tracking, whether dark mode shows messages in their original colours, the new-mail check, mark-read and undo-send intervals, and whether the tab is kept awake in the background | the extension's local storage | so your choices persist |
+| The folders whose Files list includes their subfolders' files: folder ids, under the address of the account they belong to | the extension's local storage; a folder's entry is removed when the folder is deleted here, and the account's by Sign out (Gmail) | so a folder's Files opens as you left it |
 | When you last looked at the mail tab | the extension's local storage | so a tab that opens in the background shows the new-mail dot for mail that arrived while the browser was closed |
 | When the browser put the mail tab to sleep in the last 7 days and for how long (at most 50 times kept), and that the note about a long sleep was shown | the extension's local storage | so Settings can say whether mail checks in the background were interrupted, and the note appears once |
 | The latest release number and when it was checked | the extension's local storage | to ask GitHub once a day, or an hour later after a failed check |
