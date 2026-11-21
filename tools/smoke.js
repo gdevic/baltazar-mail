@@ -152,6 +152,7 @@ const folders = [
   const cardBox = await page.locator("#card").boundingBox();
   const aboutCard = { email: await page.locator("#card .card-head span").textContent().catch(() => ""), rowFrom, nearMenu: !!cardBox && Math.abs(cardBox.x - menuBox.x) < 40 && Math.abs(cardBox.y - menuBox.y) < 40 };
   aboutCard.find = await page.locator('#card [data-c="search"]').textContent().catch(() => "");
+  aboutCard.book = await page.locator('#card [data-c="book"]').textContent().catch(() => "");
   await page.keyboard.press("Escape");
   aboutCard.closed = await page.locator("#card").isHidden();
   await page.locator("#rows .row").nth(5).locator(".fr").hover(); await page.waitForTimeout(800);
@@ -186,7 +187,7 @@ const folders = [
   expect(sentMenu.slice(-2).join() === "Find all to|,About recipient...|", "Sent rows find and describe the recipient: " + JSON.stringify(sentMenu));
   expect(/^Reply\|r,Reply all\|a,Forward\|f,---,Archive\|e,Move\.\.\.\|v,Spam\|!,Delete\|Del,---,Mark (un)?read\|u,(Star|Unstar)\|s,---,Find all from\|,About sender\.\.\.\|$/.test(ctxItems.join()),
     "context menu items, in order, with shortcuts: " + JSON.stringify(ctxItems));
-  expect(aboutCard.email === aboutCard.rowFrom && aboutCard.nearMenu && aboutCard.closed && aboutCard.noHover && aboutCard.find === "Find all from", "About sender card: " + JSON.stringify(aboutCard));
+  expect(aboutCard.email === aboutCard.rowFrom && aboutCard.nearMenu && aboutCard.closed && aboutCard.noHover && aboutCard.find === "Find all from" && aboutCard.book === "Open in Contacts", "About sender card: " + JSON.stringify(aboutCard));
   expect(moveChoices[0] === "Projects", "move picker filter");
   expect(mutations.includes("messages.move:2") && mutations.includes("messages.readFlagUpdate:1"), "mutation calls");
   await page.keyboard.press(",");

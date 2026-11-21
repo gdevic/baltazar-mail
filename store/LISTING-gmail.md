@@ -36,7 +36,7 @@ Remote code: No, I am not using remote code. All code ships in the package; the 
 Data usage, what the extension handles (recommended declarations; all of it stays on the user's computer or goes only to Google):
 
 - Personal communications: email messages and attachments, fetched from Gmail when the user opens them and shown on screen; not stored.
-- Personally identifiable information: names and email addresses from the user's own Inbox and Sent headers, kept in a local address book for suggestions while writing.
+- Personally identifiable information: names and email addresses from the user's own Inbox and Sent headers, kept in a local address book for the Contacts list and for suggestions while writing and searching.
 - Authentication information: the Google access token, kept in the browser's session storage and cleared when the browser closes, and the address of the Google account signed in, kept in local storage until Sign out.
 
 Certify: data is not sold, not used for purposes unrelated to the single purpose, and not used for creditworthiness or lending. No analytics, telemetry or advertising.

@@ -1,8 +1,8 @@
-// Golden values for the machine-sender rule and the display-name choice in ext/contacts.js. node tools/contacts-test.mjs
+// Golden values for the machine-sender rule, the display-name choice and the Contacts view's lists in ext/contacts.js. node tools/contacts-test.mjs
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows } = await import("../dist/baltazar-mail-yahoo/contacts.js");
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",
@@ -74,6 +74,23 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   check(wait({ after: now - 1, lastInput: now - 5e3, hidden: true }) === 0, "a hidden tab is a user away");
   check(wait({ after: now - 1, lastInput: now - 60e3 }) === 0 && wait({ after: 0, lastInput: now - 90e3 }) === 0, "an idle user lets it go");
   check(paceWait({ now, lastInput: now }) === 0, "no start time and no idle time: no wait");
+}
+// Contacts' three piles: hidden wins, then anyone written to or pinned is a person.
+{
+  const pile = r => pileOf({ lastSent: 0, pinned: 0, hidden: false, ...r });
+  check(pile({ lastSent: 5 }) === "people" && pile({ pinned: 9 }) === "people" && pile({}) === "others" && pile({ hidden: true, lastSent: 5 }) === "hidden",
+    "an address is a person once written to or pinned, hidden whenever it is hidden, and one of the others otherwise");
+  const pins = pinnedFirst([{ email: "b@x.com", pinned: 200 }, { email: "c@x.com", pinned: 0 }, { email: "a@x.com", pinned: 100 }]).map(r => r.email).join(" ");
+  check(pins === "a@x.com b@x.com", "the pinned ones, in the order they were pinned: " + pins);
+}
+// The Contacts filter and the two orders.
+{
+  const rows = [{ name: "Zoë Adams", email: "zoe@example.com", last: 5, lastSent: 9 }, { name: "", email: "bob@example.org", last: 9, lastSent: 0 }, { name: "ann lee", email: "al@example.com", last: 5, lastSent: 3 }];
+  check(matchOf(rows[0], "adam") && matchOf(rows[0], "zoe@") && !matchOf(rows[0], "bob") && matchOf(rows[1], "") && matchOf(rows[1], ".org"), "the filter finds its text anywhere in the name or the address");
+  const order = by => sortRows(rows, by).map(r => r.email.split("@")[0]).join(" ");
+  check(order("last") === "bob al zoe", "last: the last mail first, then by address: " + order("last"));
+  check(order("wrote") === "zoe al bob", "wrote: the one last written to first: " + order("wrote"));
+  check(rows[0].email === "zoe@example.com", "sorting leaves the given list as it was");
 }
 console.log(fail ? `${fail} FAIL` : `PASS (${machine.length} machine, ${person.length} person)`);
 process.exit(fail ? 1 : 0);

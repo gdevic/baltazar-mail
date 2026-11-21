@@ -48,7 +48,7 @@ The extension keeps you signed in while the browser holds your Google session. A
 
 ## The address book
 
-Address suggestions while you write come from your own Inbox and Sent, which the extension reads over time so that it never slows you down: it starts two minutes after you first sign in, then reads a little at a time, only once you have left the app alone for a minute or are in another tab. That takes about 40 minutes of such time all together, spread over as many sessions as it needs; suggestions fill in as it goes, and Settings says while it is still being built.
+Contacts and the address suggestions while you write come from your own Inbox and Sent, which the extension reads over time so that it never slows you down: it starts two minutes after you first sign in, then reads a little at a time, only once you have left the app alone for a minute or are in another tab. That takes about 40 minutes of such time all together, spread over as many sessions as it needs; Contacts and suggestions fill in as it goes, and Contacts says above its list while it is still being built.
 
 ## Other ways in
 

@@ -11,7 +11,7 @@
 <div id="app" class="hidden">
   <header id="top">
     <span id="brand">Baltazar Mail</span>
-    <span id="search-box"><button id="search-scope" class="hidden" tabindex="-1"></button><input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false"><button id="search-help-btn" tabindex="-1" title="How to search">?</button></span>
+    <span id="search-box"><button id="search-scope" class="hidden" tabindex="-1"></button><input id="search" type="search" placeholder="Search" autocomplete="off" spellcheck="false" aria-controls="search-suggest"><button id="search-help-btn" tabindex="-1" title="How to search">?</button></span>
     <button id="compose-btn" title="New message (c)">New message</button>
     <span id="account"></span>
     <button id="gear" title="Settings"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="2.8" stroke-dasharray="2.1 2.3"/><circle cx="8" cy="8" r="4.3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg></button>
@@ -36,7 +36,9 @@
       <p>Only capital <b>AND</b>, <b>OR</b>, <b>NOT</b> are operators. Words are matched in the text, subject and addresses. Searches that combine words with AND or NOT check up to the 500 newest matches of each word; the status line says when there were more.</p>
     </div>
   </div>
-  <nav id="folders" tabindex="-1"><input id="folder-filter" placeholder="filter folders" autocomplete="off"><div id="folder-list"></div></nav>
+  <div id="search-suggest" class="hidden" role="listbox" aria-label="People"></div>
+  <nav id="folders" tabindex="-1"><input id="folder-filter" type="search" placeholder="filter folders" autocomplete="off"><div id="folder-list"></div>
+    <div id="folders-foot"><div id="contacts-link" class="side-link" role="button" title="Contacts: everyone you exchange mail with (g c)"><span class="tw"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.4" r="2.7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.6 14c.5-2.9 2.6-4.4 5.4-4.4s4.9 1.5 5.4 4.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="nm">Contacts</span></div></div></nav>
   <div id="split1" class="split"></div>
   <section id="list" tabindex="0" role="group" aria-label="Message list">
     <div id="list-head"><span id="list-title"></span><span id="list-count"></span></div>
@@ -60,6 +62,17 @@
       <div id="f-rows" role="listbox"></div>
       <div id="f-more" class="hidden"><button id="f-more-btn">Load more</button></div>
     </div>
+    <div id="people-pane">
+      <div id="p-head"><span id="p-title">Contacts</span><span id="p-count"></span></div>
+      <div id="p-note" class="hidden" role="status"></div>
+      <div id="p-tools">
+        <input id="p-filter" type="search" placeholder="Filter by name or address" autocomplete="off" spellcheck="false" aria-controls="p-rows" title="Type to filter; ↓ and ↑ move, Enter shows all mail with the person, Esc clears">
+        <span class="seg" id="p-show"><button data-pile="people" class="on">People <i></i></button><button data-pile="others">Others <i></i></button><button data-pile="hidden">Hidden <i></i></button></span>
+        <span id="p-rule"></span>
+      </div>
+      <div id="p-rows" role="listbox" aria-multiselectable="true" aria-label="Contacts"></div>
+      <div id="p-more" class="hidden"><button id="p-more-btn">Show more</button></div>
+    </div>
   </section>
   <div id="split2" class="split"></div>
   <section id="reader">
@@ -75,6 +88,7 @@
     </div>
     <iframe id="r-body" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" class="hidden"></iframe>
     <div id="r-attach" class="hidden"></div>
+    <div id="person"></div>
   </section>
   <section id="compose" class="hidden">
     <div id="c-head">
@@ -188,19 +202,8 @@
     <label title="A browser may put a tab left in the background to sleep, and a sleeping tab checks no mail. Kept awake, this tab goes on checking, at the cost of a little power."><input type="checkbox" id="awake"> Keep this tab awake in the background, so mail is still checked</label>
     <div id="awake-row" class="set-row"><span id="awake-status" role="status"></span><button id="awake-how" type="button" class="link" aria-expanded="false" aria-controls="awake-steps">Browser's own setting</button></div>
     <div id="awake-steps" class="hidden"></div>
-    <b>Address book</b>
-    <div class="set-row"><span id="ab-summary">Learned from your Inbox and Sent headers.</span><button id="ab-open">Manage...</button></div>
     <p id="update-note" class="hidden"></p>
     <p><button id="settings-close">Close</button></p>
-   </div>
-   <div id="settings-ab" class="hidden">
-    <div class="ab-head"><button id="ab-back" title="Back to Settings (Esc)">‹ Settings</button><b>Address book</b><span></span></div>
-    <div class="ab-tools">
-      <input id="ab-filter" type="search" placeholder="Filter by name or address" autocomplete="off" spellcheck="false">
-      <span class="ab-seg" role="tablist"><button data-tab="all" class="on">All <i id="ab-n-all"></i></button><button data-tab="hidden">Hidden <i id="ab-n-hidden"></i></button></span>
-    </div>
-    <div id="ab-list"></div>
-    <div class="ab-foot"><span id="ab-status"></span><button id="ab-bulk" class="hidden"></button></div>
    </div>
   </div>
 </div>
@@ -245,12 +248,14 @@
       <tr><td>r / a / f</td><td>reply / reply all / forward the open message</td></tr>
       <tr><td>Ctrl+Enter</td><td>send (held for the undo-send delay; z cancels)</td></tr>
       <tr><td>Ctrl+S</td><td>save the message being written as a draft (it is also saved by itself)</td></tr>
-      <tr><td>Esc</td><td>close the composer (its draft is kept), the viewer, a dialog, menu or card; clear the search, then the selection; leave a folder's attachments for its messages</td></tr>
+      <tr><td>Esc</td><td>close the composer (its draft is kept), the viewer, a dialog, menu or card; clear the search, then the selection; leave a folder's attachments for its messages, and Contacts for where it was opened</td></tr>
       <tr><td>Enter, Tab, comma</td><td>in To / Cc / Bcc: complete the address (↓ / ↑ pick a suggestion; Backspace in an empty field removes the last one)</td></tr>
       <tr><td>Del, Backspace</td><td>in the message being written: remove the selected inline picture</td></tr>
-      <tr><td>/</td><td>search (Esc clears)</td></tr>
+      <tr><td>/</td><td>search (Esc clears). A name typed there offers the people it could mean: ↓ / ↑ and Enter, or Tab for the first, pick one; Enter alone searches for what was typed</td></tr>
       <tr><td>g i / g s / g t / g d / g b / g a</td><td>Inbox / Sent / Trash / Drafts / Spam / Archive</td></tr>
       <tr><td>g *</td><td>Starred (all folders)</td></tr>
+      <tr><td>g c</td><td>Contacts (type to filter; ↓ / ↑ move, Enter shows all mail with the person)</td></tr>
+      <tr><td>c / s / h / x</td><td>in Contacts, with the list focused: write to the selected people / pin or unpin them / hide or unhide them / select or deselect (Ctrl-click, Shift-click; Ctrl+A selects everyone listed). z undoes a hide or a pin</td></tr>
       <tr><td>/ then Enter</td><td>Search this folder and its subfolders; hits in other folders follow below</td></tr>
       <tr><td>/ then Shift+Enter</td><td>Search all mail</td></tr>
       <tr><td colspan="2" class="help-sub">Search syntax: click <b>?</b> at the right end of the search box.</td></tr>
@@ -267,7 +272,7 @@
       <tr><td>R</td><td>refresh current list</td></tr>
       <tr><td>n</td><td>load next 100 messages</td></tr>
       <tr><td>i</td><td>load remote images in open message</td></tr>
-      <tr><td>+ / -, 0</td><td>zoom the message pane in / out, back to normal; also Ctrl+wheel over it. In the composer: Ctrl+= / Ctrl+- / Ctrl+0</td></tr>
+      <tr><td>+ / -, 0</td><td>zoom the message pane in / out, back to normal; also Ctrl+wheel over it. In the composer: Ctrl+= / Ctrl+- / Ctrl+0. In Contacts they zoom the person's recent messages instead, which keep a size of their own</td></tr>
       <tr><td>← / →</td><td>in the attachment viewer: previous / next attachment (+ / - / 0 zoom it, Esc closes it)</td></tr>
       <tr><td>p</td><td>print the open message, or all selected messages as one document</td></tr>
       <tr><td>t</td><td>toggle light / dark</td></tr>
@@ -276,6 +281,7 @@
     </table>
     <p>Actions apply to the selected messages, or to the highlighted one if none are selected. Right-click a message for the same actions.</p>
     <p>Right-click a folder and choose Show attachments to list every attachment of its mail in place of its messages; click an attachment to see its message, or its type badge to open the attachment as well, and press Esc to go back to the messages. Tick Subfolders to include the attachments of its subfolders; the folder keeps that choice on this computer.</p>
+    <p>Contacts, at the bottom of the folder list, lists every address in your Inbox and Sent mail in place of the messages, each under one of three tabs: People, whom you have written to or pinned; Others, whom you have not written to; and Hidden, the addresses that are never suggested, where automated senders start. Each is listed latest first, People after the ones you pinned. Select a person to write to them, see all mail with them, pin them to the top of People, or hide them; the pin and the eye on a row do the same for that row. A pinned address cannot be hidden, nor a hidden one pinned. Contacts stays as you left it while you look at mail and come back. It mirrors the mail you keep: an address is forgotten once no mail with it is left outside Spam and Trash, unless you pinned or hid it. Select several to write to all of them at once. A person's mail opened from Contacts goes back to Contacts with Esc.</p>
   </div>
 </div>
 <script src="vendor/purify.min.js"></script>

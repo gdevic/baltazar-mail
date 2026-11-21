@@ -1,9 +1,14 @@
 import * as api from "./api.js";
 import { noBidi } from "./text.js";
 
-// Address book built from the user's own Inbox and Sent headers, kept in IndexedDB.
-// One entry per lowercase address: the display names seen, when mail last went either way, and
-// when the user last wrote to it. Nothing is counted; recency is all the ranking needs.
+// Address book built from the user's own Inbox and Sent headers, kept in IndexedDB. It feeds the
+// address suggestions (while writing, and in the search box) and the Contacts view (people.js).
+// One entry per lowercase address: the display names seen, when mail last went either way, when
+// the user last wrote to it, and the user's own choices about it (hidden, pinned).
+// Nothing is counted; recency is all the ranking needs.
+// The book mirrors the mail that is kept: an entry with no mail left outside Spam and Trash is
+// forgotten when that is found out (forget), unless the user pinned it or hid it; a hidden sender
+// that writes again is then still hidden.
 
 const DB = "baltazar-mail", STORE = "contacts", META = "meta";
 let db = null;
@@ -271,25 +276,85 @@ function score(e, now) {
   return fade(e.last) + (e.lastSent ? 0.5 + 2 * fade(e.lastSent) : 0) - (e.hidden === undefined && isMachine(e.email) ? 1e6 : 0);
 }
 
-// Addresses the user never wants suggested (newsletters and the like). Still recorded, never shown.
-export async function hide(email, hidden = true) { await hideMany([email], hidden); }
+// An entry as the Contacts view lists it: pinned is when the user pinned it (0: not pinned).
+const row = e => ({ name: e.name || "", email: e.email, last: e.last || 0, lastSent: e.lastSent || 0, hidden: isHidden(e), pinned: e.pinned || 0 });
 
-// Every entry, for the address book manager.
+// Every entry, for the Contacts view.
 export async function all() {
   await loadAll();
-  return [...cache.values()].map(e => ({ name: e.name, email: e.email, last: e.last || 0, hidden: isHidden(e) }));
+  return [...cache.values()].map(row);
 }
 
-export async function hideMany(emails, hidden = true) {
+// Contacts lists every entry in one of three piles: "hidden" (never suggested: what the user hid,
+// and machine senders never written to), "people" (written to, or pinned) and "others" (the rest:
+// addresses that wrote, or were named in mail, and were never written to).
+export const pileOf = r => r.hidden ? "hidden" : (r.pinned || r.lastSent) ? "people" : "others";
+
+// The Contacts filter: q (lowercase) anywhere in the address or the name.
+export const matchOf = (r, q) => !q || r.email.includes(q) || (r.name || "").toLowerCase().includes(q);
+
+// Latest first: by "wrote", when the user last wrote to it; by "last", the last mail either way.
+export function sortRows(rows, by = "last") {
+  const when = by === "wrote" ? r => r.lastSent : r => r.last;
+  return [...rows].sort((a, b) => when(b) - when(a) || a.email.localeCompare(b.email));
+}
+// Pinned entries in the order they were pinned.
+export const pinnedFirst = rows => rows.filter(r => r.pinned).sort((a, b) => a.pinned - b.pinned || a.email.localeCompare(b.email));
+
+// The user's choice about entries: shown at once from the cache, then stored.
+async function setFlags(emails, change) {
   const keys = emails.map(x => String(x).toLowerCase());
   const c = await loadAll();
-  for (const k of keys) { const e = c.get(k); if (e) e.hidden = hidden; }   // shown at once; stored below
-  await updateRows(keys, stored => stored && Object.assign(stored, { hidden }));
+  for (const k of keys) { const e = c.get(k); if (e) change(e); }
+  await updateRows(keys, stored => { if (stored) change(stored); return stored; });
 }
 
-export async function hiddenList() {
+// Hidden addresses are never suggested (newsletters and the like), and Contacts lists them apart;
+// they are still recorded. Pinned entries head the people in Contacts; one already pinned keeps
+// its place. The two exclude each other: a pinned entry cannot be hidden, nor a hidden one pinned,
+// until it is unpinned or unhidden.
+export async function hide(email, hidden = true) { await hideMany([email], hidden); }
+export async function hideMany(emails, hidden = true) { await setFlags(emails, e => { if (!hidden || !e.pinned) e.hidden = hidden; }); }
+export async function pinMany(emails, pinned = true) {
+  const at = Math.floor(Date.now() / 1000);
+  await setFlags(emails, e => { if (!pinned) delete e.pinned; else if (!isHidden(e)) e.pinned ||= at; });
+}
+// The user's choices about entries as they are stored (hidden: true, false, or undefined while
+// the user has not said; pinned: when, or undefined), and the same put back (undo).
+export async function choices(emails) {
+  const c = await loadAll();
+  return emails.map(x => c.get(String(x).toLowerCase())).filter(Boolean).map(e => ({ email: e.email, hidden: e.hidden, pinned: e.pinned }));
+}
+export async function restoreChoices(list) {
+  const was = new Map(list.map(x => [x.email, x]));
+  await setFlags([...was.keys()], e => { for (const k of ["hidden", "pinned"]) if (was.get(e.email)[k] === undefined) delete e[k]; else e[k] = was.get(e.email)[k]; });
+}
+
+// Entries with no mail left are forgotten: all of emails but the ones the user pinned or hid.
+// Gives the rows taken out, as they were stored.
+export function forget(emails) {
+  const keys = emails.map(x => String(x).toLowerCase());
+  return openDb().then(d => new Promise((ok, no) => {
+    const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE), out = [];
+    for (const k of keys) {
+      const r = s.get(k);
+      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && e.hidden !== true) { s.delete(k); out.push(e); } };
+    }
+    t.oncomplete = () => { for (const row of out) cache?.delete(row.email); changed(); ok(out); };
+    t.onerror = () => no(t.error);
+  }));
+}
+// Rows forgotten, stored again as they were (the forgetting was undone); an address learned again
+// meanwhile keeps what it has learned.
+export const putBack = rows => updateRows(rows.map(r => r.email), (stored, email) => stored ? null : rows.find(r => r.email === email));
+
+// Mail put back where the book looks (out of Trash or Spam): its addresses are learned as a scan
+// would have learned them.
+export async function learn(messages) {
   await loadAll();
-  return [...cache.values()].filter(isHidden).sort((a, b) => a.email.localeCompare(b.email)).map(e => ({ name: e.name, email: e.email }));
+  const pending = new Map();
+  for (const m of messages) await record(m, own.has((m.headers?.from?.[0]?.email || "").toLowerCase()) ? "sent" : "received", pending);
+  await flush(pending);
 }
 
 export async function suggest(query, limit = 8, exclude = new Set()) {
@@ -316,5 +381,5 @@ export async function count() { await loadAll(); return cache.size; }
 export async function lookup(email) {
   await loadAll();
   const e = cache.get(String(email || "").toLowerCase());
-  return e ? { name: e.name, email: e.email, last: e.last, lastSent: e.lastSent, hidden: isHidden(e) } : null;
+  return e ? row(e) : null;
 }

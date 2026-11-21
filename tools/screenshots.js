@@ -1,6 +1,6 @@
 // README screenshots: the real extension in Chromium against a mocked Yahoo backend filled with
 // invented mail, so no real names, addresses or messages appear. node tools/screenshots.js
-// Writes docs/screenshots/{light,viewer,dark,settings}.png, and the Gmail edition's sign-in page
+// Writes docs/screenshots/{light,viewer,dark,contacts,settings}.png, and the Gmail edition's sign-in page
 // for docs/gmail-sign-in.md as docs/screenshots/signin-*.png. With --store, writes the Yahoo scenes
 // at the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo and the 440x280 and 1400x560
 // promotional tiles, to store/.
@@ -231,6 +231,9 @@ async function renderPhotos(ctx) {
 // ---------- mocked backend ----------
 function listFor(q) {
   if (q.includes("is:flagged")) return all.filter(m => m.flags.flagged && m.folder.id !== "2");
+  // all mail with one person, newest first (a contact's page)
+  const who = (q.match(/from:\("([^"]+)"\) OR to:/) || [])[1];
+  if (who) return all.filter(m => [...m.headers.from, ...m.headers.to].some(a => a.email === who)).sort((a, b) => b.headers.date - a.headers.date);
   const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1";
   return all.filter(m => m.folder.id === folder);
 }
@@ -336,11 +339,22 @@ function listFor(q) {
   await page.mouse.move(W - 5, 60);
   await page.screenshot({ path: path.join(OUT, "dark.png") });
 
-  // 4. Settings, in the light theme, with the default intervals and the app hidden behind it
+  // 4. Contacts, in the light theme: the people written to, and one person's page
+  if (!STORE) {
+    await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });
+    await page.locator("#contacts-link").click();
+    await page.waitForSelector("#p-rows .prow");
+    await page.locator("#p-rows .prow", { hasText: "Maya Chen" }).first().click();
+    await page.waitForSelector("#person .p-msg");
+    await page.mouse.move(W - 5, H - 5);
+    await page.screenshot({ path: path.join(OUT, "contacts.png") });
+  }
+
+  // 5. Settings, in the light theme, with the default intervals and the app hidden behind it
   await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, pollSec: 20, markReadSec: 2 });
   await page.locator("#list").focus(); await page.keyboard.press(",");
   if (!STORE) await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
-  await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent));
+  await page.waitForSelector("#settings:not(.hidden)");
   await page.waitForTimeout(300);
   // At the store's 800 px the panel scrolls; show it from the first section heading from which the
   // rest, down to the buttons, fits the window, as a slightly taller window would, so no section

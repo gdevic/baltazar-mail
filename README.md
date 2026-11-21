@@ -15,6 +15,7 @@ Everything a mail client does, and:
 
 - **Attachments open in place:** PDF, Office documents, spreadsheets, pictures and ZIP listings, without downloading.
 - **A folder's attachments in one list:** right-click a folder › Show attachments lists every attachment in its mail, with its subfolders' if you like, such as the tickets and itineraries of a trip.
+- **Contacts in one list:** everyone you exchange mail with, at the bottom of the folder list. Filter, pick one or several people, and write to them, see all mail with them, or pin the ones you write to most. It keeps itself tidy: an address goes once no mail with it is left.
 - **Sixteen light and dark palettes**, with a dark mode that darkens the messages to match.
 - **Undo for everything:** several levels of undo and redo for mailbox actions, and undo-send.
 - **Tracking removed from links**, when you switch it on.
@@ -27,7 +28,9 @@ Everything a mail client does, and:
 
 ![Dark theme with the message list above the preview and a darkened message](docs/screenshots/dark.png)
 
-![Settings: layout, theme with palettes and contrast, size, writing, images, links, behaviour and the address book](docs/screenshots/settings.png)
+![Contacts: the people you have written to, and one person's page with what can be done and the recent mail with them](docs/screenshots/contacts.png)
+
+![Settings: layout, theme with palettes and contrast, size, writing, images, links, and behaviour](docs/screenshots/settings.png)
 
 All names, addresses and messages in these screenshots are invented.
 

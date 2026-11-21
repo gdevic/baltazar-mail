@@ -4,6 +4,7 @@ import * as compose from "./compose.js";
 import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
 import * as files from "./files.js";
+import * as people from "./people.js";
 import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
@@ -21,7 +22,7 @@ const PAGE = 100;
 const DRAG_TYPE = "application/x-baltazar-mail-ids";
 
 // ---------- settings ----------
-const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, awake: true, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, scaledImages: "full", images: "safe", links: "asis", readerOriginal: false, messageZoom: 100, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
+const DEFAULTS = { layout: "vertical", theme: "light", darkTheme: "dark", lightTheme: "light", contrast: 0, pollSec: 20, awake: true, markReadSec: 2, undoSendSec: 10, composeHtml: true, composeFont: compose.DEFAULT_FONT, composeSize: 13, scaledImages: "full", images: "safe", links: "asis", readerOriginal: false, messageZoom: 100, contactZoom: 100, textPct: 100, rowPct: 100, folderW: 230, listW: 460, listH: 40, expanded: [] };
 let settings = { ...DEFAULTS };
 
 async function loadSettings() {
@@ -66,6 +67,9 @@ function applyLayout() {
   const fs = 13 * settings.textPct / 100;
   r.setProperty("--fs", fs + "px");
   r.setProperty("--row-h", Math.round(fs * 1.7 * settings.rowPct / 100) + "px");
+  // The recent messages on a contact's page have a zoom of their own on top of the text size
+  // (zoomContact); the page's heading keeps the size of the rest of the interface
+  $("person").style.setProperty("--p-fu", fs * settings.contactZoom / 100 / 13 + "px");
 }
 
 function syncSettingsForm() {
@@ -298,6 +302,7 @@ function renderFolders() {
   for (const f of user) if (!nested.has(f)) addUser(f);
   list.innerHTML = "";
   list.appendChild(frag);
+  $("contacts-link").classList.toggle("active", state.view.kind === "contacts");
   updateFolderCounts();
   const items = list.querySelectorAll(".folder");
   if (state.kbFolder >= 0 && items[state.kbFolder]) items[state.kbFolder].classList.add("kb");
@@ -665,6 +670,7 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
   // a folder's attachments keep a list of their own: what would refresh the message list
   // refreshes that one
   if (v.kind === "files") { if (mode === "refresh") await files.reload(told); return; }
+  if (v.kind === "contacts") { if (mode === "refresh") await people.reload(); return; }
   const token = ++state.listToken;
   const prevView = state.prevView;
   const cursorId = state.messages[state.selected]?.id ?? null;
@@ -712,6 +718,7 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
     if (mode === "fresh" && prevView) {
       state.view = prevView; Object.assign(state, shown);
       if (prevView.kind === "files") showFilesPane(true);
+      if (prevView.kind === "contacts") showPeoplePane(true);
       renderFolders(); renderList();
     }
     handleError(e, "list");
@@ -882,8 +889,9 @@ function syncAria() {
     const m = state.messages[Number(el.dataset.i)];
     el.setAttribute("aria-selected", String(state.marked.size ? state.marked.has(m?.id) : Number(el.dataset.i) === state.selected));
   });
-  // in a folder's attachments the list's active descendant is the selected attachment (files.js)
-  if (state.view.kind === "files") {}
+  // in a folder's attachments the list's active descendant is the selected attachment (files.js),
+  // and in Contacts the person under the cursor (people.js)
+  if (state.view.kind === "files" || state.view.kind === "contacts") {}
   else if (state.selected >= 0 && rowEl(state.selected)) $("list").setAttribute("aria-activedescendant", `row-${state.selected}`);
   else $("list").removeAttribute("aria-activedescendant");
   rows.setAttribute("aria-label", $("list-title").textContent || "Messages");
@@ -1072,7 +1080,7 @@ async function openCard(anchor, email, name) {
   const me = email.toLowerCase() === $("account").textContent.toLowerCase();
   const when = s => s ? new Date(s * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "never";
   card.innerHTML = `<div class="card-head"><b>${esc(c?.name || name || email)}</b><span>${esc(email)}</span></div>
-    <div class="card-stats">${me ? "This is you." : c ? `Last exchange ${when(c.last)}` : "Not in your address book yet."}</div>
+    <div class="card-stats">${me ? "This is you." : c ? `Last exchange ${when(c.last)} · <a href="#" data-c="book" title="Show this address in Contacts">Open in Contacts</a>` : "Not in Contacts yet."}</div>
     <div class="card-actions"><button data-c="write">Write</button><button data-c="search">Find all from</button><button data-c="copy">Copy address</button></div>
     <div class="card-recent"><i>loading recent messages...</i></div>`;
   const r = anchor.getBoundingClientRect();
@@ -1081,7 +1089,8 @@ async function openCard(anchor, email, name) {
   card.style.top = (r.bottom + card.offsetHeight + 6 > innerHeight ? Math.max(4, r.top - card.offsetHeight - 4) : r.bottom + 4) + "px";
   card.onclick = async e => {
     const b = e.target.closest("[data-c]"); if (!b) return;
-    if (b.dataset.c === "write") { closeCard(); await startCompose("new"); compose.addRecipient({ name: c?.name || name || "", email }); }
+    if (b.dataset.c === "write") { closeCard(); writeTo([{ name: c?.name || name || "", email }]); }
+    else if (b.dataset.c === "book") { e.preventDefault(); closeCard(); openContacts({ select: email }); }
     else if (b.dataset.c === "search") { closeCard(); findFrom(email); }
     else if (b.dataset.c === "copy") { await navigator.clipboard.writeText(email).catch(() => {}); b.textContent = "Copied"; }
   };
@@ -1092,7 +1101,7 @@ async function openCard(anchor, email, name) {
   const recent = card.querySelector(".card-recent");
   recent.innerHTML = res.messages.length ? res.messages.map(m => {
     const out = (m.headers.from?.[0]?.email || "").toLowerCase() !== email.toLowerCase();
-    return `<div data-id="${esc(m.id)}" title="${esc(plainSubject(m.headers.subject))}"><span class="dir">${out ? "→" : "←"}</span><span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
+    return `<div data-id="${esc(m.id)}" title="${esc(plainSubject(m.headers.subject))}">${people.dirIcon(out)}<span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
   }).join("") : "<i>No messages found.</i>";
   recent.onclick = e => {
     const row = e.target.closest("[data-id]"), m = row && res.messages.find(x => x.id === row.dataset.id);
@@ -1123,17 +1132,28 @@ async function goToMessage(m, email) {
 
 // Only address characters reach the search box: quotes, parentheses and backslashes would end the term.
 const bareAddress = email => String(email).replace(/["()\\\s]/g, "");
-// All mail from (or to) one address, in every folder.
-const findFrom = (email, field = "from") => doSearch(`${field}:${bareAddress(email)}`, true);
-async function searchPerson(email) {
+// All mail from (or to) an address, or any of several, in every folder.
+const findFrom = (emails, field = "from") => doSearch([].concat(emails).map(e => `${field}:${bareAddress(e)}`).join(" OR "), true);
+// All mail with a person, either way. openId: a message to select and open there. A search begun
+// in Contacts, or in a search that was, goes back to Contacts (Esc).
+async function searchPerson(email, openId = null) {
+  const back = [state.view, state.view.back].find(v => v?.kind === "contacts");
   leaveView();
   state.prevView = state.view;
-  state.view = { kind: "search", folderId: null, term: email, raw: api.queries.person(email) };
+  state.view = { kind: "search", folderId: null, term: email, raw: api.queries.person(email), back };
   $("search").value = email;
   updateScopeChip();
   renderFolders();
+  const v = state.view;
   await loadList("fresh");
   $("list").focus();
+  const i = openId && state.view === v ? state.messages.findIndex(m => m.id === openId) : -1;
+  if (i >= 0) { select(i); open(i); }
+}
+// A new message to these people ({ name, email }).
+async function writeTo(list) {
+  await startCompose("new");
+  for (const a of list) compose.addRecipient(a);
 }
 
 // look: "light" (as written), "dark" (declared colours darkened, see darken.js) or "dim" (as
@@ -1189,10 +1209,19 @@ function zoomMessage(dir) {
   else { const html = $("r-body").contentDocument?.documentElement; if (html) html.style.zoom = messageScale(); }
   showZoomBadge(writing ? $("c-body") : $("r-body"));
 }
+// The recent messages on a contact's page in Contacts are zoomed the same way (Ctrl+wheel over
+// them, or + - 0 there), as a choice of its own kept with the settings. The name, address and
+// buttons above them stay as they are, as a message's heading does.
+function zoomContact(dir) {
+  settings.contactZoom = dir === 0 ? 100 : Math.min(300, Math.max(50, settings.contactZoom + dir * 10));
+  saveSettings();
+  applyLayout();
+  showZoomBadge($("person").querySelector(".p-recent") || $("person"), settings.contactZoom);
+}
 let zoomBadgeTimer;
-function showZoomBadge(pane) {
+function showZoomBadge(pane, pct = settings.messageZoom) {
   const b = $("zoom-badge"), r = pane.getBoundingClientRect();
-  b.textContent = `${settings.messageZoom}%`;
+  b.textContent = `${pct}%`;
   b.style.left = `${r.left + r.width / 2}px`; b.style.top = `${r.top + r.height / 2}px`;
   b.classList.add("show");
   clearTimeout(zoomBadgeTimer);
@@ -1694,19 +1723,68 @@ async function doMove(ids, folderId, verb = "move") {
       undelete: [`restore ${n} to ${where}`, `restored ${n} to ${where}`] }[verb];
     status(words[1], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
+    // Contacts mirrors the mail outside Trash and Spam: these messages have left it, or come back
+    // to it, and an undo turns that round (see mailLeft)
+    const moved = msgs.filter(m => okSet.has(m.id));
+    const [went, came] = outOfMail(dest) ? [mailLeft, mailBack] : done.some(o => outOfMail(state.byId.get(o.from))) ? [mailBack, mailLeft] : [() => {}, () => {}];
+    went(moved);
     // A provider that can take back exactly what its move changed says how (undo); otherwise each
     // message moves back to the folder it came from. A redo's own answer undoes the redo.
     let last = r;
     pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null, count: done.length,
       undo: async () => {
-        if (last.undo) return last.undo();
         const out = [];
-        for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) out.push(await api.move(g, from));
-        if (known.length < done.length) notify(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`, { info: true });
-        return out;
+        if (last.undo) out.push(await last.undo());
+        else {
+          for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) out.push(await api.move(g, from));
+          if (known.length < done.length) notify(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`, { info: true });
+        }
+        came(moved);
+        return out.flat();
       },
-      redo: async () => (last = await api.move(done.map(o => o.id), dest.id, { from })) });
+      redo: async () => { last = await api.move(done.map(o => o.id), dest.id, { from }); went(moved); return last; } });
   } catch (e) { handleError(e, verb); }
+}
+
+// ---------- contacts mirror the mail that is kept ----------
+// Mail in Trash and Spam is not mail with a person (a person's search leaves both out). When
+// messages go there, each address in them that the book knows is looked up, a little after and one
+// at a time, and forgotten if no mail with it is left (the ones the user pinned or hid stay:
+// contacts.forget). When messages come back out, their addresses are learned again as a scan would
+// have learned them. Undo and redo of such a move do the same, so a delete undone leaves the book
+// as it was.
+const outOfMail = f => ["TRASH", "BULK"].includes(folderType(f));
+const CHECK_MAX = 200, CHECK_GAP = 300, CHECK_AFTER = 1500;
+const toCheck = new Set();
+let checking = false;
+const pause = ms => new Promise(ok => setTimeout(ok, ms));
+const addressesOf = msgs => [...new Set(msgs.flatMap(m => [...(m.headers?.from || []), ...(m.headers?.to || []), ...(m.headers?.cc || [])]).map(a => (a.email || "").toLowerCase()).filter(Boolean))];
+function mailLeft(msgs) {
+  for (const e of addressesOf(msgs)) if (toCheck.size < CHECK_MAX) toCheck.add(e);
+  if (!checking && toCheck.size) checkContacts();
+}
+async function mailBack(msgs) {
+  for (const e of addressesOf(msgs)) toCheck.delete(e);
+  try { await contacts.learn(msgs); } catch (e) { console.error("contacts", e); }
+  if (people.isShown()) people.reload();
+}
+async function checkContacts() {
+  checking = true;
+  let forgot = 0;
+  try {
+    await pause(CHECK_AFTER);               // the move has reached the provider's search by then
+    while (toCheck.size) {
+      const email = toCheck.values().next().value;
+      toCheck.delete(email);
+      if (!(await contacts.lookup(email))) continue;        // not in the book: nothing to forget
+      let left;
+      try { left = (await api.search(api.queries.person(email), null, 1, 0, true)).messages?.length > 0; } catch { continue; }   // not known: it stays
+      if (!left && !toCheck.has(email)) forgot += (await contacts.forget([email])).length;
+      await pause(CHECK_GAP);
+    }
+  } catch (e) { console.error("contacts", e); }
+  finally { checking = false; }
+  if (forgot && people.isShown()) people.reload();
 }
 
 // Spam is a move to the spam folder (the provider's filter learns from the move); Not spam moves to Inbox.
@@ -1868,6 +1946,7 @@ const viewMemory = new Map();
 const viewKey = v => v.kind === "folder" ? `f:${v.folderId}` : v.starred ? "starred" : null;
 function leaveView() {
   if (state.view.kind === "files") showFilesPane(false);   // Files remembers its own selection
+  if (state.view.kind === "contacts") showPeoplePane(false);   // and so does Contacts
   const key = viewKey(state.view); if (!key) return;
   viewMemory.set(key, { cursorId: state.messages[state.selected]?.id ?? null, marked: [...state.marked],
     openId: state.openId, scrollTop: $("rows").scrollTop });
@@ -1966,6 +2045,63 @@ const filesHooks = {
   fail: e => handleError(e, "files"),
 };
 
+// Contacts (the sidebar's Contacts row, g c): the address book in the message list's place and the
+// selected person's page in the reader's (people.js), until another view is opened. The message
+// list is emptied, so message actions find nothing to act on. Esc leaves for the view it was
+// opened from (back); a search begun here comes back here. However it is left, it is shown again
+// as it was.
+function showPeoplePane(on) {
+  if (!on) people.hide();          // while its list is still laid out, so it can note its place
+  $("app").classList.toggle("contacts-view", on);
+  if (on) people.resume();
+}
+// opts: { select: an address to show, filter: text for the filter box }
+async function openContacts(opts = {}) {
+  const cur = state.view;
+  if (cur.kind === "contacts") { await people.show(opts); people.focusFilter(); return; }
+  let back = cur.kind === "search" && !cur.starred ? cur.back : cur;
+  if (back?.kind === "contacts") back = back.back;
+  leaveView();
+  state.prevView = cur;
+  state.view = { kind: "contacts", folderId: null, term: "", back };
+  ++state.listToken;        // a message list still loading is not wanted now
+  Object.assign(state, { messages: [], selected: -1, anchor: -1, more: false, elsewhere: [], loading: false });
+  state.marked.clear();
+  $("search").value = "";
+  scopeOff = false; updateScopeChip();
+  renderFolders(); renderList(); clearReader();
+  $("app").classList.add("contacts-view");
+  const v = state.view;
+  await people.show(opts);
+  if (state.view === v && !compose.isOpen()) { if (opts.filter !== undefined) people.focusFilter(); else people.focus(); }
+}
+// The view a search or Contacts was opened from, shown again. A folder's attachments give way to
+// the folder's messages.
+function openBack(b) {
+  if (b?.kind === "contacts") openContacts();
+  else if (b?.starred) openStarred();
+  else openFolder((b?.kind === "files" ? b.of : b?.folderId) || inboxId());
+}
+const peopleHooks = {
+  write: list => writeTo(list),
+  mailWith: (email, openId) => searchPerson(email, openId),
+  find: (emails, field) => findFrom(emails, field),
+  recent: (email, count) => api.search(api.queries.person(email), null, count, 0, true),
+  subject: m => plainSubject(m.headers?.subject),
+  date: fmtDate,
+  menu: openMenu,
+  status,
+  leave: () => openBack(state.view.back),
+  undoable: pushUndo,
+  note: contactsNote,
+};
+// What Contacts says above its list while the book's first build is under way; "" once it is built.
+// A provider that paces the build (api.LIMITS.scanAfter) takes a long while over it.
+async function contactsNote() {
+  if (await contacts.isBuilt()) return "";
+  return `Contacts is still being built from your Inbox and Sent mail${api.LIMITS.scanAfter ? ", a little at a time while you are not using the app" : ""}. The addresses learned so far are listed and can be used; come back later for the complete list.`;
+}
+
 const STARRED = "starred";
 const STARRED_Q = api.queries.starred();
 const STARRED_MAX = 500;
@@ -2042,6 +2178,8 @@ async function doSearch(term, everywhere = false) {
 }
 
 // ---------- keyboard ----------
+// + - 0 zoom what the reader's place shows: a contact's recent messages in Contacts, else the message.
+const zoomPane = dir => state.view.kind === "contacts" && !compose.isOpen() ? zoomContact(dir) : zoomMessage(dir);
 let pendingG = false;
 const modals = ["help", "settings", "movebox", "promptbox"];
 // On a Mac, shortcuts shown as Ctrl+X are labelled as the Command key the user presses.
@@ -2067,30 +2205,40 @@ function onKey(e) {
       e.preventDefault();
       if (openModal === "movebox") closeMovePicker();
       else if (openModal === "promptbox") promptDone?.();
-      else if (openModal === "settings" && addressBookEscape()) {}
       else $(openModal).classList.add("hidden");
     }
     return;
   }
   const inSearch = document.activeElement === $("search");
   const inFolderFilter = document.activeElement === $("folder-filter");
+  const inPeopleFilter = document.activeElement === $("p-filter");
   const onButton = document.activeElement?.tagName === "BUTTON";
   if (e.key === "Escape" && !$("search-help").classList.contains("hidden")) { e.preventDefault(); toggleSearchHelp(false); return; }
+  if (e.key === "Escape" && searchSuggestOpen()) { e.preventDefault(); hideSearchSuggest(); return; }
   if (e.key === "Escape" && !$("card").classList.contains("hidden")) { e.preventDefault(); closeCard(); return; }
   if (e.key === "Escape") {
     if (inSearch) {
       $("search").value = ""; $("search").blur();
-      // a search begun in a folder's attachments returns to the folder's messages
-      if (state.view.kind === "search" && !state.view.starred) { const b = state.view.back; b?.starred ? openStarred() : openFolder((b?.kind === "files" ? b.of : b?.folderId) || inboxId()); }
+      // a search returns where it was begun: a folder (for its attachments, its messages), Starred or Contacts
+      if (state.view.kind === "search" && !state.view.starred) openBack(state.view.back);
       return;
     }
-    if (inFolderFilter) { state.kbFolder = -1; renderFolders(); $("list").focus(); return; }
+    if (inFolderFilter) { e.preventDefault(); state.kbFolder = -1; renderFolders(); $("list").focus(); return; }   // the filter's text stays
     if (!$("ctx").classList.contains("hidden")) { hideContextMenu(); return; }
+    if (state.view.kind === "contacts") { e.preventDefault(); people.escape(); return; }
     if (state.marked.size) { clearMarks(); return; }
     if (state.view.kind === "files") { openFolder(state.view.of); return; }
+    // a person's mail shown from Contacts gives way to Contacts again
+    if (state.view.kind === "search" && state.view.back?.kind === "contacts" && document.activeElement === $("list")) { openContacts(); return; }
   }
   if (inSearch) {
-    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { toggleSearchHelp(false); doSearch($("search").value, e.shiftKey); }
+    const typing = e.isComposing || e.keyCode === 229;
+    if (searchSuggestOpen() && !typing) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); moveSearchSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
+      // Enter takes the highlighted person; with none highlighted it searches for what was typed
+      if ((e.key === "Enter" && sgSel >= 0) || (e.key === "Tab" && !e.shiftKey)) { e.preventDefault(); pickSearchSuggest(Math.max(0, sgSel)); return; }
+    }
+    if (e.key === "Enter" && !typing) { hideSearchSuggest(); toggleSearchHelp(false); doSearch($("search").value, e.shiftKey); }
     else if (e.key === "Backspace" && !$("search").value && scopeOfView() && !scopeOff) { scopeOff = true; updateScopeChip(); }
     return;
   }
@@ -2107,11 +2255,13 @@ function onKey(e) {
     }
     return;
   }
+  // the Contacts filter box takes what is typed; its arrows and Enter are the list's
+  if (inPeopleFilter) { people.onFilterKey(e); return; }
   if (onButton && (e.key === "Enter" || e.key === " ")) return;
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     if (e.key === "z" || e.key === "Z") { e.preventDefault(); runAction(e.shiftKey ? "redo" : "undo"); }
     else if (e.key === "y") { e.preventDefault(); runAction("redo"); }
-    else if (e.key === "a" && document.activeElement === $("list")) { e.preventDefault(); markRange(0, state.messages.length - 1); }
+    else if (e.key === "a" && document.activeElement === $("list")) { e.preventDefault(); if (state.view.kind === "contacts") people.markAll(); else markRange(0, state.messages.length - 1); }
     return;
   }
   // Alt with a letter belongs to the browser and the system. A symbol command may need Option
@@ -2127,9 +2277,11 @@ function onKey(e) {
     if (map[e.key]) { const f = folderByType(map[e.key]); if (f) openFolder(f.id); return; }
     if (e.key === "f") { e.preventDefault(); $("folder-filter").focus(); state.kbFolder = -1; return; }
     if (e.key === "*") { e.preventDefault(); openStarred(); return; }
+    if (e.key === "c") { e.preventDefault(); openContacts(); return; }
     return;
   }
   if (state.view.kind === "files" && files.onKey(e)) return;
+  if (state.view.kind === "contacts" && people.onKey(e)) return;
   switch (e.key) {
     case "j": case "ArrowDown": e.preventDefault(); select(state.selected + 1); break;
     case "k": case "ArrowUp": e.preventDefault(); select(state.selected - 1); break;
@@ -2143,9 +2295,9 @@ function onKey(e) {
     case "R": loadList("refresh", null, { told: true }); break;
     case "n": if (state.more) loadList("more"); break;
     case "i": loadImages(); break;
-    case "+": case "=": zoomMessage(1); break;
-    case "-": zoomMessage(-1); break;
-    case "0": zoomMessage(0); break;
+    case "+": case "=": zoomPane(1); break;
+    case "-": zoomPane(-1); break;
+    case "0": zoomPane(0); break;
     case "p": printMessages(); break;
     case "t": toggleTheme(); break;
     case ",": openSettings(true); break;
@@ -2175,89 +2327,7 @@ function toggleTheme() {
 
 function openSettings(show) {
   $("settings").classList.toggle("hidden", !show);
-  if (show) { showAddressBook(false); renderAbSummary(); showAwakeSteps(false); renderAwake(); }
-}
-
-// ---------- address book manager ----------
-// Settings shows one summary line; the list lives on its own page inside the dialog, with a
-// filter, an All / Hidden switch and a bulk action for whatever the filter shows.
-const AB_MAX_ROWS = 300;
-const EYE = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>`;
-const EYE_OFF = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 3.8A6.4 6.4 0 0 1 8 3.5c4.1 0 6.5 4.5 6.5 4.5a11 11 0 0 1-1.6 2.1M10.1 10.6A2 2 0 0 1 7 8.4M4.2 5A11 11 0 0 0 1.5 8S3.9 12.5 8 12.5c1 0 1.9-.3 2.7-.7M2 2l12 12"/></svg>`;
-let abTab = "all", abAll = [];
-
-// The first build of a provider that paces it (api.LIMITS.scanAfter) can take a long while, so
-// the summary says it is still under way.
-async function renderAbSummary() {
-  const list = await contacts.all();
-  const hidden = list.filter(c => c.hidden).length;
-  const building = !!api.LIMITS.scanAfter && !(await contacts.isBuilt());
-  $("ab-summary").textContent = list.length
-    ? `${list.length.toLocaleString()} addresses learned from Inbox and Sent${hidden ? ` · ${hidden.toLocaleString()} hidden from suggestions` : ""}${building ? " · still being built, a little at a time while you are not using the app" : ""}`
-    : building ? "Learned from your Inbox and Sent headers, a little at a time while you are not using the app, starting two minutes after you first sign in; nothing collected yet."
-    : "Learned from your Inbox and Sent headers; nothing collected yet.";
-}
-
-async function showAddressBook(show) {
-  $("settings-main").classList.toggle("hidden", show);
-  $("settings-ab").classList.toggle("hidden", !show);
-  if (!show) { renderAbSummary(); return; }
-  abAll = (await contacts.all()).sort((a, b) => b.last - a.last || a.email.localeCompare(b.email));
-  renderAddressBook();
-  $("ab-filter").focus();
-}
-
-function renderAddressBook() {
-  const q = $("ab-filter").value.trim().toLowerCase();
-  const hiddenN = abAll.filter(c => c.hidden).length;
-  $("ab-n-all").textContent = abAll.length.toLocaleString();
-  $("ab-n-hidden").textContent = hiddenN.toLocaleString();
-  for (const b of document.querySelectorAll(".ab-seg button")) b.classList.toggle("on", b.dataset.tab === abTab);
-  const match = abAll.filter(c => (abTab === "all" || c.hidden) && (!q || c.email.includes(q) || c.name.toLowerCase().includes(q)));
-  const shown = match.slice(0, AB_MAX_ROWS);
-  const day = t => t ? new Date(t * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
-  $("ab-list").innerHTML = shown.length ? shown.map(c => `<div class="ab-item${c.hidden ? " off" : ""}" data-email="${esc(c.email)}">
-      <span class="ab-who"><span class="ab-name">${esc(c.name || c.email)}</span>${c.name ? `<span class="ab-mail">${esc(c.email)}</span>` : ""}</span>
-      <span class="ab-last" title="Last message">${day(c.last)}</span>
-      <button class="ab-eye" title="${c.hidden ? "Hidden from suggestions. Click to show again" : "Suggested when writing. Click to hide"}">${c.hidden ? EYE_OFF : EYE}</button></div>`).join("")
-    : `<div class="ab-empty">${abTab === "hidden" && !q ? "No hidden addresses. Hide one here, or with × in the address suggestions while writing." : q ? `No address matches “${esc(q)}”.` : "No addresses collected yet."}</div>`;
-  $("ab-status").textContent = !match.length ? "" : match.length > shown.length
-    ? `Showing ${shown.length} of ${match.length.toLocaleString()}, most recent first; filter to narrow.` : `${match.length.toLocaleString()} shown, most recent first.`;
-  // Bulk action: hide what a filter found, or restore what the Hidden view shows.
-  const visible = match.filter(c => !c.hidden), bulk = $("ab-bulk");
-  if (abTab === "hidden" && match.length) { bulk.textContent = q ? `Show ${match.length} again` : `Show all ${match.length} again`; bulk.dataset.act = "show"; }
-  else if (abTab === "all" && q && visible.length > 1) { bulk.textContent = `Hide ${visible.length} shown`; bulk.dataset.act = "hide"; }
-  else bulk.dataset.act = "";
-  bulk.classList.toggle("hidden", !bulk.dataset.act);
-  bulk.onclick = async () => {
-    const act = bulk.dataset.act, targets = act === "show" ? match : visible;
-    if (!act || !targets.length) return;
-    for (const c of targets) c.hidden = act === "hide";
-    renderAddressBook();
-    status(`${act === "hide" ? "hid" : "restored"} ${targets.length} address${targets.length === 1 ? "" : "es"} ${act === "hide" ? "from" : "to"} suggestions`);
-    await contacts.hideMany(targets.map(c => c.email), act === "hide");
-  };
-}
-
-function wireAddressBook() {
-  $("ab-open").onclick = () => showAddressBook(true);
-  $("ab-back").onclick = () => showAddressBook(false);
-  $("ab-filter").oninput = () => renderAddressBook();
-  for (const b of document.querySelectorAll(".ab-seg button")) b.onclick = () => { abTab = b.dataset.tab; renderAddressBook(); };
-  $("ab-list").onclick = async e => {
-    const btn = e.target.closest(".ab-eye"); if (!btn) return;
-    const email = btn.closest(".ab-item").dataset.email, c = abAll.find(x => x.email === email);
-    c.hidden = !c.hidden;
-    renderAddressBook();
-    await contacts.hide(email, c.hidden);
-  };
-}
-// Esc on the address book page clears the filter, then goes back to Settings.
-function addressBookEscape() {
-  if ($("settings-ab").classList.contains("hidden")) return false;
-  if ($("ab-filter").value) { $("ab-filter").value = ""; renderAddressBook(); }
-  else showAddressBook(false);
-  return true;
+  if (show) { showAwakeSteps(false); renderAwake(); }
 }
 
 function wireSettings() {
@@ -2307,7 +2377,6 @@ function wireSettings() {
       location.reload();
     };
   }
-  wireAddressBook();
   $("settings-reset").onclick = () => { Object.assign(settings, { folderW: DEFAULTS.folderW, listW: DEFAULTS.listW, listH: DEFAULTS.listH }); applySettings(); saveSettings(); };
   $("settings").onclick = e => { if (e.target.id === "settings") openSettings(false); };
   $("gear").onclick = () => openSettings($("settings").classList.contains("hidden"));
@@ -2603,11 +2672,17 @@ async function syncContacts(full = false) {
     const first = !(await contacts.isBuilt());
     const slow = first && !!api.LIMITS.scanAfter;
     if (slow && !(await chrome.storage.local.get(CONTACTS_AFTER))[CONTACTS_AFTER]) await chrome.storage.local.set({ [CONTACTS_AFTER]: Date.now() + api.LIMITS.scanAfter });
+    let shownAt = 0;
     const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, full, pace: slow ? untilIdle : null,
-      progress: first ? (fid, seen) => status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}...`) : null });
+      progress: first ? (fid, seen) => {
+        status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}...`);
+        // Contacts, when it is open, lists what has been learned so far, every few seconds
+        if (people.isShown() && Date.now() - shownAt > 3000) { shownAt = Date.now(); people.refresh(); }
+      } : null });
     // The routine learn after a poll says nothing: a status would cover one the user is reading,
     // such as the confirmation of a send.
     if (first) status(`address book: ${await contacts.count()} addresses${n ? ` (${n} messages scanned)` : ""}`);
+    if ((n || first) && people.isShown()) people.reload();
   } catch (e) { status(`address book: ${e.message}`); }
   finally { contactsBusy = false; }
 }
@@ -2639,6 +2714,10 @@ wireMovePicker();
 wireContactCards();
 viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, cleanHtml, status, providerName: api.PROVIDER.name });
 files.init(filesHooks);
+people.init(peopleHooks);
+$("contacts-link").onclick = () => openContacts();
+// Ctrl+wheel over a contact's recent messages zooms them, not the tab.
+$("person").addEventListener("wheel", e => { if (e.ctrlKey && e.target.closest?.(".p-recent")) { e.preventDefault(); zoomContact(e.deltaY < 0 ? 1 : -1); } }, { passive: false });
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;
@@ -2657,9 +2736,78 @@ compose.init({
 $("more-btn").onclick = () => loadList("more");
 $("search-scope").onclick = () => { scopeOff = !scopeOff; updateScopeChip(); $("search").focus(); };
 
+// ---------- people in the search box ----------
+// A name typed in the search box offers the people it could mean in a list under the box (the
+// addresses suggested while writing, so none that is hidden). Nothing is highlighted until an
+// arrow key moves there, so Enter still searches for what was typed. A pick puts the address in
+// the word's place, after from: or to: where the word had one; a word that was all the box held
+// shows all mail with the person at once. The last line opens Contacts filtered by the word.
+const SUGGEST_MAX = 6;
+let sgItems = [], sgSel = -1, sgSeq = 0, sgWord = null;
+// What is being typed that could name a person, likeliest first: everything in the box when it is
+// only plain words (a name in full), then the word the caret ends, with its from: or to: apart.
+// Nothing when the caret is inside a word, or the word is an operator or another field's value.
+function searchWords() {
+  const box = $("search"), end = box.selectionStart ?? box.value.length;
+  if (end !== box.selectionEnd || /^\S/.test(box.value.slice(end))) return [];
+  const before = box.value.slice(0, end), all = before.trim(), out = [];
+  if (!box.value.slice(end).trim() && /\s/.test(all) && !/[:()"]|(^|\s)(AND|OR|NOT|-\S*)(\s|$)/.test(all))
+    out.push({ start: before.length - before.trimStart().length, end, field: "", text: all });
+  const m = /(^|[\s(])((?:from|to):)?([^\s:()"-][^\s:()"]+)$/i.exec(before);
+  if (m && !/^(AND|OR|NOT)$/.test(m[3])) out.push({ start: m.index + m[1].length, end, field: (m[2] || "").toLowerCase(), text: m[3] });
+  return out;
+}
+const searchSuggestOpen = () => !$("search-suggest").classList.contains("hidden");
+function hideSearchSuggest() { ++sgSeq; sgItems = []; sgSel = -1; $("search-suggest").classList.add("hidden"); }
+async function suggestPeople() {
+  const seq = ++sgSeq;
+  let w = null, items = [];
+  for (w of searchWords()) {
+    items = await contacts.suggest(w.text, SUGGEST_MAX);
+    if (seq !== sgSeq || document.activeElement !== $("search")) return;
+    if (items.length) break;
+  }
+  if (!items.length) { hideSearchSuggest(); return; }
+  toggleSearchHelp(false);
+  sgItems = items; sgSel = -1; sgWord = w; sgSeq = seq;
+  const pop = $("search-suggest"), box = $("search-box").getBoundingClientRect();
+  pop.innerHTML = items.map((a, i) => `<div data-i="${i}" id="sg-${i}" role="option" title="${esc(w.field ? `${w.field}${a.email}` : `All mail with ${a.name || a.email}`)}"><span>${a.name ? `${esc(a.name)}<i>${esc(a.email)}</i>` : esc(a.email)}</span></div>`).join("") +
+    `<div data-i="${items.length}" id="sg-${items.length}" class="sg-all" role="option" title="Open Contacts filtered by this word"><span>Contacts matching “${esc(w.text)}”...</span></div>`;
+  pop.style.left = `${box.left}px`; pop.style.top = `${box.bottom + 2}px`; pop.style.width = `${box.width}px`;
+  pop.classList.remove("hidden");
+}
+// Past either end of the list the highlight goes back to what was typed.
+function moveSearchSuggest(d) {
+  const n = sgItems.length + 1;
+  sgSel = sgSel < 0 ? (d > 0 ? 0 : n - 1) : sgSel + d;
+  if (sgSel >= n) sgSel = -1;
+  $("search-suggest").querySelectorAll("div").forEach((el, i) => el.classList.toggle("kb", i === sgSel));
+  if (sgSel >= 0) $("search").setAttribute("aria-activedescendant", `sg-${sgSel}`); else $("search").removeAttribute("aria-activedescendant");
+}
+function pickSearchSuggest(i) {
+  const w = sgWord, a = sgItems[i], box = $("search");
+  hideSearchSuggest();
+  box.removeAttribute("aria-activedescendant");
+  if (!w) return;
+  if (!a) { openContacts({ filter: w.text }); return; }
+  const rest = box.value.slice(w.end).replace(/^\s+/, "");
+  if (!w.field && !box.value.slice(0, w.start).trim() && !rest) { searchPerson(a.email); return; }
+  const head = box.value.slice(0, w.start) + w.field + a.email + " ";
+  box.value = head + rest;
+  box.focus(); box.setSelectionRange(head.length, head.length);
+}
+$("search").addEventListener("input", e => { if (!e.isComposing) suggestPeople(); });
+$("search").addEventListener("blur", hideSearchSuggest);
+$("search-suggest").onmousedown = e => {
+  e.preventDefault();                                       // the box keeps the focus
+  const d = e.target.closest("[data-i]"); if (d) pickSearchSuggest(Number(d.dataset.i));
+};
+window.addEventListener("resize", hideSearchSuggest);
+
 // Search help: a popover under the search box; examples fill the box.
 function toggleSearchHelp(show = $("search-help").classList.contains("hidden")) {
   const pop = $("search-help");
+  if (show) hideSearchSuggest();
   pop.classList.toggle("hidden", !show);
   $("search-help-btn").classList.toggle("on", show);
   if (!show) return;

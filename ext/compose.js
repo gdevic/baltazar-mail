@@ -77,14 +77,19 @@ function showSuggest(field, items) {
   const sg = $("c-suggest");
   suggestField = field; suggestItems = items; suggestSel = items.length ? 0 : -1;
   if (!items.length) { hideSuggest(); return; }
-  sg.innerHTML = items.map((a, i) => `<div data-i="${i}" class="${i === suggestSel ? "kb" : ""}"><span>${a.name ? `${esc(a.name)}<i>${esc(a.email)}</i>` : esc(a.email)}</span><a class="hide" data-hide="${esc(a.email)}" title="Never suggest this address">×</a></div>`).join("");
+  sg.innerHTML = items.map((a, i) => `<div data-i="${i}" class="${i === suggestSel ? "kb" : ""}"><span>${a.name ? `${esc(a.name)}<i>${esc(a.email)}</i>` : esc(a.email)}</span><a class="hide" data-hide="${esc(a.email)}" title="Hide this address: it is never suggested again, and Contacts lists it under Hidden">×</a></div>`).join("");
   const r = field.input.getBoundingClientRect();
   sg.style.left = Math.min(r.left, innerWidth - 300) + "px"; sg.style.top = (r.bottom + 2) + "px";
   sg.classList.remove("hidden");
   sg.onmousedown = async e => {
     e.preventDefault();
     const h = e.target.closest("[data-hide]");
-    if (h) { await contacts.hide(h.dataset.hide); hooks.status(`${h.dataset.hide} will not be suggested again (restore in settings)`); field.input.focus(); field.suggest(true); return; }
+    if (h) {
+      await contacts.hide(h.dataset.hide);
+      const hid = (await contacts.lookup(h.dataset.hide))?.hidden;
+      hooks.status(hid ? `${h.dataset.hide} is hidden (Contacts › Hidden unhides it)` : `${h.dataset.hide} is pinned in Contacts, and a pinned address cannot be hidden`);
+      field.input.focus(); field.suggest(true); return;
+    }
     const d = e.target.closest("[data-i]"); if (!d) return;
     field.add(items[Number(d.dataset.i)]); field.input.value = ""; hideSuggest(); field.input.focus();
   };

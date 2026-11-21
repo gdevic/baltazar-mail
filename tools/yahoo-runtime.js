@@ -570,9 +570,9 @@ const { launch } = require("./harness");
   }
   await setUndoSend(2);
 
-  // address book: one summary line in Settings, the list on its own page
+  // Settings: nothing there about the address book, whose list is Contacts
   await page.locator("#list").focus(); await page.keyboard.press(",");
-  await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent), null, { timeout: 5000 });
+  await page.waitForSelector("#settings:not(.hidden)", { timeout: 5000 });
   // changing the text size scales the app behind Settings, not Settings itself
   {
     const px = sel => page.locator(sel).first().evaluate(e => parseFloat(getComputedStyle(e).fontSize));
@@ -583,37 +583,115 @@ const { launch } = require("./harness");
   }
   results.update = { top: await page.locator("#app-version").textContent(), note: await page.locator("#update-note").innerText(), href: await page.locator("#update-note a").getAttribute("href"),
     dot: await page.locator("#gear.has-update").count(), calls: ghCalls.length, url: ghCalls[0]?.url, cookie: ghCalls.some(c => c.cookie) };
-  const ab = { summary: await page.locator("#ab-summary").textContent(), mainHeight: (await page.locator("#settings-box").boundingBox()).height };
+  const ab = { noSection: await page.locator("#ab-summary, #ab-open").count(), mainHeight: (await page.locator("#settings-box").boundingBox()).height };
   const sb = await page.locator("#settings-box").boundingBox();
   await page.screenshot({ path: path.join(__dirname, "..", "out", "settings.png"), clip: { x: sb.x, y: sb.y, width: sb.width, height: Math.min(sb.height, 330) } }).catch(() => {});
   const rowOf = async sel => { const s = await page.locator(sel).boundingBox(); return s; };
   const dk = await rowOf("#darkTheme"), dr = await rowOf('input[name=theme][value=dark]'), fontSel = await rowOf("#composeFont");
   ab.paletteInline = Math.abs((dk.y + dk.height / 2) - (dr.y + dr.height / 2)) < 4 && Math.abs((dk.x + dk.width) - (fontSel.x + fontSel.width)) < 2;
-  await page.locator("#ab-open").click();
-  await page.waitForSelector("#settings-ab:not(.hidden) .ab-item");
-  ab.mainHidden = await page.locator("#settings-main").isHidden();
-  ab.rows = await page.locator("#ab-list .ab-item").count();
-  ab.noCounts = await page.locator("#ab-list").evaluate(l => !l.querySelector(".ab-stats") && !/[↑↓]/.test(l.textContent));
-  ab.focus = await page.evaluate(() => document.activeElement.id);
-  await page.keyboard.type("x.com");
-  ab.filtered = await page.locator("#ab-list .ab-item").count();
-  ab.bulkText = await page.locator("#ab-bulk").textContent();
-  await page.locator("#ab-bulk").click();
-  ab.hiddenCount = await page.locator("#ab-n-hidden").textContent();
-  ab.offRows = await page.locator("#ab-list .ab-item.off").count();
-  await page.screenshot({ path: path.join(__dirname, "..", "out", "addressbook.png"), clip: { x: 340, y: 60, width: 600, height: 600 } }).catch(() => {});
-  await page.locator(".ab-seg button[data-tab=hidden]").click();
-  ab.hiddenTabBulk = await page.locator("#ab-bulk").textContent();
-  await page.locator("#ab-list .ab-item .ab-eye").first().click();
-  ab.afterEye = await page.locator("#ab-n-hidden").textContent();
-  await page.keyboard.press("Escape");
-  ab.filterCleared = await page.locator("#ab-filter").inputValue();
-  await page.keyboard.press("Escape");
-  ab.backOnMain = await page.locator("#settings-main").isVisible();
-  ab.summaryAfter = await page.locator("#ab-summary").textContent();
   await page.keyboard.press("Escape");
   ab.closed = await page.locator("#settings").isHidden();
+
+  // Contacts (g c): every address under one of three tabs, with the filter ready to type in
+  {
+    const text = sel => page.locator(sel).first().textContent().catch(() => "");
+    const tabs = () => page.locator("#p-show button").evaluateAll(bs => Object.fromEntries(bs.map(b => [b.dataset.pile, Number(b.querySelector("i").textContent.replace(/\D/g, ""))])));
+    const onTab = () => page.locator("#p-show button.on").getAttribute("data-pile");
+    const tab = async pile => { await page.locator(`#p-show button[data-pile="${pile}"]`).click(); await page.waitForTimeout(250); };
+    const count = (pile, n) => page.waitForFunction(([pile, n]) => document.querySelector(`#p-show button[data-pile="${pile}"] i`).textContent.replace(/\D/g, "") === String(n), [pile, n], { timeout: 5000 }).catch(() => {});
+    const inContacts = on => page.waitForFunction(want => document.getElementById("app").classList.contains("contacts-view") === want, on, { timeout: 5000 }).catch(() => {});
+    ab.wasTitle = await text("#list-title");
+    await page.locator("#list").focus(); await page.keyboard.press("g"); await page.keyboard.press("c");
+    await page.waitForSelector("#app.contacts-view #p-rows .prow", { timeout: 5000 });
+    const piles = await page.evaluate(async () => { const c = await import("./contacts.js"); const out = { people: [], others: [], hidden: [] }; for (const r of await c.all()) out[c.pileOf(r)].push(r.email); return out; });
+    ab.piles = { people: piles.people.length, others: piles.others.length, hidden: piles.hidden.length };
+    ab.open = { link: await page.locator("#contacts-link.active").count(), focus: await page.evaluate(() => document.activeElement.id), on: await onTab(), tabs: await tabs(), rule: await text("#p-rule"),
+      note: await page.locator("#p-note").isVisible(), count: await text("#p-count"), noCounts: await page.locator("#p-rows").evaluate(l => !/[↑↓]/.test(l.textContent)) };
+    // a filter counts its matches on every tab, and a tab with none says where they are
+    const someone = piles.others[0];
+    await page.keyboard.type(someone); await page.waitForTimeout(250);
+    ab.filter = { tabs: await tabs(), empty: (await page.locator("#p-rows .list-empty").innerText().catch(() => "")).replace(/\s+/g, " "), count: await text("#p-count") };
+    await page.locator('#p-rows a[data-pile="others"]').click(); await page.waitForTimeout(250);
+    ab.filter.on = await onTab(); ab.filter.rows = await page.locator("#p-rows .prow").count();
+    // the arrows move the cursor from the filter box, and the person's page follows with their mail
+    await page.locator("#p-filter").focus(); await page.keyboard.press("ArrowDown");
+    ab.cursor = { row: await text("#p-rows .prow.sel .pm"), page: await text("#person .p-mail"), focus: await page.evaluate(() => document.activeElement.id), someone };
+    await page.waitForSelector("#person .p-msg", { timeout: 4000 }).catch(() => {});
+    ab.recent = { rows: await page.locator("#person .p-msg").count(), arrows: await page.locator("#person .p-msg .dir svg").count(), head: await text("#person .p-head") };
+    // left for a folder and come back to: the same tab, filter and person
+    await page.locator("#folder-list .folder", { hasText: "Sent" }).first().click();
+    await inContacts(false); await page.waitForSelector("#rows .row", { timeout: 5000 }).catch(() => {});
+    await page.locator("#contacts-link").click(); await inContacts(true);
+    await page.waitForSelector("#p-rows .prow.sel", { timeout: 5000 }).catch(() => {});
+    ab.kept = { on: await onTab(), filter: await page.inputValue("#p-filter"), row: await text("#p-rows .prow.sel .pm"), page: await text("#person .p-mail"), focus: await page.evaluate(() => document.activeElement.id) };
+    // Esc clears the filter; Ctrl+A in the list selects the whole tab; Hide moves it to Hidden, and z takes that back
+    await page.keyboard.press("Escape"); await page.waitForTimeout(250);
+    ab.filterCleared = await page.inputValue("#p-filter"); ab.stillOpen = await page.locator("#app.contacts-view").count();
+    const was = await tabs();
+    await page.locator("#p-rows .prow").first().click(); await page.keyboard.press("Control+a");
+    ab.selected = await text("#person .p-name");
+    ab.groupButtons = (await page.locator("#person .p-actions button").allTextContents()).join("|");
+    await page.locator('#person button[data-p="hide"]').click(); await count("others", 0);
+    ab.hid = { tabs: await tabs(), undo: await text("#st-undo"), empty: await page.locator("#p-rows .list-empty").count() };
+    await page.screenshot({ path: path.join(__dirname, "..", "out", "contacts.png") }).catch(() => {});
+    await page.locator("#list").focus(); await page.keyboard.press("z"); await count("others", was.others);
+    ab.undone = await tabs();
+    // the eye on a row hides it, and under Hidden unhides it
+    const who = await page.locator("#p-rows .prow").first().getAttribute("data-email");
+    const rowOf = () => page.locator(`#p-rows .prow[data-email="${who}"]`);
+    await rowOf().hover(); await rowOf().locator(".pe").click(); await count("hidden", was.hidden + 1);
+    ab.eye = { tabs: await tabs() };
+    await tab("hidden");
+    ab.eye.listed = await rowOf().count(); ab.eye.noPin = await rowOf().locator(".pk.none").count();
+    await rowOf().locator(".pe").click(); await count("hidden", was.hidden);
+    ab.eye.back = await tabs();
+    // the pin on a row pins it: first in People under a heading of its own, where it cannot be hidden
+    await tab("others");
+    await rowOf().hover(); await rowOf().locator(".pk").click(); await count("people", was.people + 1);
+    await tab("people");
+    ab.pin = { heads: (await page.locator("#p-rows .day").allTextContents()).join(), first: await page.locator("#p-rows .prow").first().getAttribute("data-email"), who, noEye: await rowOf().locator(".pe.none").count() };
+    await rowOf().click();
+    ab.pin.hide = await page.locator('#person button[data-p="hide"]').isDisabled(); ab.pin.why = await page.locator('#person button[data-p="hide"]').getAttribute("title"); ab.pin.button = await text('#person button[data-p="unpin"]');
+    await rowOf().locator(".pk").click(); await count("people", was.people);
+    ab.pin.after = await tabs();
+    // Esc leaves Contacts for what was shown before
+    await page.locator("#list").focus(); await page.keyboard.press("Escape"); await inContacts(false);
+    await page.waitForSelector("#rows .row", { timeout: 5000 }).catch(() => {});
+    ab.left = { open: await page.locator("#app.contacts-view").count(), title: await text("#list-title"), link: await page.locator("#contacts-link.active").count() };
+  }
   results.ab = ab;
+
+  // people in the search box: a typed word still searches as text; a picked person shows their mail
+  {
+    const sg = {};
+    const items = () => page.locator("#search-suggest:not(.hidden) div").allTextContents();
+    // hidden addresses are not offered: everyone is shown for these steps, and hidden again after them
+    const hiddenWas = await page.evaluate(async () => { const c = await import("./contacts.js"); const h = (await c.all()).filter(x => x.hidden).map(x => x.email); await c.hideMany(h, false); return h; });
+    await page.locator("#search").click(); await page.locator("#search").fill(""); await page.keyboard.type("sender");
+    await page.waitForSelector("#search-suggest:not(.hidden)", { timeout: 4000 }).catch(() => {});
+    sg.offered = await items();
+    await page.keyboard.press("Enter"); await page.waitForTimeout(800);
+    sg.typed = { term: await page.inputValue("#search"), title: await page.locator("#list-title").textContent(), closed: await page.locator("#search-suggest").isHidden() };
+    await page.locator("#search").click(); await page.locator("#search").fill(""); await page.keyboard.type("sender 3");
+    await page.waitForSelector("#search-suggest:not(.hidden)", { timeout: 4000 }).catch(() => {});
+    sg.fullName = await items();
+    await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter"); await page.waitForTimeout(800);
+    sg.picked = { term: await page.inputValue("#search"), title: await page.locator("#list-title").textContent() };
+    await page.locator("#search").click(); await page.locator("#search").fill(""); await page.keyboard.type("budget from:s3");
+    await page.waitForSelector("#search-suggest:not(.hidden)", { timeout: 4000 }).catch(() => {});
+    await page.keyboard.press("Tab");
+    sg.completed = { term: await page.inputValue("#search"), focus: await page.evaluate(() => document.activeElement.id) };
+    await page.locator("#search").fill(""); await page.keyboard.type("has:attachment");
+    await page.waitForTimeout(300);
+    sg.otherField = await page.locator("#search-suggest").isHidden();
+    await page.locator("#search").fill(""); await page.keyboard.type("sender");
+    await page.waitForSelector("#search-suggest:not(.hidden)", { timeout: 4000 }).catch(() => {});
+    await page.keyboard.press("Escape");
+    sg.escCloses = { closed: await page.locator("#search-suggest").isHidden(), kept: await page.inputValue("#search") };
+    await page.keyboard.press("Escape"); await page.waitForTimeout(600);
+    await page.evaluate(async h => { const c = await import("./contacts.js"); await c.hideMany(h, true); }, hiddenWas);
+    results.searchPeople = sg;
+  }
 
   // each folder keeps its selection and open message for the session; an unvisited folder starts empty
   {
@@ -833,10 +911,27 @@ const { launch } = require("./harness");
     results.searchHelp.focused === "search" && results.searchHelp.closed && results.searchHelp.keptText === "invoice OR receipt", "search help: " + JSON.stringify(results.searchHelp));
   expect(results.empty.archive === "No messages in Archive." && results.empty.parent === "No messages in Travel.\nIts 1 subfolder holds 12 messages." && results.empty.gone === 0, "empty folder: " + JSON.stringify(results.empty));
   {
-    const ab = results.ab, hidN = Number(ab.hiddenCount);
-    expect(/^\d+ addresses learned from Inbox and Sent/.test(ab.summary) && ab.mainHidden && ab.noCounts && ab.rows >= 5 && ab.focus === "ab-filter" && ab.paletteInline && ab.filtered >= 2 && ab.bulkText.startsWith("Hide ") &&
-      hidN >= ab.filtered - 1 && ab.offRows === ab.filtered && /^Show (all )?\d+ again$/.test(ab.hiddenTabBulk) && Number(ab.afterEye) === hidN - 1 && ab.filterCleared === "" && ab.backOnMain &&
-      new RegExp(`· ${hidN - 1} hidden from suggestions`).test(ab.summaryAfter) && ab.closed, "address book: " + JSON.stringify(ab));
+    const ab = results.ab, n = ab.piles, same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    expect(ab.noSection === 0 && ab.paletteInline && ab.closed, "Settings has no section for the address book: " + JSON.stringify(ab));
+    expect(ab.open.link === 1 && ab.open.focus === "p-filter" && ab.open.on === "people" && same(ab.open.tabs, n) && n.people >= 1 && n.others >= 2 && /^Most recent first/.test(ab.open.rule) && !ab.open.note && ab.open.count === "" && ab.open.noCounts,
+      "g c opens Contacts on People, every address under one of three tabs, the filter ready: " + JSON.stringify(ab.open) + " " + JSON.stringify(n));
+    expect(ab.filter.tabs.people === 0 && ab.filter.tabs.others === 1 && /^Nothing in People matches .* 1 in Others/.test(ab.filter.empty) && /^0 matches of \d+$/.test(ab.filter.count) && ab.filter.on === "others" && ab.filter.rows === 1,
+      "a filter counts its matches on every tab, and an empty tab leads to them: " + JSON.stringify(ab.filter));
+    expect(ab.cursor.row === ab.cursor.someone && ab.cursor.page === ab.cursor.someone && ab.cursor.focus === "p-filter" && ab.recent.rows >= 1 && ab.recent.arrows === ab.recent.rows && ab.recent.head === "Recent messages",
+      "the arrows move the cursor from the filter box and the person's page follows, with their mail: " + JSON.stringify([ab.cursor, ab.recent]));
+    expect(ab.kept.on === "others" && ab.kept.filter === ab.cursor.someone && ab.kept.row === ab.cursor.someone && ab.kept.page === ab.cursor.someone && ab.kept.focus === "p-filter", "Contacts is come back to as it was left: " + JSON.stringify(ab.kept));
+    expect(ab.filterCleared === "" && ab.stillOpen === 1 && ab.selected === `${n.others} contacts selected` && ab.groupButtons === "Write to all|Mail from any|Mail to any|Copy addresses|Pin|Hide|Clear selection" &&
+      ab.hid.tabs.others === 0 && ab.hid.tabs.hidden === n.hidden + n.others && ab.hid.empty === 1 && ab.hid.undo === `Undo: hide ${n.others} contacts (z)` && same(ab.undone, n),
+      "Ctrl+A selects the whole tab, Hide moves it to Hidden, and z takes that back: " + JSON.stringify(ab));
+    expect(ab.eye.tabs.hidden === n.hidden + 1 && ab.eye.listed === 1 && ab.eye.noPin === 1 && same(ab.eye.back, n), "the eye on a row hides it, and unhides it under Hidden, where it has no pin: " + JSON.stringify(ab.eye));
+    expect(ab.pin.heads === "Pinned,Written to" && ab.pin.first === ab.pin.who && ab.pin.noEye === 1 && ab.pin.hide && /^Unpin it first/.test(ab.pin.why) && ab.pin.button === "Unpin" && same(ab.pin.after, n),
+      "the pin on a row pins it first in People, where it cannot be hidden; the pin unpins it: " + JSON.stringify(ab.pin));
+    expect(ab.left.open === 0 && ab.left.link === 0 && ab.left.title === "Sent", "Esc leaves Contacts for the folder it was opened from: " + JSON.stringify(ab.left));
+    const sg = results.searchPeople;
+    expect(sg.offered.length >= 3 && sg.offered[0].startsWith("Sender") && /^Contacts matching “sender”/.test(sg.offered.at(-1)) && sg.typed.term === "sender" && /^“sender”/.test(sg.typed.title) && sg.typed.closed,
+      "the search box offers people, and Enter still searches for what was typed: " + JSON.stringify(sg));
+    expect(sg.fullName[0] === "Sender 3s3@x.com" && sg.picked.term === "s3@x.com" && sg.picked.title === "“s3@x.com” in all mail", "a name typed in full is found, and picking the person shows all mail with them: " + JSON.stringify(sg));
+    expect(sg.completed.term === "budget from:s3@x.com " && sg.completed.focus === "search" && sg.otherField && sg.escCloses.closed && sg.escCloses.kept === "sender", "Tab completes the address after from:, other fields offer nobody, Esc closes the list first: " + JSON.stringify(sg));
   }
   expect(results.inlineParts.partInlined && results.inlineParts.fromSource && results.inlineParts.clips.startsWith("00100") && results.inlineParts.spacerHeight <= 2 && results.inlineParts.proxyKept && !results.inlineParts.hiddenFetched, "inline images: " + JSON.stringify(results.inlineParts));
   expect(results.attach.ghosts > 0 && results.attach.ghostCards === 0 && results.attach.cards === 7 && results.attach.thumbs === 1 && results.attach.stripBelowBody && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT", "attachment strip: " + JSON.stringify(results.attach));

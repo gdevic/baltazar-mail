@@ -187,6 +187,154 @@ scenario("the address book survives a repeated full build and a second tab", asy
   await other.close();
 }, { settings: { pollSec: 600 } });
 
+// ---------- Contacts ----------
+// In the mocked mailbox o@x.com is the one person written to (it is copied on the mail in Sent);
+// s1 to s8 only wrote, so they are among the others.
+const contactsOpen = async page => {
+  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
+  await page.locator("#list").focus(); await page.keyboard.press("g"); await page.keyboard.press("c");
+  await page.waitForSelector("#app.contacts-view #p-rows .prow", { timeout: 5000 }).catch(() => {});
+};
+const inContacts = (page, on = true) => page.waitForFunction(want => document.getElementById("app").classList.contains("contacts-view") === want, on, { timeout: 5000 }).catch(() => {});
+const contactsTab = async (page, pile) => { await page.locator(`#p-show button[data-pile="${pile}"]`).click(); await page.waitForTimeout(250); };
+const contactRow = (page, email) => page.locator(`#p-rows .prow[data-email="${email}"]`);
+const inBook = (page, email) => page.evaluate(async e => !!(await (await import("./contacts.js")).lookup(e)), email);
+
+scenario("Contacts shows a person's mail and comes back, keeps a pin across tabs, and writes to several people", async (h, expect) => {
+  const { page } = h, r = {};
+  const text = sel => page.locator(sel).first().textContent().catch(() => "");
+  const active = () => page.evaluate(() => document.activeElement.id);
+  await folder(page, "Projects");
+  await contactsOpen(page);
+  r.open = { focus: await active(), on: await page.locator("#p-show button.on").getAttribute("data-pile"), first: await page.locator("#p-rows .prow").first().getAttribute("data-email") };
+  // a filter that matches among the others leads there; Enter shows all mail with the person, and Esc comes back as it was left
+  await page.keyboard.type("s4"); await page.waitForTimeout(250);
+  await page.locator('#p-rows a[data-pile="others"]').click(); await page.waitForTimeout(250);
+  await page.locator("#p-filter").focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  await inContacts(page, false); await page.waitForSelector("#rows .row", { timeout: 5000 }).catch(() => {});
+  r.mail = { title: await text("#list-title"), term: await page.inputValue("#search") };
+  await page.keyboard.press("Escape"); await inContacts(page);
+  await page.waitForSelector("#p-rows .prow.sel", { timeout: 5000 }).catch(() => {});
+  r.back = { on: await page.locator("#p-show button.on").getAttribute("data-pile"), filter: await page.inputValue("#p-filter"), sel: await text("#p-rows .prow.sel .pm"), focus: await active() };
+  // a message on the person's page opens in their mail
+  await page.waitForSelector("#person .p-msg", { timeout: 5000 }).catch(() => {});
+  await page.locator("#person .p-msg").nth(2).click();
+  await inContacts(page, false); await page.waitForSelector("#rows .row.sel", { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("r-subject").textContent, null, { timeout: 5000 }).catch(() => {});
+  r.opened = { at: await page.evaluate(() => [...document.querySelectorAll("#rows .row")].findIndex(x => x.classList.contains("sel"))), subject: await text("#r-subject") };
+  await page.keyboard.press("Escape"); await inContacts(page);
+  await page.keyboard.press("Escape"); await page.waitForTimeout(250);      // the filter's text
+  r.cleared = await page.inputValue("#p-filter");
+  // s pins the person under the cursor: first in People, here and in a tab opened afterwards
+  await contactRow(page, "s4@x.com").click(); await page.keyboard.press("s");
+  await page.waitForFunction(() => /^pinned/.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
+  await contactsTab(page, "people");
+  r.pinned = { first: await page.locator("#p-rows .prow").first().getAttribute("data-email"), heads: (await page.locator("#p-rows .day").allTextContents()).join(), undo: await text("#st-undo") };
+  const other = await h.ctx.newPage(); await other.goto(`chrome-extension://${h.extId}/mail.html`); await other.waitForSelector("#rows .row", { timeout: 15000 });
+  await other.locator("#contacts-link").click(); await other.waitForSelector("#p-rows .prow", { timeout: 5000 }).catch(() => {});
+  r.otherTab = await other.locator("#p-rows .prow").first().getAttribute("data-email").catch(() => "");
+  await other.close();
+  // the last three of the others, marked as a range, get one message
+  await contactsTab(page, "others");
+  const rows = page.locator("#p-rows .prow"), n = await rows.count();
+  await rows.nth(n - 1).click(); await rows.nth(n - 3).click({ modifiers: ["Shift"] });
+  r.marked = { rows: await page.locator("#p-rows .prow.marked").count(), title: await text("#person .p-name") };
+  await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)", { timeout: 5000 }).catch(() => {});
+  r.to = await page.locator("#c-to .chip").allTextContents();
+  // Esc closes the composer, then the selection, then Contacts: back in the folder it was opened from
+  await page.locator("#c-subject").focus(); await page.keyboard.press("Escape"); await composerHidden(page);
+  await page.locator("#list").focus();
+  await page.keyboard.press("Escape");
+  r.unmarked = await page.locator("#p-rows .prow.marked").count();
+  await page.keyboard.press("Escape"); await inContacts(page, false); await page.waitForSelector("#rows .row", { timeout: 5000 }).catch(() => {});
+  r.left = await text("#list-title");
+  expect(r.open.focus === "p-filter" && r.open.on === "people" && r.open.first === "o@x.com", "Contacts opens on the people written to, the filter ready: " + JSON.stringify(r.open));
+  expect(r.mail.title === "“s4@x.com” in all mail" && r.mail.term === "s4@x.com" && r.back.on === "others" && r.back.filter === "s4" && r.back.sel === "s4@x.com" && r.back.focus === "p-filter",
+    "Enter shows all mail with the person, and Esc comes back to Contacts as it was left: " + JSON.stringify(r));
+  expect(r.opened.at === 2 && r.opened.subject === "Subject 1-3" && r.cleared === "", "a message on the person's page is opened in their mail: " + JSON.stringify(r.opened));
+  expect(r.pinned.first === "s4@x.com" && r.pinned.heads === "Pinned,Written to" && r.pinned.undo === "Undo: pin Sender 4 (z)" && r.otherTab === "s4@x.com", "a pinned person is listed first in People, in another tab too: " + JSON.stringify([r.pinned, r.otherTab]));
+  expect(r.marked.rows === 3 && r.marked.title === "3 contacts selected" && r.to.length === 3 && r.to.every(t => /^Sender [678] /.test(t)), "c writes one message to everyone selected: " + JSON.stringify([r.marked, r.to]));
+  expect(r.unmarked === 0 && r.left === "Projects", "Esc clears the selection, then leaves for the folder Contacts was opened from: " + JSON.stringify([r.unmarked, r.left]));
+}, { settings: { pollSec: 600 } });
+
+// A person's search answered as the test says: empty for s7 and s3 (no mail with them is left),
+// and for s5 the one message they sent.
+const mailWith = h => {
+  h.mock.handler = ({ top, uri }) => {
+    const q = decodeURIComponent(uri.split("q=")[1] || "");
+    const who = (q.match(/from:\("([^"]+)"\) OR to:/) || [])[1];
+    const messages = who === "s7@x.com" || who === "s3@x.com" ? [] : who === "s5@x.com" ? [msg(5, "1")] : null;
+    return messages ? { responses: [{ id: top.id, httpCode: 200, response: { result: { messages, query: {} } } }] } : null;
+  };
+};
+scenario("Contacts forgets an address with no mail left, on its page and when its mail is deleted, and undo brings it back", async (h, expect) => {
+  const { page } = h, r = {};
+  const text = sel => page.locator(sel).first().textContent().catch(() => "");
+  mailWith(h);
+  await contactsOpen(page);
+  await contactsTab(page, "others");
+  // the buttons that would find nothing are greyed out, with the reason: s5 only ever wrote
+  await contactRow(page, "s5@x.com").click();
+  await page.waitForSelector("#person .p-msg", { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelector('#person button[data-p="to"]')?.disabled, null, { timeout: 3000 }).catch(() => {});
+  const button = async p => ({ off: await page.locator(`#person button[data-p="${p}"]`).isDisabled(), why: await page.locator(`#person button[data-p="${p}"]`).getAttribute("title") });
+  r.grey = { mail: await button("mail"), from: await button("from"), to: await button("to") };
+  // s7 has no mail left: opening it forgets it, nobody is selected, and the arrows carry on from its place
+  await contactRow(page, "s7@x.com").click();
+  await page.waitForFunction(() => !document.querySelector('#p-rows .prow[data-email="s7@x.com"]'), null, { timeout: 5000 }).catch(() => {});
+  r.forgot = { listed: await contactRow(page, "s7@x.com").count(), inBook: await inBook(page, "s7@x.com"), said: await text("#person .p-none"), undo: await text("#st-undo"), sel: await page.locator("#p-rows .prow.sel").count() };
+  await page.keyboard.press("ArrowDown");
+  r.next = await page.locator("#p-rows .prow.sel").getAttribute("data-email").catch(() => "");
+  // z brings it back, and it is then left alone
+  await page.keyboard.press("z");
+  await page.waitForSelector('#p-rows .prow[data-email="s7@x.com"]', { timeout: 5000 }).catch(() => {});
+  await contactRow(page, "s7@x.com").click();
+  await page.waitForFunction(() => /brought back/.test(document.querySelector("#person .p-recent")?.textContent || ""), null, { timeout: 5000 }).catch(() => {});
+  r.spared = { listed: await contactRow(page, "s7@x.com").count(), inBook: await inBook(page, "s7@x.com"), said: await text("#person .p-recent"), mailOff: await page.locator('#person button[data-p="mail"]').isDisabled() };
+  // deleting the only mail with s3 forgets s3, a little later; undoing the delete brings s3 back
+  await page.keyboard.press("Escape"); await inContacts(page, false);
+  await page.waitForSelector("#rows .row", { timeout: 5000 }).catch(() => {});
+  r.before = await inBook(page, "s3@x.com");
+  await page.locator('#rows .row:has(.fr[data-email="s3@x.com"])').first().click(); await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("#");
+  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Undo: delete"), null, { timeout: 5000 }).catch(() => {});
+  for (let i = 0; i < 30 && await inBook(page, "s3@x.com"); i++) await page.waitForTimeout(250);
+  r.deleted = { s3: await inBook(page, "s3@x.com"), o: await inBook(page, "o@x.com") };
+  await page.locator("#list").focus(); await page.keyboard.press("z");
+  for (let i = 0; i < 30 && !(await inBook(page, "s3@x.com")); i++) await page.waitForTimeout(250);
+  r.undone = await inBook(page, "s3@x.com");
+  expect(!r.grey.mail.off && !r.grey.from.off && r.grey.to.off && r.grey.to.why === "No mail to this address", "Mail to is greyed out for someone who only ever wrote, and nothing else is: " + JSON.stringify(r.grey));
+  expect(r.forgot.listed === 0 && !r.forgot.inBook && /^Sender 7 was forgotten: no mail with s7@x\.com is left/.test(r.forgot.said) && r.forgot.undo === "Undo: forget Sender 7 (z)" && r.forgot.sel === 0 && r.next === "s8@x.com",
+    "a person whose page finds no mail is forgotten, and the arrows carry on from their place: " + JSON.stringify([r.forgot, r.next]));
+  expect(r.spared.listed === 1 && r.spared.inBook && /No mail with this address is left outside Spam and Trash\. It was brought back/.test(r.spared.said) && r.spared.mailOff, "z brings the person back, and they are left alone after that: " + JSON.stringify(r.spared));
+  expect(r.before && !r.deleted.s3 && r.deleted.o && r.undone, "deleting the last mail with an address forgets it, and undoing the delete brings it back: " + JSON.stringify([r.before, r.deleted, r.undone]));
+}, { settings: { pollSec: 600 } });
+
+scenario("a pinned address cannot be hidden, nor a hidden one pinned", async (h, expect) => {
+  const { page } = h, r = {};
+  const text = sel => page.locator(sel).first().textContent().catch(() => "");
+  await contactsOpen(page);
+  await contactsTab(page, "others");
+  // pinned by its pin: the row has no eye, the page's Hide is greyed out, and h says why
+  await contactRow(page, "s2@x.com").hover(); await contactRow(page, "s2@x.com").locator(".pk").click();
+  await contactsTab(page, "people");
+  await contactRow(page, "s2@x.com").click();
+  r.pinned = { eye: await contactRow(page, "s2@x.com").locator(".pe:not(.none)").count(), hideOff: await page.locator('#person button[data-p="hide"]').isDisabled() };
+  await page.keyboard.press("h");
+  r.pinned.said = await text("#st-msg"); r.pinned.still = await contactRow(page, "s2@x.com").count();
+  // the composer's × leaves a pinned address alone too
+  r.pinned.store = await page.evaluate(async () => { const c = await import("./contacts.js"); await c.hide("s2@x.com"); const e = await c.lookup("s2@x.com"); return { hidden: e.hidden, pinned: !!e.pinned }; });
+  // hidden by its eye: the row has no pin, the page's Pin is greyed out, and the store refuses a pin
+  await contactsTab(page, "others");
+  await contactRow(page, "s6@x.com").hover(); await contactRow(page, "s6@x.com").locator(".pe").click();
+  await contactsTab(page, "hidden");
+  await contactRow(page, "s6@x.com").click();
+  r.hidden = { pin: await contactRow(page, "s6@x.com").locator(".pk:not(.none)").count(), pinOff: await page.locator('#person button[data-p="pin"]').isDisabled(), why: await page.locator('#person button[data-p="pin"]').getAttribute("title") };
+  r.hidden.store = await page.evaluate(async () => { const c = await import("./contacts.js"); await c.pinMany(["s6@x.com"]); const e = await c.lookup("s6@x.com"); return { hidden: e.hidden, pinned: !!e.pinned }; });
+  expect(r.pinned.eye === 0 && r.pinned.hideOff && /a pinned address cannot be hidden/.test(r.pinned.said) && r.pinned.still === 1 && r.pinned.store.pinned && !r.pinned.store.hidden, "a pinned address is not hidden by the eye, the button, h or the composer's ×: " + JSON.stringify(r.pinned));
+  expect(r.hidden.pin === 0 && r.hidden.pinOff && /^Unhide it first/.test(r.hidden.why) && r.hidden.store.hidden && !r.hidden.store.pinned, "a hidden address is not pinned: " + JSON.stringify(r.hidden));
+}, { settings: { pollSec: 600 } });
+
 // ---------- folder management ----------
 // Folder calls are answered here and change the mock's folder list, as Yahoo would.
 function folderServer(h) {

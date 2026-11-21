@@ -100,6 +100,13 @@ const { FX } = require("./gmail-mock.js");
   const listsOf = (calls, label, n) => calls.filter(c => c.path === "/messages" && c.q.labelIds === label && (!n || c.q.maxResults === n)).length;
   await page.waitForTimeout(1500);
   results.abWait = { after: (await page.evaluate(async () => (await chrome.storage.local.get("contactsAfter")).contactsAfter)) - Date.now(), sent: listsOf(gmail.calls, "SENT"), built: await abMeta("get", "built") };
+  // Contacts says that it is still being built, above whatever it has learned so far
+  await page.locator("#list").focus(); await page.keyboard.press("g"); await page.keyboard.press("c");
+  await page.waitForFunction(() => !document.getElementById("p-note").classList.contains("hidden"), null, { timeout: 5000 }).catch(() => {});
+  results.abNote = { open: await page.locator("#app.contacts-view").count(), shown: await page.locator("#p-note").isVisible(), text: await page.locator("#p-note").textContent() };
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.getElementById("app").classList.contains("contacts-view"), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForSelector("#rows .row", { timeout: 20000 });
   // a build that had read all of Sent before the tab closed
   await abMeta("put", "filling", Date.now());
   await abMeta("put", "fill:SENT", { offset: 8, newest: 1, seen: 3, done: true });
@@ -395,10 +402,17 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForFunction(() => !document.querySelector("#rows .row"), null, { timeout: 8000 }).catch(() => {});
   results.draft.discarded = { deleteCall: gmail.calls.filter(c => c.method === "DELETE" && /^\/drafts\//.test(c.path)).map(c => c.path), rows: await page.locator("#rows .row").count(), drafts: gmail.drafts.length };
 
-  // address book: learned from Inbox and Sent through the API's pages
+  // address book: learned from Inbox and Sent through the API's pages, and listed by Contacts, which
+  // no longer says it is being built; Settings has the sign-out button and nothing about the book
+  await page.locator("#list").focus(); await page.keyboard.press("g"); await page.keyboard.press("c");
+  await page.waitForSelector("#app.contacts-view #p-rows .prow", { timeout: 5000 }).catch(() => {});
+  results.ab = { learned: await page.evaluate(async () => (await (await import("./contacts.js")).all()).length), listed: await page.locator("#p-rows .prow").count(), note: await page.locator("#p-note").isVisible() };
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.getElementById("app").classList.contains("contacts-view"), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForSelector("#rows .row", { timeout: 20000 }).catch(() => {});
   await page.locator("#list").focus(); await page.keyboard.press(",");
-  await page.waitForFunction(() => /addresses learned/.test(document.getElementById("ab-summary").textContent), null, { timeout: 5000 }).catch(() => {});
-  results.ab = { summary: await page.locator("#ab-summary").textContent(), signOut: await page.locator("#signout").isVisible(), version: await page.locator("#app-version").textContent() };
+  await page.waitForSelector("#settings:not(.hidden)", { timeout: 5000 }).catch(() => {});
+  Object.assign(results.ab, { section: await page.locator("#ab-summary, #ab-open").count(), signOut: await page.locator("#signout").isVisible(), version: await page.locator("#app-version").textContent() });
   await page.keyboard.press("Escape");
 
   // new mail while the tab is in the background: history names Inbox, the count rises, the dot shows
@@ -591,7 +605,8 @@ const { FX } = require("./gmail-mock.js");
   expect(dr.title === "Draft" && dr.chips.length === 1 && /^notes\.txt/.test(dr.chips[0]) && dr.to.includes("s3@x.com") && dr.imgs.every(s => s.startsWith("data:")) && dr.imgs.length >= 1 && dr.overlay !== "fixed", "a draft opens with its file and inline image: " + JSON.stringify([dr.title, dr.chips, dr.to, dr.imgs, dr.overlay]));
   expect(dr.save.path === "/upload/drafts/r-d1" && dr.save.method === "PUT" && dr.save.meta.message.threadId === "t-m3" && dr.save.headers["in-reply-to"] === "<m3@x.com>" && dr.save.parts.some(p => p[2] === "notes.txt") && dr.save.parts.some(p => p[1] === "image/png") && dr.save.edited && dr.save.rows === dr.save.rowsBefore && dr.save.drafts.includes("r-d1"), "saving the draft keeps its draft id, file and image: " + JSON.stringify(dr.save));
   expect(dr.reopened.chips.length === 1 && /^notes\.txt/.test(dr.reopened.chips[0]) && dr.reopened.text.includes("edited") && dr.discarded.deleteCall.includes("/drafts/r-d1") && dr.discarded.rows === 0 && dr.discarded.drafts === 0, "the saved draft reopens and discards: " + JSON.stringify([dr.reopened, dr.discarded]));
-  expect(/^\d+ addresses learned from Inbox and Sent/.test(results.ab.summary) && results.ab.signOut && /^Baltazar Mail for Gmail™ \d+\.\d+\.\d+$/.test(results.ab.version), "address book and the sign-out button: " + JSON.stringify(results.ab));
+  expect(results.abNote.open === 1 && results.abNote.shown && /^Contacts is still being built from your Inbox and Sent mail, a little at a time while you are not using the app\./.test(results.abNote.text), "Contacts says while its book is still being built: " + JSON.stringify(results.abNote));
+  expect(results.ab.learned > 0 && results.ab.listed > 0 && !results.ab.note && results.ab.section === 0 && results.ab.signOut && /^Baltazar Mail for Gmail™ \d+\.\d+\.\d+$/.test(results.ab.version), "the book once built is listed by Contacts without the notice, and Settings has the sign-out button: " + JSON.stringify(results.ab));
   const nm = results.newMail;
   expect(nm.title === `(${nm.unread}) Baltazar Mail for Gmail™` && nm.unread >= 1 && nm.dotted === "data:image/png;base64," && nm.listed === 1 && nm.history, "new mail through history: " + JSON.stringify(nm));
   const cs = results.css;
