@@ -147,7 +147,7 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   check(!back.errors.length && JSON.stringify(back.entries.map(e => [e.name, e.email, e.pinned, e.hidden])) === JSON.stringify([rows[1], rows[0], rows[2], rows[3], rows[4]].map(r => [r.name, r.email, !!r.pinned, r.hidden])), "what is written is read back the same, with either line ending: " + JSON.stringify(back));
   const odd = file.parse("\uFEFFAna <A@B.example> Pinned\nBob b@c.example\n<c@d.example>\nx@y.example pined\nq@r.example pinned hidden\n# a note\n\nAna Two <a@b.example>\na@x.example, b@x.example\nEve <not an address>\n");
   check(JSON.stringify(odd.entries.map(e => [e.email, e.name, e.pinned, e.line])) === '[["c@d.example","",false,3],["a@b.example","Ana Two",false,8]]', "an address is read without regard to case, once, as its last line has it: " + JSON.stringify(odd.entries));
-  check(JSON.stringify(odd.errors.map(e => e.line)) === "[2,4,5,9,10]" && /is not pinned, hidden or deleted/.test(odd.errors[1].why) && odd.errors[2].why === "pinned and hidden at once" && /several addresses/.test(odd.errors[3].why), "the lines that are not a contact are told apart, with the reason: " + JSON.stringify(odd.errors));
+  check(JSON.stringify(odd.errors.map(e => e.line)) === "[2,4,5,9,10]" && /is not pinned or hidden$/.test(odd.errors[1].why) && odd.errors[2].why === "pinned and hidden at once" && /several addresses/.test(odd.errors[3].why), "the lines that are not a contact are told apart, with the reason: " + JSON.stringify(odd.errors));
 }
 // What an import makes of the book: merging takes what the file says and leaves the rest;
 // replacing makes the book what the file says; and a file written from the book changes nothing.
@@ -163,34 +163,30 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   const listed = b => [...b.values()].map(e => ({ name: e.name, email: e.email, pinned: e.pinned || 0, hidden: isHidden(e), lastSent: e.lastSent }));
   const written = file.parse(file.format(listed(book()))).entries;
   for (const replace of [false, true]) { const p = planImport(book(), written, { replace, now: 1000 }); check(!p.put.length && !p.drop.length, `the book's own file changes nothing (${replace ? "replacing" : "merging"}): ` + JSON.stringify(p)); }
-  const x = (email, name = "", word = "") => ({ email, name, pinned: word === "pinned", hidden: word === "hidden", deleted: word === "deleted" });
+  const x = (email, name = "", word = "") => ({ email, name, pinned: word === "pinned", hidden: word === "hidden" });
   const merged = planImport(book(), [x("ms@x.example", "Mislav Sabolic"), x("new@y.example", "New One", "pinned"), x("robin@x.example", "Robin Hale", "hidden"), x("me@yahoo.com", "Me")], { now: 1000 });
   const got = Object.fromEntries(merged.put.map(e => [e.email, e]));
   check(merged.put.length === 3 && !merged.drop.length && got["ms@x.example"].given === "Mislav Sabolic" && got["ms@x.example"].name === "Mislav Sabolic" && got["ms@x.example"].last === 10 &&
     got["new@y.example"].added && got["new@y.example"].given === "New One" && got["new@y.example"].pinned === 1000 && got["robin@x.example"].hidden === true && !got["robin@x.example"].pinned,
     "merging names a contact, adds a new one and hides one, and touches nobody else: " + JSON.stringify(merged.put));
-  check(JSON.stringify(merged.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":1,"hidden":1,"shown":0,"removed":0,"deleted":0,"restored":0}', "and counts what it did: " + JSON.stringify(merged.counts));
+  check(JSON.stringify(merged.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":1,"hidden":1,"shown":0,"removed":0,"restored":0}', "and counts what it did: " + JSON.stringify(merged.counts));
   const replaced = planImport(book(), [x("robin@x.example", "Robin Hale", "pinned"), x("maya@x.example", "Maya", "pinned"), x("ms@x.example", "MS"), x("noreply@shop.example", "Shop"), x("new@y.example")], { replace: true, now: 1000 });
   const now = Object.fromEntries(replaced.put.map(e => [e.email, e]));
   check(JSON.stringify(replaced.drop) === '["bare@x.example"]' && now["robin@x.example"].pinned === 1000 && now["maya@x.example"].pinned === 1001 && now["maya@x.example"].given === "Maya" && !("ms@x.example" in now) &&
     now["noreply@shop.example"].hidden === false && now["new@y.example"].added && now["new@y.example"].name === "",
     "replacing puts the pins in the file's order, shows what the file does not hide, and takes out who is not in it: " + JSON.stringify(replaced));
-  check(JSON.stringify(replaced.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":0,"hidden":0,"shown":1,"removed":1,"deleted":0,"restored":0}', "and counts what it did: " + JSON.stringify(replaced.counts));
-  // A contact the user deleted is in no list, but the file lists it last, marked deleted, so that
-  // the deletion can be taken back: the book's own file still changes nothing, a file without the
-  // line leaves the deletion alone, a line without the mark brings the contact back, and a line
-  // with it deletes a contact, or notes an address the book has not met as unwanted.
+  check(JSON.stringify(replaced.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":0,"hidden":0,"shown":1,"removed":1,"restored":0}', "and counts what it did: " + JSON.stringify(replaced.counts));
+  // A contact the user deleted is in no list, and the file does not know of it: the book's own file
+  // leaves the deletion alone, replacing does not take it out, and a line that names it brings the
+  // contact back. The word deleted is not one the file has.
   const gone = () => new Map([...book(), ["dead@x.example", { email: "dead@x.example", name: "Dead One", nameBy: { self: { "Dead One": 1 } }, last: 3, lastSent: 0, deleted: true }]]);
-  const whole = file.format(listed(book()), { deleted: [{ name: "Dead One", email: "dead@x.example" }] }), read = file.parse(whole);
-  check(whole.endsWith("\n\n# Deleted\nDead One <dead@x.example> deleted\n") && /After the address: pinned, hidden or deleted\./.test(whole) && !read.errors.length && read.entries.at(-1).deleted && !read.entries.at(-1).hidden,
-    "the file lists the deleted contacts last, each marked so, and reads them back: " + JSON.stringify(whole.slice(-70)));
-  const same = planImport(gone(), read.entries, { replace: true, now: 1000 }), kept = planImport(gone(), written, { replace: true, now: 1000 }), again = planImport(gone(), [x("dead@x.example", "Dead One")], { now: 1000 });
-  check(!same.put.length && !same.drop.length && !kept.put.length && !kept.drop.length && kept.counts.removed === 0, "neither the book's own file nor one without the line touches a deleted contact: " + JSON.stringify([same, kept]));
-  check(again.put.length === 1 && !("deleted" in again.put[0]) && again.put[0].added && again.counts.restored === 1 && again.counts.added === 0, "a line that names a deleted contact without the mark brings it back: " + JSON.stringify(again));
-  const marked = planImport(gone(), [x("robin@x.example", "Robin Hale", "deleted"), x("stranger@y.example", "", "deleted"), x("dead@x.example", "Dead One", "deleted")], { now: 1000 });
-  const by = Object.fromEntries(marked.put.map(e => [e.email, e]));
-  check(marked.put.length === 2 && by["robin@x.example"].deleted && by["robin@x.example"].lastSent === 20 && by["stranger@y.example"].deleted && !by["stranger@y.example"].added && marked.counts.deleted === 1 && !marked.drop.length,
-    "a line marked deleted deletes its contact, and keeps out an address the book has not met: " + JSON.stringify(marked));
+  const whole = file.format(listed(book()));
+  check(!/deleted/i.test(whole) && /After the address: pinned or hidden\./.test(whole), "the file says nothing of deletions: " + JSON.stringify(whole.slice(0, 200)));
+  const kept = planImport(gone(), written, { replace: true, now: 1000 }), again = planImport(gone(), [x("dead@x.example", "Dead One")], { now: 1000 });
+  check(!kept.put.length && !kept.drop.length && kept.counts.removed === 0, "the book's own file does not touch a deleted contact, even replacing: " + JSON.stringify(kept));
+  check(again.put.length === 1 && !("deleted" in again.put[0]) && again.put[0].added && again.counts.restored === 1 && again.counts.added === 0, "a line that names a deleted contact brings it back: " + JSON.stringify(again));
+  const word = file.parse("Dead One <dead@x.example> deleted\n");
+  check(!word.entries.length && word.errors.length === 1 && /"deleted" after the address is not pinned or hidden/.test(word.errors[0].why), "a line marked deleted is not one the file reads: " + JSON.stringify(word));
   const back = planImport(new Map([["ms@x.example", { ...book().get("ms@x.example"), given: "Mislav" }]]), [x("ms@x.example")], { replace: true, now: 1000 });
   check(back.put.length === 1 && !("given" in back.put[0]) && back.put[0].name === "MS", "replacing with a line that has no name takes the user's name back: " + JSON.stringify(back.put));
   setOwnAddresses([]);

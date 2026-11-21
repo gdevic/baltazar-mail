@@ -62,7 +62,7 @@ const PILES = {
 };
 const HIDE_TIP = "Hide: move this address to Hidden, where it is never suggested";
 const UNHIDE_TIP = "Unhide: list this address with the others again, and suggest it";
-const DELETE_TIP = "Delete: take this address out of Contacts and keep it out; an export lists it under Deleted";
+const DELETE_TIP = "Delete: take this address out of Contacts and keep it out until a rebuild";
 const NO_DELETE = "Unpin it first: a pinned address cannot be deleted";
 const PIN_TIP = "Pin: list this address first in People";
 const UNPIN_TIP = "Unpin: stop listing this address first";
@@ -416,10 +416,10 @@ async function change(what, t, at = -1) {
   await load();
   if (mine && st.cursor < 0 && at >= 0 && st.rows.length) select(Math.min(at, st.rows.length - 1));
 }
-// Contacts deleted (the trash bin on a row, Delete on a page, or Del): they leave every
-// list, and stay out whatever mail names them later (contacts.deleteMany). A pinned one cannot be
-// deleted: it is left, as it is by hiding, and the status line says so. Undo brings them back as they were. at: where the cursor goes when
-// its own row is one of them.
+// Contacts deleted (the trash bin on a row, Delete on a page, or Del): they leave every list, and
+// stay out whatever mail names them later, until a rebuild (contacts.deleteMany). A pinned one
+// cannot be deleted: it is left, as it is by hiding, and the status line says so. Undo brings them
+// back as they were. at: where the cursor goes when its own row is one of them.
 async function remove(t, at = -1) {
   const barred = t.filter(r => r.pinned).length;
   t = t.filter(r => !r.pinned);
@@ -430,7 +430,7 @@ async function remove(t, at = -1) {
   const apply = () => contacts.deleteMany(emails);
   await apply();
   hooks.undoable({ label: `delete ${who}`, count: n, undo: () => contacts.restoreChoices(was), redo: apply });
-  hooks.status(`deleted ${who}; an export lists ${n === 1 ? "it" : "them"} under Deleted${barred ? `; ${barred} pinned left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
+  hooks.status(`deleted ${who}${barred ? `; ${barred} pinned left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
   for (const e of emails) { st.marked.delete(e); recent.delete(e); ways.delete(e); }
   await load();
   if (mine && st.cursor < 0 && at >= 0 && st.rows.length) select(Math.min(at, st.rows.length - 1));

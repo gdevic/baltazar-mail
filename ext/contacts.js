@@ -17,8 +17,9 @@ import { noBidi } from "./text.js";
 // by one with any change that makes a book built before no longer what a build would now give,
 // and every such book is invalidated, once, the first time the new version opens it:
 //  - a book of a lower version has its build unmarked (the meta store, with the scan's bookmarks,
-//    is emptied), so it is built anew as a first build is, keeping only what the user chose for an
-//    address (CHOICES), as every full build does (resetRows);
+//    is emptied), so it is built anew as a first build is, keeping all that the user chose for an
+//    address (CHOICES, see resetRows): the user did not ask for this build, so it takes nothing of
+//    theirs away, unlike a Rebuild (rebuild);
 //  - a book of a higher version, which a newer copy of the extension made, cannot be opened as
 //    this one at all: it is dropped whole, the user's choices with it, and a new one begun.
 // A book of this version is kept as built, however often it is opened.
@@ -121,12 +122,14 @@ export function machineAddress(email) { const m = machineParts(email); return m.
 const machineMemo = new Map();
 const machineOf = email => { let m = machineMemo.get(email); if (m === undefined) machineMemo.set(email, m = machineParts(email)); return m; };
 
-// What the user chose for an entry, which no mail tells and every build keeps: hidden (true or
-// false; unset while the user has not said), pinned (when), given (the user's own name for it),
-// added (the user put the address in the book, where it stays though no mail names it) and
-// deleted (the user deleted the contact for good: the entry stays stored, so that the address is
-// known to be unwanted whatever mail names it later, and is in no list, count or suggestion).
+// What the user chose for an entry, which no mail tells and a full build keeps (a Rebuild only
+// REBUILT of it): hidden (true or false; unset while the user has not said), pinned (when), given
+// (the user's own name for it), added (the user put the address in the book, where it stays though
+// no mail names it) and deleted (the user deleted the contact: the entry stays stored, so that the
+// address is known to be unwanted whatever mail names it later, until a Rebuild, and is in no list,
+// count or suggestion).
 const CHOICES = ["hidden", "pinned", "given", "added", "deleted"];
+const REBUILT = ["pinned", "given"];
 const chosen = e => e.hidden !== undefined || !!e.pinned || !!e.given || !!e.added || !!e.deleted;
 
 // The guess about an entry. An address named for a role or a machine (info@, noreply@) is one
@@ -203,15 +206,15 @@ async function flush(pending) {
 }
 
 // A full build reads every message again, so it starts from nothing: every entry goes, but for the
-// ones the user chose something for (CHOICES), which stay as those choices alone until the build
-// names them.
-function resetRows() {
+// ones the user chose something for (keep: the choices that count), which stay as those choices
+// alone until the build names them.
+function resetRows(keep = CHOICES) {
   return openDb().then(d => new Promise((ok, no) => {
     const t = d.transaction(STORE, "readwrite");
     t.objectStore(STORE).openCursor().onsuccess = e => {
       const c = e.target.result; if (!c) return;
       const r = c.value, kept = { email: r.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false };
-      for (const k of CHOICES) if (r[k] !== undefined) kept[k] = r[k];
+      for (const k of keep) if (r[k] !== undefined) kept[k] = r[k];
       kept.name = bestName(kept);
       if (chosen(kept)) c.update(kept); else c.delete();
       c.continue();
@@ -406,11 +409,9 @@ export async function rename(email, name) {
   const given = noBidi(name).trim().slice(0, NAME_MAX);
   await setFlags([email], e => { if (given) e.given = given; else delete e.given; e.name = bestName(e); });
 }
-// Contacts deleted: out of every list, and kept out whatever mail names them later, a rebuild
-// included. They are not gone without a trace: an export lists them (deletedOnes), and importing
-// a file that names one without the mark brings it back (planImport), as undo does.
+// Contacts deleted: out of every list, and kept out whatever mail names them later, until a
+// Rebuild. Undo brings them back, and so does importing a file that names one (planImport).
 export async function deleteMany(emails) { await setFlags(emails, e => { e.deleted = true; }); }
-export async function deletedOnes() { await loadAll(); return [...cache.values()].filter(e => e.deleted).map(e => ({ name: e.name || "", email: e.email })); }
 // The user's choices about entries as they are stored (CHOICES, each undefined while the user has
 // not said), and the same put back (undo).
 export async function choices(emails) {
@@ -463,10 +464,13 @@ export async function wrote(email, messages) {
   return true;
 }
 
-// The build unmarked, as a book of a lower version has it when it is opened (see DB_VERSION): the
-// next sync builds the book anew from the mail, as a first build is, keeping what the user chose.
-// The account the book belongs to stays noted.
-export async function unbuild() {
+// Rebuild: the book is made anew from the mail, keeping of what the user chose only the pins and
+// the names they gave (REBUILT); what they hid, added or deleted goes, and the mail decides again.
+// Every entry is cut down to those at once, and the build is unmarked, as a book of a lower version
+// has it when it is opened (see DB_VERSION): the next sync builds the book as a first build is, and
+// one cut short carries on the next time. The account the book belongs to stays noted.
+export async function rebuild() {
+  await resetRows(REBUILT);
   const who = await getMeta("account");
   await tx(META, "readwrite", s => { s.clear(); if (who) s.put({ key: "account", value: who }); });
 }
@@ -480,14 +484,12 @@ export async function unbuild() {
 // give it, and the user's own name goes where the file has none; a contact is pinned or hidden
 // exactly when its line says so, the pinned ones in the order of their lines; and every contact the
 // file does not list is taken out.
-// Either way a line marked deleted deletes its contact, and a line that names a deleted contact
-// without the mark brings it back: that is how a deletion is taken back, the file listing the
-// deleted ones for the purpose.
+// Either way a line that names a contact the user deleted brings it back: the file says it is one.
 // An entry is written only where the file differs from it, so a file exported and imported
 // unchanged changes nothing. Gives { put: the entries to store, drop: the addresses to take out,
-// counts: { added, renamed, pinned, unpinned, hidden, shown, removed, deleted, restored } }.
+// counts: { added, renamed, pinned, unpinned, hidden, shown, removed, restored } }.
 export function planImport(rows, entries, { replace = false, now = Math.floor(Date.now() / 1000) } = {}) {
-  const put = [], listed = new Set(), counts = { added: 0, renamed: 0, pinned: 0, unpinned: 0, hidden: 0, shown: 0, removed: 0, deleted: 0, restored: 0 };
+  const put = [], listed = new Set(), counts = { added: 0, renamed: 0, pinned: 0, unpinned: 0, hidden: 0, shown: 0, removed: 0, restored: 0 };
   const mine = entries.filter(x => !own.has(x.email));
   // replacing puts the pins in the file's order, unless they are in it already
   const pins = mine.filter(x => x.pinned).map(x => rows.get(x.email)?.pinned || 0);
@@ -496,15 +498,7 @@ export function planImport(rows, entries, { replace = false, now = Math.floor(Da
   for (const x of mine) {
     listed.add(x.email);
     const stored = rows.get(x.email);
-    // a line marked deleted keeps its address out: the contact is deleted, and an address the book
-    // has not met is noted as unwanted before any mail names it
-    if (x.deleted) {
-      if (stored?.deleted) continue;
-      if (stored) counts.deleted++;
-      put.push(stored ? { ...structuredClone(stored), deleted: true } : { email: x.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false, deleted: true });
-      continue;
-    }
-    // a contact the user deleted is one the book lacks: a line that does not mark it so brings it back
+    // a contact the user deleted is one the book lacks, and its line brings it back
     const was = stored?.deleted ? null : stored;
     const e = stored ? structuredClone(stored) : { email: x.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false, added: true };
     if (stored?.deleted) { delete e.deleted; e.added = true; }

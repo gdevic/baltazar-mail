@@ -346,7 +346,8 @@ scenario("an address book of another database version is invalidated once: a low
   await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the app's own build has finished
   // From a page of the extension that does not open the book: a book kept under the given version,
   // marked as built and with its scans' bookmarks, holding an address no mail names, one the user
-  // hid, one the user pinned, and a sender under an old name and a writing to them that the mail does not show.
+  // hid, one the user pinned, one the user named, one the user deleted, and a sender under an old
+  // name and a writing to them that the mail does not show.
   const seed = async version => { await page.goto(`chrome-extension://${h.extId}/mail.css`); await page.evaluate(version => new Promise((ok, no) => {
     const del = indexedDB.deleteDatabase("baltazar-mail");
     del.onerror = () => no(del.error);
@@ -359,6 +360,8 @@ scenario("an address book of another database version is invalidated once: a low
         for (const row of [{ email: "gone@old.example", name: "Long Gone", nameBy: { self: { "Long Gone": 1 } }, last: 1500000000, lastSent: 0 },
           { email: "hid@old.example", name: "Hid Den", nameBy: { self: { "Hid Den": 1 } }, last: 1500000000, lastSent: 0, hidden: true },
           { email: "pin@old.example", name: "Pin Ned", nameBy: { self: { "Pin Ned": 1 } }, last: 1500000000, lastSent: 0, pinned: 1600000000 },
+          { email: "s2@x.com", name: "Two Given", nameBy: {}, last: 1500000000, lastSent: 0, given: "Two Given" },
+          { email: "s3@x.com", name: "Sender 3", nameBy: {}, last: 1500000000, lastSent: 0, deleted: true },
           { email: "s1@x.com", name: "Old Name", nameBy: { self: { "Old Name": 9 } }, last: 1500000000, lastSent: 1500000000 }]) t.objectStore("contacts").put(row);
         for (const m of [{ key: "built", value: 1600000000000 }, { key: "scan:1", value: { newest: 9999999999, at: 1 } }, { key: "scan:2", value: { newest: 9999999999, at: 1 } }]) t.objectStore("meta").put(m);
         t.oncomplete = () => { d.close(); ok(); }; t.onerror = () => no(t.error);
@@ -369,7 +372,7 @@ scenario("an address book of another database version is invalidated once: a low
   const read = () => page.evaluate(async () => {
     const c = await import("./contacts.js");
     const kept = await new Promise(ok => { const req = indexedDB.open("baltazar-mail"); req.onsuccess = () => { const d = req.result, g = d.transaction("meta").objectStore("meta").get("built"); g.onsuccess = () => { d.close(); ok({ version: d.version, builtAt: g.result?.value || 0 }); }; }; });
-    return { gone: await c.lookup("gone@old.example"), hid: await c.lookup("hid@old.example"), pin: await c.lookup("pin@old.example"), s1: await c.lookup("s1@x.com"), ...kept, now: c.DB_VERSION };
+    return { gone: await c.lookup("gone@old.example"), hid: await c.lookup("hid@old.example"), pin: await c.lookup("pin@old.example"), s1: await c.lookup("s1@x.com"), s2: (await c.lookup("s2@x.com"))?.name, s3: await c.lookup("s3@x.com"), ...kept, now: c.DB_VERSION };
   });
   const built = async () => { await page.waitForSelector("#rows .row", { timeout: 15000 }); await page.waitForFunction(() => /^Contacts: [\d,.\s]+ addresses/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {}); };
   await seed(1); await h.open(); await built();
@@ -380,10 +383,10 @@ scenario("an address book of another database version is invalidated once: a low
   // a book of a version this copy does not know yet
   await seed(first.now + 7); await h.open(); await built();
   const newer = await read();
-  expect(first.now >= 2 && first.version === first.now && first.gone === null && first.hid?.hidden && first.hid.name === "" && first.pin?.pinned === 1600000000 && first.s1?.name === "Sender 1" && first.s1.lastSent === 0 && first.builtAt > 1600000000000,
-    "a book of a lower version is built anew from the mail: what no mail names is gone, what the user hid and pinned stays, and the rest is as the mail has it: " + JSON.stringify(first));
+  expect(first.now >= 2 && first.version === first.now && first.gone === null && first.hid?.hidden && first.hid.name === "" && first.pin?.pinned === 1600000000 && first.s1?.name === "Sender 1" && first.s1.lastSent === 0 && first.s2 === "Two Given" && first.s3 === null && first.builtAt > 1600000000000,
+    "a book of a lower version is built anew from the mail: what no mail names is gone, what the user hid, pinned, named and deleted stays, and the rest is as the mail has it: " + JSON.stringify(first));
   expect(again.builtAt === first.builtAt && JSON.stringify(again) === JSON.stringify(first), "once: opened again, the book is kept as built: " + JSON.stringify([first.builtAt, again.builtAt]));
-  expect(newer.version === newer.now && newer.gone === null && newer.hid === null && newer.pin === null && newer.s1?.name === "Sender 1" && newer.builtAt > 1600000000000,
+  expect(newer.version === newer.now && newer.gone === null && newer.hid === null && newer.pin === null && newer.s1?.name === "Sender 1" && newer.s2 === "Sender 2" && newer.s3?.name === "Sender 3" && newer.builtAt > 1600000000000,
     "a book of a higher version is dropped whole and a new one built under this version: " + JSON.stringify(newer));
 }, { settings: { pollSec: 600 } });
 
@@ -689,12 +692,18 @@ scenario("Contacts are exported to a text file, and a file is merged into them o
   expect(/^Contacts were not replaced/.test(r.refused.notice) && /line 2/.test(r.refused.notice) && r.refused.same, "a file with a line that cannot be read replaces nothing: " + JSON.stringify(r.refused));
 }, { settings: { pollSec: 600 } });
 
-scenario("Settings counts the contacts and rebuilds them when asked, keeping what the user chose", async (h, expect) => {
+scenario("Settings counts the contacts and rebuilds them when asked, keeping only the user's pins and names", async (h, expect) => {
   const { page } = h, r = {};
   const text = sel => page.locator(sel).first().textContent().catch(() => "");
   await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
-  // a hide, a name and a pin of the user's, and an address no mail names
-  r.before = await page.evaluate(async () => { const c = await import("./contacts.js"); await c.hide("s2@x.com"); await c.rename("s3@x.com", "Three"); await c.pinMany(["s5@x.com"]); await c.learn([{ headers: { date: "1500000000", from: [{ name: "Long Gone", email: "gone@old.example" }], to: [] } }]); return (await c.all()).length; });
+  // a hide, a name, a pin and a deletion of the user's, an address no mail names, and one the user added
+  r.before = await page.evaluate(async () => {
+    const c = await import("./contacts.js");
+    await c.hide("s2@x.com"); await c.rename("s3@x.com", "Three"); await c.pinMany(["s5@x.com"]); await c.deleteMany(["s4@x.com"]);
+    await c.learn([{ headers: { date: "1500000000", from: [{ name: "Long Gone", email: "gone@old.example" }], to: [] } }]);
+    await c.importList([{ email: "new@y.example", name: "", pinned: false, hidden: false }]);
+    return (await c.all()).length;
+  });
   await page.locator("#list").focus(); await page.keyboard.press(",");
   await page.waitForSelector("#settings:not(.hidden)", { timeout: 5000 }).catch(() => {});
   await page.waitForFunction(() => document.getElementById("ct-count").textContent, null, { timeout: 5000 }).catch(() => {});
@@ -706,14 +715,15 @@ scenario("Settings counts the contacts and rebuilds them when asked, keeping wha
   await page.waitForFunction(() => /^Contacts: [\d,.\s]+ addresses \(/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
   await page.waitForFunction(() => /learned from/.test(document.getElementById("ct-count").textContent), null, { timeout: 5000 }).catch(() => {});
   r.after = { asked, count: await text("#ct-count"), off: await page.locator("#ct-rebuild").isDisabled(),
-    book: await page.evaluate(async () => { const c = await import("./contacts.js"); const one = async e => { const x = await c.lookup(e); return x && [x.name, x.hidden, !!x.pinned].join("/"); }; return { s2: await one("s2@x.com"), s3: await one("s3@x.com"), s5: await one("s5@x.com"), gone: await one("gone@old.example"), n: (await c.all()).length, built: await c.isBuilt() }; }) };
+    book: await page.evaluate(async () => { const c = await import("./contacts.js"); const one = async e => { const x = await c.lookup(e); return x && [x.name, x.hidden, !!x.pinned].join("/"); }; return { s2: await one("s2@x.com"), s3: await one("s3@x.com"), s4: await one("s4@x.com"), s5: await one("s5@x.com"), gone: await one("gone@old.example"), added: await one("new@y.example"), n: (await c.all()).length, built: await c.isBuilt() }; }) };
   expect(r.shown.count === `${r.before} contacts, learned from your message headers.` && !r.shown.off, "Settings says how many contacts there are: " + JSON.stringify([r.before, r.shown]));
   expect(/^Rebuild Contacts\? The headers of all your mail are read again, which takes about a minute\. /.test(r.after.asked) && r.after.count === `${r.before - 1} contacts, learned from your message headers.` && !r.after.off && r.after.book.built &&
-    r.after.book.s2 === "Sender 2/true/false" && r.after.book.s3 === "Three/false/false" && r.after.book.s5 === "Sender 5/false/true" && r.after.book.gone === null && r.after.book.n === r.before - 1,
-    "Rebuild asks first, reads the mail again, drops what no mail names and keeps what the user hid, named and pinned: " + JSON.stringify(r.after));
+    r.after.book.s2 === "Sender 2/false/false" && r.after.book.s3 === "Three/false/false" && r.after.book.s4 === "Sender 4/false/false" && r.after.book.s5 === "Sender 5/false/true" &&
+    r.after.book.gone === null && r.after.book.added === null && r.after.book.n === r.before - 1,
+    "Rebuild asks first, reads the mail again, drops what no mail names, keeps what the user pinned and named, and lets the mail decide what they hid, added and deleted: " + JSON.stringify(r.after));
 }, { settings: { pollSec: 600 } });
 
-scenario("the trash bin on a row deletes contacts, in any pile but not a pinned one; they stay out whatever mail names them, and an export lists them to be brought back", async (h, expect) => {
+scenario("the trash bin on a row deletes contacts, in any pile but not a pinned one; they stay out whatever mail names them, an export leaves them out, and an import brings one back", async (h, expect) => {
   const { page } = h, r = {};
   const text = sel => page.locator(sel).first().textContent().catch(() => "");
   const count = async pile => Number((await page.locator(`#p-show button[data-pile="${pile}"] i`).textContent()).replace(/\D/g, ""));
@@ -751,7 +761,8 @@ scenario("the trash bin on a row deletes contacts, in any pile but not a pinned 
   await page.locator('#person button[data-p="delete"]').click();
   await page.waitForFunction(() => !document.querySelector('#p-rows .prow[data-email="s3@x.com"]'), null, { timeout: 5000 }).catch(() => {});
   r.page = { status: await text("#st-msg"), book: await book() };
-  // mail that names a deleted address again, and a rebuild, leave it out; undo brings the last one back
+  // mail that names a deleted address again, and a full build that keeps the user's choices (an
+  // update's, see DB_VERSION), leave it out; undo brings the last one back
   r.later = await page.evaluate(async () => { const c = await import("./contacts.js");
     await c.learn([{ headers: { date: String(Math.floor(Date.now() / 1000)), from: [{ name: "Sender 1", email: "s1@x.com" }], to: [{ name: "Me", email: "me@yahoo.com" }] } }]);
     await c.sync({ inbox: "1", sent: "2", drafts: "3", full: true });
@@ -759,25 +770,25 @@ scenario("the trash bin on a row deletes contacts, in any pile but not a pinned 
   await page.locator("#list").focus(); await page.keyboard.press("z");
   await page.waitForSelector('#p-rows .prow[data-email="s3@x.com"]', { timeout: 5000 }).catch(() => {});
   r.undone = await book();
-  // an export lists the deleted ones last, marked so; a file that names one without the mark brings it back
+  // an export leaves the deleted ones out; a file that names one brings it back
   await page.locator("#contacts-link").click({ button: "right" });
   const [dl] = await Promise.all([page.waitForEvent("download"), page.locator('#ctx [data-act="export"]').click()]);
   const file = require("fs").readFileSync(await dl.path(), "utf8").replace(/\r\n/g, "\n");
-  r.exported = { status: await text("#st-msg"), tail: file.slice(file.indexOf("\n# Deleted\n")) };
+  r.exported = { status: await text("#st-msg"), deleted: /deleted|<s[1246]@x\.com>/i.test(file), s3: file.includes("<s3@x.com>") };
   await page.locator("#contacts-link").click({ button: "right" });
   const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.locator('#ctx [data-act="merge"]').click()]);
-  await fc.setFiles({ name: "back.txt", mimeType: "text/plain", buffer: Buffer.from(file.replace("Sender 1 <s1@x.com> deleted", "Sender 1 <s1@x.com>"), "utf8") });
+  await fc.setFiles({ name: "back.txt", mimeType: "text/plain", buffer: Buffer.from(`${file}Sender 1 <s1@x.com>\n`, "utf8") });
   await page.waitForFunction(() => /^merged back\.txt/.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
   r.restored = { status: await text("#st-msg"), book: await book() };
-  expect(/^exported \d+ contacts and 4 deleted to baltazar-contacts-/.test(r.exported.status) && r.exported.tail === "\n# Deleted\nSender 1 <s1@x.com> deleted\nSender 2 <s2@x.com> deleted\nSender 4 <s4@x.com> deleted\nSender 6 <s6@x.com> deleted\n",
-    "an export lists the deleted contacts last, each marked so: " + JSON.stringify(r.exported));
-  expect(r.restored.status === "merged back.txt: 1 restored" && r.restored.book.s1 && !r.restored.book.s2 && r.restored.book.n === r.undone.n + 1, "importing the file with the mark taken off a line brings that contact back, and no other: " + JSON.stringify(r.restored));
+  expect(new RegExp(`^exported ${r.undone.n} contacts to baltazar-contacts-`).test(r.exported.status) && !r.exported.deleted && r.exported.s3,
+    "an export lists the contacts there are, and says nothing of the deleted ones: " + JSON.stringify(r.exported));
+  expect(r.restored.status === "merged back.txt: 1 restored" && r.restored.book.s1 && !r.restored.book.s2 && r.restored.book.n === r.undone.n + 1, "importing a file that names a deleted contact brings it back, and no other: " + JSON.stringify(r.restored));
   expect(r.pinned.bin === 0 && r.pinned.off && /^Unpin it first/.test(r.pinned.why) && r.pinned.said === "unpin it first: a pinned address cannot be deleted" && r.pinned.still === 1, "a pinned contact has no bin and is not deleted: " + JSON.stringify(r.pinned));
-  expect(r.tip === "Delete the 2 selected contacts (Del)" && r.others.left === n - 2 && r.others.status === "deleted 2 contacts; an export lists them under Deleted" && r.others.undo === "Undo: delete 2 contacts (z)" && !r.others.book.s1 && !r.others.book.s2 && r.others.book.n === had - 2 && !/s[12]@/.test(r.others.book.suggested),
+  expect(r.tip === "Delete the 2 selected contacts (Del)" && r.others.left === n - 2 && r.others.status === "deleted 2 contacts" && r.others.undo === "Undo: delete 2 contacts (z)" && !r.others.book.s1 && !r.others.book.s2 && r.others.book.n === had - 2 && !/s[12]@/.test(r.others.book.suggested),
     "the bin of a selected row deletes everyone selected, out of the list, the count and the suggestions: " + JSON.stringify([n, had, r.tip, r.others]));
-  expect(r.hidden.left === hid - 1 && r.hidden.others === n - 2 && r.hidden.status === "deleted Sender 6; an export lists it under Deleted" && !r.hidden.book.s6, "in Hidden it deletes too: " + JSON.stringify([hid, r.hidden]));
-  expect(r.key === "deleted Sender 4; an export lists it under Deleted" && r.page.status === "deleted Sender 3; an export lists it under Deleted" && !r.page.book.s3 && r.page.book.n === had - 5, "Del and Delete on a person's page delete them: " + JSON.stringify([r.key, r.page]));
-  expect(!r.later.s1 && !r.later.s6 && r.later.n === had - 5 && r.undone.s3 && !r.undone.s1, "a deleted address stays out when mail names it again and through a rebuild, and undo brings the last one back: " + JSON.stringify([r.later, r.undone]));
+  expect(r.hidden.left === hid - 1 && r.hidden.others === n - 2 && r.hidden.status === "deleted Sender 6" && !r.hidden.book.s6, "in Hidden it deletes too: " + JSON.stringify([hid, r.hidden]));
+  expect(r.key === "deleted Sender 4" && r.page.status === "deleted Sender 3" && !r.page.book.s3 && r.page.book.n === had - 5, "Del and Delete on a person's page delete them: " + JSON.stringify([r.key, r.page]));
+  expect(!r.later.s1 && !r.later.s6 && r.later.n === had - 5 && r.undone.s3 && !r.undone.s1, "a deleted address stays out when mail names it again and through an update's build, and undo brings the last one back: " + JSON.stringify([r.later, r.undone]));
 }, { settings: { pollSec: 600 } });
 
 scenario("a pinned address cannot be hidden, nor a hidden one pinned", async (h, expect) => {
