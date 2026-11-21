@@ -511,6 +511,8 @@ scenario("Contacts shows a person's mail and comes back, keeps a pin across tabs
   r.mail = { title: await text("#list-title"), term: await page.inputValue("#search") };
   await page.keyboard.press("Escape"); await inContacts(page);
   await page.waitForSelector("#p-rows .prow.sel", { timeout: 5000 }).catch(() => {});
+  // the row shows selected first, and the keyboard goes back to the filter a moment after
+  await page.waitForFunction(() => document.activeElement?.id === "p-filter", null, { timeout: 3000 }).catch(() => {});
   r.back = { on: await page.locator("#p-show button.on").getAttribute("data-pile"), filter: await page.inputValue("#p-filter"), sel: await text("#p-rows .prow.sel .pm"), focus: await active() };
   // a message on the person's page opens in their mail
   await page.waitForSelector("#person .p-msg", { timeout: 5000 }).catch(() => {});
