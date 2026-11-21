@@ -6,16 +6,16 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 | # | Severity | Area | Finding | Confidence |
 |---|---|---|---|---|
-| CONT-5 | Medium | Contacts | Mail that arrives during the first build and is filed before the next refresh is never learned | reproduced |
+| CONT-5 | Medium | Contacts | Mail filed out of Inbox during the first build, before Contacts reads it, is never learned | reproduced |
 | ADPT-5 | Medium | Gmail | Label counts include trashed mail, so an emptied label cannot be deleted | likely |
 | SG-1 | Medium | Security | A message's styles still tell its sender about the reader (Gmail) | reproduced |
 | the rest | Low | various | see below | |
 
 ## Medium
 
-### CONT-5. Mail that arrives during the first build and is filed before the next refresh is never learned
+### CONT-5. Mail filed out of Inbox during the first build, before Contacts reads it, is never learned
 
-`ext/mail.js:593` clears `contactsDirty` although `syncContacts` only returns the run under way (`ext/mail.js:2703`); the refresh reads Sent and Inbox down to its bookmark (`ext/contacts.js:298`, `237`) and the build's last pass skips Inbox rows (`ext/contacts.js:269`). A new correspondent's message that arrives after the Inbox pass and is archived or filed during the build stays out of Contacts until a Rebuild; the Gmail build can span hours. Fix: remember a sync asked for during a run, and refresh once more when the run ends. Reproduced.
+The refresh after a poll reads Sent and Inbox down to its bookmark (`ext/contacts.js:298`, `237`), and the build's last pass skips Inbox rows (`ext/contacts.js:269`). A new correspondent's message that arrives after the Inbox pass and is archived or filed before the build ends is in neither, so it stays out of Contacts until a Rebuild; the Gmail build can span hours. Fix: end a first build with a pass over all mail down to the everywhere pass's own bookmark, which costs requests in proportion to the mail that came during the build. Reproduced.
 
 ### ADPT-5. Gmail: label counts include trashed mail, so an emptied label cannot be deleted
 

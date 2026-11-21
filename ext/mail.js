@@ -2738,8 +2738,14 @@ function buildTotals() {
   const sent = folderByType("SENT"), inbox = state.byId.get(inboxId()), drafts = folderByType("DRAFT");
   return { sent: sent?.total || 0, inbox: inbox?.total || 0, rest: api.countAll(state.folders, [sent?.id, inbox?.id, drafts?.id].filter(Boolean)) };
 }
-let contactsRun = null;          // the sync under way; one at a time, and a rebuild waits for it
-function syncContacts(full = false) { return contactsRun ||= runContactsSync(full).finally(() => { contactsRun = null; }); }
+// The sync under way: one at a time, and a rebuild waits for it. One asked for meanwhile (a poll
+// that saw new mail during the first build) runs once it ends, so that mail is learned while it is
+// still in Inbox or Sent.
+let contactsRun = null, contactsAgain = false;
+function syncContacts(full = false) {
+  if (contactsRun) { contactsAgain = true; return contactsRun; }
+  return contactsRun = runContactsSync(full).finally(() => { contactsRun = null; if (contactsAgain) { contactsAgain = false; syncContacts(); } });
+}
 async function runContactsSync(full) {
   try {
     const own = [$("account").textContent];
@@ -2789,7 +2795,8 @@ async function rebuildContacts() {
   if (!confirm(`Rebuild Contacts? The headers of all your mail are read again${rebuildTakes()}. Until that is done the list is incomplete. Only your pins and the names you gave are kept.`)) return;
   $("ct-rebuild").disabled = true;
   try {
-    await contactsRun?.catch(() => {});      // a refresh under way ends first
+    // a sync under way ends first, and none asked for meanwhile follows it: the rebuild reads all
+    do { contactsAgain = false; await contactsRun?.catch(() => {}); } while (contactsRun);
     await contacts.rebuild();
   } catch (e) { handleError(e, "rebuild"); }
   renderContactsRow();
