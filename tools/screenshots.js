@@ -340,15 +340,13 @@ function listFor(q) {
   await page.screenshot({ path: path.join(OUT, "dark.png") });
 
   // 4. Contacts, in the light theme: the people written to, and one person's page
-  if (!STORE) {
-    await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });
-    await page.locator("#contacts-link").click();
-    await page.waitForSelector("#p-rows .prow");
-    await page.locator("#p-rows .prow", { hasText: "Maya Chen" }).first().click();
-    await page.waitForSelector("#person .p-msg");
-    await page.mouse.move(W - 5, H - 5);
-    await page.screenshot({ path: path.join(OUT, "contacts.png") });
-  }
+  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });
+  await page.locator("#contacts-link").click();
+  await page.waitForSelector("#p-rows .prow");
+  await page.locator("#p-rows .prow", { hasText: "Maya Chen" }).first().click();
+  await page.waitForSelector("#person .p-msg");
+  await page.mouse.move(W - 5, H - 5);
+  await page.screenshot({ path: path.join(OUT, "contacts.png") });
 
   // 5. Settings, in the light theme, with the default intervals and the app hidden behind it
   await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, pollSec: 20, markReadSec: 2 });
