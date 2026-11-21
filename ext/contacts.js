@@ -406,9 +406,11 @@ export async function rename(email, name) {
   const given = noBidi(name).trim().slice(0, NAME_MAX);
   await setFlags([email], e => { if (given) e.given = given; else delete e.given; e.name = bestName(e); });
 }
-// Contacts deleted for good: out of every list, and kept out whatever mail names them later, a
-// rebuild included. Importing a file that lists one brings it back (planImport), as undo does.
+// Contacts deleted: out of every list, and kept out whatever mail names them later, a rebuild
+// included. They are not gone without a trace: an export lists them (deletedOnes), and importing
+// a file that names one without the mark brings it back (planImport), as undo does.
 export async function deleteMany(emails) { await setFlags(emails, e => { e.deleted = true; }); }
+export async function deletedOnes() { await loadAll(); return [...cache.values()].filter(e => e.deleted).map(e => ({ name: e.name || "", email: e.email })); }
 // The user's choices about entries as they are stored (CHOICES, each undefined while the user has
 // not said), and the same put back (undo).
 export async function choices(emails) {
@@ -478,11 +480,14 @@ export async function unbuild() {
 // give it, and the user's own name goes where the file has none; a contact is pinned or hidden
 // exactly when its line says so, the pinned ones in the order of their lines; and every contact the
 // file does not list is taken out.
+// Either way a line marked deleted deletes its contact, and a line that names a deleted contact
+// without the mark brings it back: that is how a deletion is taken back, the file listing the
+// deleted ones for the purpose.
 // An entry is written only where the file differs from it, so a file exported and imported
 // unchanged changes nothing. Gives { put: the entries to store, drop: the addresses to take out,
-// counts: { added, renamed, pinned, unpinned, hidden, shown, removed } }.
+// counts: { added, renamed, pinned, unpinned, hidden, shown, removed, deleted, restored } }.
 export function planImport(rows, entries, { replace = false, now = Math.floor(Date.now() / 1000) } = {}) {
-  const put = [], listed = new Set(), counts = { added: 0, renamed: 0, pinned: 0, unpinned: 0, hidden: 0, shown: 0, removed: 0 };
+  const put = [], listed = new Set(), counts = { added: 0, renamed: 0, pinned: 0, unpinned: 0, hidden: 0, shown: 0, removed: 0, deleted: 0, restored: 0 };
   const mine = entries.filter(x => !own.has(x.email));
   // replacing puts the pins in the file's order, unless they are in it already
   const pins = mine.filter(x => x.pinned).map(x => rows.get(x.email)?.pinned || 0);
@@ -490,8 +495,17 @@ export function planImport(rows, entries, { replace = false, now = Math.floor(Da
   let pin = 0;
   for (const x of mine) {
     listed.add(x.email);
-    // a contact the user deleted is one the book lacks: its line adds it again
-    const stored = rows.get(x.email), was = stored?.deleted ? null : stored;
+    const stored = rows.get(x.email);
+    // a line marked deleted keeps its address out: the contact is deleted, and an address the book
+    // has not met is noted as unwanted before any mail names it
+    if (x.deleted) {
+      if (stored?.deleted) continue;
+      if (stored) counts.deleted++;
+      put.push(stored ? { ...structuredClone(stored), deleted: true } : { email: x.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false, deleted: true });
+      continue;
+    }
+    // a contact the user deleted is one the book lacks: a line that does not mark it so brings it back
+    const was = stored?.deleted ? null : stored;
     const e = stored ? structuredClone(stored) : { email: x.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false, added: true };
     if (stored?.deleted) { delete e.deleted; e.added = true; }
     if (replace) { const learned = bestName({ ...e, given: "" }); if (x.name && x.name !== learned) e.given = x.name; else delete e.given; }
@@ -504,7 +518,7 @@ export function planImport(rows, entries, { replace = false, now = Math.floor(Da
     else if (replace) { set(false); delete e.pinned; }
     e.name = bestName(e);
     const a = { name: e.name, pinned: !!e.pinned, hidden: isHidden(e) }, b = was && { name: bestName(was), pinned: !!was.pinned, hidden: isHidden(was) };
-    if (!was) counts.added++;
+    if (!was) counts[stored ? "restored" : "added"]++;
     else {
       if (a.name !== b.name) counts.renamed++;
       if (a.pinned !== b.pinned) counts[a.pinned ? "pinned" : "unpinned"]++;

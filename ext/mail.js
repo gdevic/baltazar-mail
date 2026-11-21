@@ -2752,7 +2752,7 @@ async function rebuildContacts() {
 
 // ---------- Contacts to a file and from one ----------
 // The sidebar's Contacts row has a menu of its own: Export writes every contact to a text file
-// (contactsfile.js), and the two imports read one back. Import and merge takes what the file says
+// (contactsfile.js), the deleted ones last and marked so, and the two imports read one back. Import and merge takes what the file says
 // and leaves the rest; Import and replace makes the list what the file says, taking out every
 // contact that is not in it, so it asks first and refuses a file with a line it cannot read, which
 // would take that line's contact out. Both can be undone as one step.
@@ -2761,11 +2761,12 @@ async function exportContacts() {
   try {
     const rows = await contacts.all(), day = new Date();
     const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`, name = `baltazar-contacts-${date}.txt`;
-    const text = contactsFile.format(rows, { account: $("account").textContent, date, eol: /win/i.test(navigator.platform) ? "\r\n" : "\n" });
+    const deleted = await contacts.deletedOnes();        // listed last, so that a deletion can be seen and taken back
+    const text = contactsFile.format(rows, { account: $("account").textContent, date, deleted, eol: /win/i.test(navigator.platform) ? "\r\n" : "\n" });
     const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" })), download: name });
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 60000);
-    status(`exported ${rows.length.toLocaleString()} contact${rows.length === 1 ? "" : "s"} to ${name}`);
+    status(`exported ${rows.length.toLocaleString()} contact${rows.length === 1 ? "" : "s"}${deleted.length ? ` and ${deleted.length.toLocaleString()} deleted` : ""} to ${name}`);
   } catch (e) { handleError(e, "export"); }
 }
 function importContacts(replace) {
@@ -2784,7 +2785,7 @@ function importContacts(replace) {
       if (replace && !confirm(`Replace Contacts with the ${plural(entries.length, "contact")} in ${named}? Every contact that is not in the file is removed; the mail brings one back when it names it again. Undo (z) puts the list back as it is now.`)) return;
       const opts = { replace };
       let done = await contacts.importList(entries, opts);
-      const c = done.counts, said = [[c.removed, "removed"], [c.added, "added"], [c.renamed, "renamed"], [c.pinned, "pinned"], [c.unpinned, "unpinned"], [c.hidden, "hidden"], [c.shown, "unhidden"]].filter(x => x[0]).map(x => `${x[0].toLocaleString()} ${x[1]}`).join(", ");
+      const c = done.counts, said = [[c.removed, "removed"], [c.added, "added"], [c.renamed, "renamed"], [c.pinned, "pinned"], [c.unpinned, "unpinned"], [c.hidden, "hidden"], [c.shown, "unhidden"], [c.deleted, "deleted"], [c.restored, "restored"]].filter(x => x[0]).map(x => `${x[0].toLocaleString()} ${x[1]}`).join(", ");
       if (done.changed) pushUndo({ label: `${replace ? "replace Contacts with" : "merge"} ${named}`, count: done.changed, undo: () => contacts.undoImport(done.undo), redo: async () => { done = await contacts.importList(entries, opts); } });
       const what = `${replace ? "replaced Contacts with" : "merged"} ${named}: ${said || "nothing to change, Contacts already say what it says"}`;
       if (errors.length) notify(`${what[0].toUpperCase()}${what.slice(1)}. ${unread}`, { info: true }); else status(what);

@@ -585,7 +585,7 @@ scenario("Settings counts the contacts and rebuilds them when asked, keeping wha
     "Rebuild asks first, reads the mail again, drops what no mail names and keeps what the user hid, named and pinned: " + JSON.stringify(r.after));
 }, { settings: { pollSec: 600 } });
 
-scenario("the trash bin on a row deletes contacts for good, in any pile but not a pinned one, and they stay out whatever mail names them", async (h, expect) => {
+scenario("the trash bin on a row deletes contacts, in any pile but not a pinned one; they stay out whatever mail names them, and an export lists them to be brought back", async (h, expect) => {
   const { page } = h, r = {};
   const text = sel => page.locator(sel).first().textContent().catch(() => "");
   const count = async pile => Number((await page.locator(`#p-show button[data-pile="${pile}"] i`).textContent()).replace(/\D/g, ""));
@@ -631,11 +631,24 @@ scenario("the trash bin on a row deletes contacts for good, in any pile but not 
   await page.locator("#list").focus(); await page.keyboard.press("z");
   await page.waitForSelector('#p-rows .prow[data-email="s3@x.com"]', { timeout: 5000 }).catch(() => {});
   r.undone = await book();
+  // an export lists the deleted ones last, marked so; a file that names one without the mark brings it back
+  await page.locator("#contacts-link").click({ button: "right" });
+  const [dl] = await Promise.all([page.waitForEvent("download"), page.locator('#ctx [data-act="export"]').click()]);
+  const file = require("fs").readFileSync(await dl.path(), "utf8").replace(/\r\n/g, "\n");
+  r.exported = { status: await text("#st-msg"), tail: file.slice(file.indexOf("\n# Deleted\n")) };
+  await page.locator("#contacts-link").click({ button: "right" });
+  const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.locator('#ctx [data-act="merge"]').click()]);
+  await fc.setFiles({ name: "back.txt", mimeType: "text/plain", buffer: Buffer.from(file.replace("Sender 1 <s1@x.com> deleted", "Sender 1 <s1@x.com>"), "utf8") });
+  await page.waitForFunction(() => /^merged back\.txt/.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
+  r.restored = { status: await text("#st-msg"), book: await book() };
+  expect(/^exported \d+ contacts and 4 deleted to baltazar-contacts-/.test(r.exported.status) && r.exported.tail === "\n# Deleted\nSender 1 <s1@x.com> deleted\nSender 2 <s2@x.com> deleted\nSender 4 <s4@x.com> deleted\nSender 6 <s6@x.com> deleted\n",
+    "an export lists the deleted contacts last, each marked so: " + JSON.stringify(r.exported));
+  expect(r.restored.status === "merged back.txt: 1 restored" && r.restored.book.s1 && !r.restored.book.s2 && r.restored.book.n === r.undone.n + 1, "importing the file with the mark taken off a line brings that contact back, and no other: " + JSON.stringify(r.restored));
   expect(r.pinned.bin === 0 && r.pinned.off && /^Unpin it first/.test(r.pinned.why) && r.pinned.said === "unpin it first: a pinned address cannot be deleted" && r.pinned.still === 1, "a pinned contact has no bin and is not deleted: " + JSON.stringify(r.pinned));
-  expect(r.tip === "Delete the 2 selected contacts for good (Del)" && r.others.left === n - 2 && r.others.status === "deleted 2 contacts for good" && r.others.undo === "Undo: delete 2 contacts (z)" && !r.others.book.s1 && !r.others.book.s2 && r.others.book.n === had - 2 && !/s[12]@/.test(r.others.book.suggested),
+  expect(r.tip === "Delete the 2 selected contacts (Del)" && r.others.left === n - 2 && r.others.status === "deleted 2 contacts; an export lists them under Deleted" && r.others.undo === "Undo: delete 2 contacts (z)" && !r.others.book.s1 && !r.others.book.s2 && r.others.book.n === had - 2 && !/s[12]@/.test(r.others.book.suggested),
     "the bin of a selected row deletes everyone selected, out of the list, the count and the suggestions: " + JSON.stringify([n, had, r.tip, r.others]));
-  expect(r.hidden.left === hid - 1 && r.hidden.others === n - 2 && r.hidden.status === "deleted Sender 6 for good" && !r.hidden.book.s6, "in Hidden it deletes too: " + JSON.stringify([hid, r.hidden]));
-  expect(r.key === "deleted Sender 4 for good" && r.page.status === "deleted Sender 3 for good" && !r.page.book.s3 && r.page.book.n === had - 5, "Del and Delete on a person's page delete them: " + JSON.stringify([r.key, r.page]));
+  expect(r.hidden.left === hid - 1 && r.hidden.others === n - 2 && r.hidden.status === "deleted Sender 6; an export lists it under Deleted" && !r.hidden.book.s6, "in Hidden it deletes too: " + JSON.stringify([hid, r.hidden]));
+  expect(r.key === "deleted Sender 4; an export lists it under Deleted" && r.page.status === "deleted Sender 3; an export lists it under Deleted" && !r.page.book.s3 && r.page.book.n === had - 5, "Del and Delete on a person's page delete them: " + JSON.stringify([r.key, r.page]));
   expect(!r.later.s1 && !r.later.s6 && r.later.n === had - 5 && r.undone.s3 && !r.undone.s1, "a deleted address stays out when mail names it again and through a rebuild, and undo brings the last one back: " + JSON.stringify([r.later, r.undone]));
 }, { settings: { pollSec: 600 } });
 

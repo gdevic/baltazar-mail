@@ -10,7 +10,7 @@
 // first in People, in the order they were pinned, under a heading of their own. The pin and the
 // eye on a row pin and hide it, or everyone selected when the row is one of them; a pinned address
 // cannot be hidden, nor a hidden one pinned. The trash bin that floats before a row's date, as on
-// a message row, deletes for good, in any pile (as do Delete on a page, and Del): the contact
+// a message row, deletes, in any pile (as do Delete on a page, and Del): the contact
 // leaves every list and stays out whatever mail names it later. A pinned contact has no bin and
 // cannot be deleted.
 // Contacts mirrors the mail that is kept: a person whose page finds no mail left is forgotten
@@ -62,7 +62,7 @@ const PILES = {
 };
 const HIDE_TIP = "Hide: move this address to Hidden, where it is never suggested";
 const UNHIDE_TIP = "Unhide: list this address with the others again, and suggest it";
-const DELETE_TIP = "Delete: take this address out of Contacts for good, whatever mail names it later";
+const DELETE_TIP = "Delete: take this address out of Contacts and keep it out; an export lists it under Deleted";
 const NO_DELETE = "Unpin it first: a pinned address cannot be deleted";
 const PIN_TIP = "Pin: list this address first in People";
 const UNPIN_TIP = "Unpin: stop listing this address first";
@@ -104,7 +104,7 @@ export function init(h) {
     const i = at(e); if (i < 0) return;
     // the eye hides or unhides and the pin pins or unpins: everyone selected when the row is one
     // of them, and otherwise the row's own contact, the selection left as it is
-    // The trash bin, as a message row's, deletes for good in the same way.
+    // The trash bin, as a message row's, deletes in the same way.
     const eye = e.target.closest(".pe:not(.none)"), pin = !eye && e.target.closest(".pk:not(.none)"), bin = e.target.closest(".tr");
     if (eye || pin || bin) {
       const r = st.rows[i], whom = st.marked.has(r.email) ? targets() : [r];
@@ -237,7 +237,7 @@ const fullDate = t => t ? new Date(t * 1000).toLocaleDateString([], { year: "num
 const iconTips = (r, many) => ({
   pin: many > 1 ? `${r.pinned ? "Unpin" : "Pin"} the ${many} selected contacts` : r.pinned ? UNPIN_TIP : PIN_TIP,
   eye: many > 1 ? `${r.hidden ? "Unhide" : "Hide"} the ${many} selected contacts` : r.hidden ? UNHIDE_TIP : HIDE_TIP,
-  bin: `${many > 1 ? `Delete the ${many} selected contacts for good` : DELETE_TIP} (Del)`,
+  bin: `${many > 1 ? `Delete the ${many} selected contacts` : DELETE_TIP} (Del)`,
 });
 function rowHtml(r, i) {
   const marked = st.marked.has(r.email), when = r[PILES[st.pile].field], tip = iconTips(r, marked ? st.marked.size : 1);
@@ -416,7 +416,7 @@ async function change(what, t, at = -1) {
   await load();
   if (mine && st.cursor < 0 && at >= 0 && st.rows.length) select(Math.min(at, st.rows.length - 1));
 }
-// Contacts deleted for good (the trash bin on a row, Delete on a page, or Del): they leave every
+// Contacts deleted (the trash bin on a row, Delete on a page, or Del): they leave every
 // list, and stay out whatever mail names them later (contacts.deleteMany). A pinned one cannot be
 // deleted: it is left, as it is by hiding, and the status line says so. Undo brings them back as they were. at: where the cursor goes when
 // its own row is one of them.
@@ -430,7 +430,7 @@ async function remove(t, at = -1) {
   const apply = () => contacts.deleteMany(emails);
   await apply();
   hooks.undoable({ label: `delete ${who}`, count: n, undo: () => contacts.restoreChoices(was), redo: apply });
-  hooks.status(`deleted ${who} for good${barred ? `; ${barred} pinned left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
+  hooks.status(`deleted ${who}; an export lists ${n === 1 ? "it" : "them"} under Deleted${barred ? `; ${barred} pinned left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
   for (const e of emails) { st.marked.delete(e); recent.delete(e); ways.delete(e); }
   await load();
   if (mine && st.cursor < 0 && at >= 0 && st.rows.length) select(Math.min(at, st.rows.length - 1));
@@ -596,7 +596,7 @@ function groupHtml(t) {
   const find = off(FIND_MAX, `A search can name ${FIND_MAX} addresses at most`);
   return `<div class="p-card"><div class="p-name">${plural(n, "contact")} selected</div>
     <div class="p-actions"><button data-p="write"${off(WRITE_MAX, `A message can be started to ${WRITE_MAX} people at most`) || ' title="New message to all of them (c)"'}>Write to all</button><button data-p="from"${find || ' title="Mail any of these addresses sent (Enter)"'}>Mail from any</button><button data-p="to"${find || ' title="Mail sent to any of these addresses"'}>Mail to any</button><button data-p="copy">Copy addresses</button></div>
-    <div class="p-actions">${anyLoose ? `<button data-p="pin" title="List these addresses first in People (s)">Pin</button>` : ""}${anyPinned ? `<button data-p="unpin" title="Stop listing these addresses first in People">Unpin</button>` : ""}${anyShown ? `<button data-p="hide" title="${HIDE_TIP.replace("this address", "these addresses").replace("it is", "they are")} (h)">Hide</button>` : ""}${anyHidden ? `<button data-p="unhide" title="${UNHIDE_TIP.replace("this address", "these addresses").replace("suggest it", "suggest them")}">Unhide</button>` : ""}${t.some(r => !r.pinned) ? `<button data-p="delete" title="Delete these addresses from Contacts for good, whatever mail names them later (Del)">Delete</button>` : ""}<span class="sep"></span><button data-p="clear" title="Select nobody (Esc)">Clear selection</button></div>
+    <div class="p-actions">${anyLoose ? `<button data-p="pin" title="List these addresses first in People (s)">Pin</button>` : ""}${anyPinned ? `<button data-p="unpin" title="Stop listing these addresses first in People">Unpin</button>` : ""}${anyShown ? `<button data-p="hide" title="${HIDE_TIP.replace("this address", "these addresses").replace("it is", "they are")} (h)">Hide</button>` : ""}${anyHidden ? `<button data-p="unhide" title="${UNHIDE_TIP.replace("this address", "these addresses").replace("suggest it", "suggest them")}">Unhide</button>` : ""}${t.some(r => !r.pinned) ? `<button data-p="delete" title="Delete these addresses from Contacts and keep them out; an export lists them under Deleted (Del)">Delete</button>` : ""}<span class="sep"></span><button data-p="clear" title="Select nobody (Esc)">Clear selection</button></div>
     <div class="p-chips">${t.slice(0, SHOWN_MAX).map(r => `<span class="chip" title="${esc(r.name ? `${r.name} <${r.email}>` : r.email)}"><span>${r.name ? `<b>${esc(r.name)}</b>` : esc(r.email)}</span><a data-unmark="${esc(r.email)}" title="Take out of the selection">×</a></span>`).join("")}${n > SHOWN_MAX ? `<span class="p-rest">and ${(n - SHOWN_MAX).toLocaleString()} more</span>` : ""}</div></div>`;
 }
 
