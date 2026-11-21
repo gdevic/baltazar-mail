@@ -9,8 +9,8 @@
 // case. Generic names a site may use for its own purposes (ref, source, id) are not here, and
 // Matomo's pk_ names are listed one by one, since a site may start names of its own with pk_. Nor
 // is mkt_tok: Marketo's unsubscribe pages need it to know who is leaving.
-export const TRACKING_PREFIXES = ["utm_", "mtm_", "hsa_"];
-export const TRACKING_PARAMS = new Set([
+const TRACKING_PREFIXES = ["utm_", "mtm_", "hsa_"];
+const TRACKING_PARAMS = new Set([
   "fbclid", "gclid", "gclsrc", "dclid", "gbraid", "wbraid", "msclkid", "twclid", "ttclid", "yclid", "igshid", "li_fat_id",
   "mc_cid", "mc_eid", "_hsenc", "_hsmi", "__hstc", "__hssc", "__hsfp", "_ga", "_gl", "oly_anon_id", "oly_enc_id",
   "rb_clickid", "vero_id", "vero_conv", "ref_src", "_openstat",
@@ -20,7 +20,7 @@ export const TRACKING_PARAMS = new Set([
 // Redirectors that carry their destination in a query parameter. Only these are unwrapped: a
 // parameter named url or u elsewhere is often the point of the link, as in a share button
 // (facebook.com/sharer.php?u=, twitter.com/intent/tweet?url=).
-export const WRAPPERS = [
+const WRAPPERS = [
   { host: /^(www\.)?google(\.[a-z]{2,3}){1,2}$/, path: /^\/url$/, params: ["q", "url"] },
   { host: /^(www\.|m\.)?youtube\.com$/, path: /^\/redirect$/, params: ["q"] },
   { host: /^lm?\.facebook\.com$/, path: /^\/l\.php$/, params: ["u"] },

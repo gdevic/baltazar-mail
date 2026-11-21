@@ -15,6 +15,9 @@ const WORDS = ["pinned", "hidden"];
 const quoted = name => /[",<>\\]|^#/.test(name) ? `"${name.replace(/[\\"]/g, "\\$&")}"` : name;
 // A name is one line's worth: a line break or another control character in it is written as a space.
 const oneLine = name => String(name || "").replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").trim();
+// A name as the file holds it and Contacts keeps it: one line, no bidi controls, at most NAME_MAX
+// characters, cut between characters (never inside one written as two code units).
+export const nameLine = name => [...noBidi(oneLine(name))].slice(0, NAME_MAX).join("").trim();
 const lineOf = r => { const name = oneLine(r.name); return `${name ? `${quoted(name)} <${r.email}>` : r.email}${r.hidden ? " hidden" : r.pinned ? " pinned" : ""}`; };
 
 // The file for rows as Contacts lists them ({ name, email, pinned: when or 0, hidden, lastSent }):
@@ -51,7 +54,7 @@ export function parse(text) {
     // addresses, as a To field is written (the file's own names are quoted when they hold < or >)
     if (!/^".*"$/s.test(name) && (/[<>]/.test(name) || (name.includes("@") && /[,;]/.test(name)))) return bad("several addresses: a line is one contact");
     if (/^".*"$/s.test(name)) name = name.slice(1, -1).replace(/\\(.)/gs, "$1");
-    name = noBidi(name).trim().slice(0, NAME_MAX);
+    name = nameLine(name);
     const words = rest.toLowerCase().split(/[\s,;]+/).filter(Boolean), other = words.find(w => !WORDS.includes(w));
     if (other) return bad(`"${other.slice(0, 20)}" after the address is not pinned or hidden`);
     if (new Set(words).size > 1) return bad(`${[...new Set(words)].join(" and ")} at once`);

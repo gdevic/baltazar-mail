@@ -175,7 +175,8 @@ function decodeBody(s, p) {
   return out;
 }
 
-const norm = n => String(n || "").normalize("NFC").trim().toLowerCase();
+// A filename as it is compared: in one Unicode form, trimmed, without regard to case.
+export const norm = n => String(n || "").normalize("NFC").trim().toLowerCase();
 
 // The part Yahoo calls partId, cross-checked by filename (some servers number differently).
 export function extract(parsed, partId, filename) {

@@ -14,9 +14,6 @@ No critical, high or medium finding is open. What is left is low: rare cases, sm
 ### COMP-11. The 25 MB check sees only files attached in the composer
 Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded attachments (`ext/compose.js:269-270`) are not counted, and send checks nothing (`ext/compose.js:1076-1083`); the provider then refuses, and the draft cannot be saved, so the composer closes only with Discard. Fix: one total of all three, checked on insert, when a forward opens and before send. Confirmed.
 
-### COMP-12. rfc822.js writes header lines over 998 characters and encoded words over 76
-`gmail/rfc822.js:75-79`, `94-96`, `123`, `47`. A 127-character Russian file name gives a Content-Disposition line of 1,076 characters, an ASCII subject is never folded, a non-ASCII subject's first line is 81 characters, and multipart/related lacks the `type` parameter of RFC 2387. Fix: RFC 2231 continuations on folded lines, fold the fallback encoded words and ASCII subjects, size the first encoded word after the header name, and add `type="text/html"`. Reproduced.
-
 ### CORE-9. While a message's inline images load, its header sits over the previous message's body
 `ext/mail.js:1322-1340` (`renderMessage`) fills the header and shows the old frame before it awaits `inlineImages`. Fix: show a blank frame, or the body without its inline images, first. Confirmed.
 
@@ -29,9 +26,6 @@ Left as it is: `ext/viewer.js` shows an HTML attachment in a frame with an empty
 ### ADPT-4. Gmail: a draft save answered 5xx after Gmail stored it can leave a second draft
 `gmail/api.js` (`saveDraft` through `call`, which asks again after a server error). When Gmail stores a new draft and its answer is a 5xx, the save is asked again and a second draft is made. Fix: ask a first save again only for a rate limit, and look for the draft by its Message-ID before making another. Likely.
 
-### TOOL-3. Dark mode leaves lab() and lch() colours alone
-`ext/darken.js` (`parseColor`) reads hex, rgb(), hsl(), hwb(), oklab(), oklch(), color(srgb) and colour names, but not CIE lab() and lch(), so a light background written that way stays light under text that was made light. Fix: convert CIE Lab (D50) through XYZ to sRGB, or keep an element's text colour when its background did not parse. Confirmed.
-
 ### ADPT-5. Gmail: the Starred count includes starred mail in Trash
 `gmail/api.js` (`starredCount`) reads the count Gmail keeps for its STARRED label, which takes in starred mail moved to Trash, so the count is higher than the Starred view. Fix: count with `messages.list`, which leaves Spam and Trash out, at five units a time instead of one. Likely.
 
@@ -40,12 +34,6 @@ Left as it is: catching it would take a pass over all mail after the first build
 
 ### ADPT-10. Yahoo: a save answered 206 still sends, without the forwarded attachments it dropped
 `yahoo/api.js:604-610`, `637`: SendMessage is chained under SaveMessage and `partial` is ignored. Fix: report the attachments left out, or send only after a whole save. Likely.
-
-### CONT-8. A name the file cannot carry is renamed by the round trip
-`ext/contacts.js:153` cuts a name at 100 UTF-16 units, which can split an emoji, and keeps control characters; `ext/contactsfile.js:17` writes those as spaces, and the file's encoding turns a lone surrogate into U+FFFD, so a Merge of the unchanged file renames the contact. Fix: store names as the file writes them, and cut on code points. Reproduced.
-
-### CONT-11. Two mail tabs during a build or a Rebuild ask for every page twice
-A sync that finds the build under way resumes from the stored bookmark (`ext/contacts.js:254-260`, `301-305`), and the one-run guard is per tab (`ext/mail.js:2703`); on Gmail this spends twice the paced quota. Fix: one tab claims the build, for example with `navigator.locks`. Reproduced.
 
 ### TOOL-1. tools/review.js passes a scenario whatever the Content Security Policy blocked
 `tools/review.js:1903-1904` fails a scenario on a request to the real network or a console error, but the harness files every CSP violation under `cspViolations` (`tools/harness.js:303-305`), which the runner never reads, so a scenario whose page the policy broke can still pass. Fix: fail on a violation the scenario does not expect, with a pattern per scenario for those it provokes on purpose. Confirmed.
@@ -61,11 +49,8 @@ None of these is a vulnerability today.
 
 ## Code to remove
 
-About 26 lines of CSS, some 40 lines of code and 39 unused files, with no change in behaviour.
+Left for a pass of its own, as each changes more than one module's terms:
 
-- **CSS that matches nothing:** `.tb-color` and `.tb-color input` (`ext/mail.css:390-391`), `#v-body pre`, `.v-note` and the table rules (`ext/mail.css:507-512`), `.v-pdf` through `.v-more` (`ext/mail.css:518-535`); viewer.js writes none of these, and render.css holds the live copies.
-- **An id nothing uses:** `awake-row` (`ext/mail.html:203`).
-- **Exports nothing imports:** `isShown`, `folderId` and `PAGE` in files.js, `CACHE_MAX` in cache.js, `draftIsHtml`, `syncFontControls` and `FONTS` in compose.js, `TRACKING_PREFIXES`, `TRACKING_PARAMS` and `WRAPPERS` in links.js, `BIDI_CONTROLS` in text.js, `batch` in yahoo/api.js, `copyText` in guide.js (which mail.js's `copyReport` should import instead of repeating).
-- **Code no caller reaches:** `AddrField.text()` (`ext/compose.js:34`); the folder and keyword branches of `search()` in both adapters (`yahoo/api.js:273`, `279-284`, `gmail/api.js:636-637`), since every caller passes no folder and a raw query; the fallbacks of `searchScoped` (`yahoo/api.js:493`, `gmail/api.js:647`); Gmail's `scopeFilter` (`gmail/api.js:642`); the false branch of `known()` and the `keyword:` fallbacks in `ext/query.js`; Gmail's write-only `session` and `profileCache` (`gmail/api.js:129-140`, `366-370`); the `HIDDEN` test in Gmail's `folderOf`; the unread `accounts` and `query` fields of the adapters' answers; the `full` parameter of `syncContacts` and `runContactsSync`; the leftovers of the first database version (`e.names`, `delete e.sent`) in contacts.js; the `CLASS` table in viewer.js, which is always `"k-" + kind`; the unused default of `extractInline`'s `taken`; `refs || []` on a value that is always an array.
-- **Helpers written more than once:** `plural` (`ext/files.js:16`, `ext/mail.js:112`, a third version in `ext/people.js:44`); the short date and the full date from epoch seconds (`ext/mail.js:887`, `1087`, `1330`, `ext/people.js:234`, `ext/compose.js:246`, `ext/print.js:7`); the subfolder list of `subfolders` written again at `ext/mail.js:792`, `2031` and `2176`, two of them without its same-account test; `holding` in mail.js and `el` in guide.js; `norm` in files.js and mime.js; `normalizeFolders`, `isMessageId` and `checkIds`, `ApiError`, `TIMEOUTS` with `Timeout` and `timed`, and `dataUrl` in both adapters, and the has, is, after and before cases of their `atom()`; the composer's teardown in both `close()` and `send()`, and the Cc and Bcc rows and the autosave timer in both `open()` and `reopenFrom()`.
-- **Files every ZIP carries and nothing loads:** 39 PDF.js toolbar images in `vendor/pdfjs/images/` (31 KB), which means listing the images one by one in vendor.json instead of mapping the folder; keep the annotation icons once TOOL-4 is fixed.
+- **Code no caller reaches:** the folder and keyword branches of `search()` in both adapters, since every caller passes no folder and a raw query; the fallbacks of `searchScoped`; Gmail's `scopeFilter`; the false branch of `known()` and the `keyword:` fallbacks in `ext/query.js`; the unread `accounts` and `query` fields of the adapters' answers; the leftovers of the first database version (`e.names`, `delete e.sent`) in contacts.js.
+- **Helpers written more than once:** `normalizeFolders`, `isMessageId` and `checkIds`, `ApiError`, `TIMEOUTS` with `Timeout` and `timed`, and `dataUrl` in both adapters, and the has, is, after and before cases of their `atom()`, which belong in shared code; the composer's teardown in both `close()` and `send()`.
+- **Files every ZIP carries and nothing loads:** 28 PDF.js toolbar images in `vendor/pdfjs/images/`, which means listing the images one by one in vendor.json instead of mapping the folder; the annotation icons there are used.

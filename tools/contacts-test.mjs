@@ -221,6 +221,16 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   const one = file.parse('john@x.example <john@x.example>\n"Kos, Ana <ana@x.example>" <ana@x.example>\nSmith, John <js@x.example>\n');
   check(!one.errors.length && one.entries.map(e => e.name).join("|") === "john@x.example|Kos, Ana <ana@x.example>|Smith, John", "a name that is an address, or quoted, is one contact: " + JSON.stringify(one));
 }
+// A name is kept as the file writes it, so the round trip leaves it as it was: a tab is a space,
+// and a cut at 100 characters never splits one in two.
+{
+  const tab = {}, emoji = {};
+  noteName(tab, "Ana" + String.fromCharCode(9) + "Kos", "self");
+  noteName(emoji, "x".repeat(99) + String.fromCodePoint(0x1F600) + "tail", "self");
+  const kept = Object.keys(emoji.nameBy.self)[0];
+  check(Object.keys(tab.nameBy.self)[0] === "Ana Kos" && [...kept].length === 100 && kept.endsWith(String.fromCodePoint(0x1F600)), "names are one line and cut between characters: " + JSON.stringify([Object.keys(tab.nameBy.self), [...kept].length]));
+  check(file.parse(file.format([{ name: kept, email: "e@x.example", pinned: 0, hidden: false, lastSent: 0 }])).entries[0]?.name === kept, "and come back from the file unchanged");
+}
 // The Contacts filter and the two orders.
 {
   const rows = [{ name: "Zoë Adams", email: "zoe@example.com", last: 5, lastSent: 9 }, { name: "", email: "bob@example.org", last: 9, lastSent: 0 }, { name: "ann lee", email: "al@example.com", last: 5, lastSent: 3 }];

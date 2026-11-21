@@ -60,13 +60,17 @@ export function parseColor(s) {
   }
   m = s.match(/^hsla?\(\s*([\d.]+)(deg|turn|rad)?[\s,]+([\d.]+)%?[\s,]+([\d.]+)%?(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
   if (m) return [...hsl(degrees(m[1], m[2]), Math.min(1, parseFloat(m[3]) / 100), Math.min(1, parseFloat(m[4]) / 100)), alpha(m[5])];
-  // CSS Color 4 forms a sender's styles may use: hwb(), oklab(), oklch() and color(srgb ...)
+  // CSS Color 4 forms a sender's styles may use: hwb(), lab(), lch(), oklab(), oklch() and color(srgb ...)
   m = s.match(/^hwb\(\s*([\d.]+)(deg|turn|rad)?\s+([\d.]+)%?\s+([\d.]+)%?(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
   if (m) {
     let w = parseFloat(m[3]) / 100, k = parseFloat(m[4]) / 100;
     if (w + k > 1) { w /= w + k; k = 1 - w; }
     return [...hsl(degrees(m[1], m[2]), 1, 0.5).map(c => Math.round(c * (1 - w - k) + 255 * w)), alpha(m[5])];
   }
+  m = s.match(/^lab\(\s*([\d.]+%?)\s+(-?[\d.]+%?)\s+(-?[\d.]+%?)(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
+  if (m) return [...fromLab(part(m[1], 100), part(m[2], 125), part(m[3], 125)), alpha(m[4])];
+  m = s.match(/^lch\(\s*([\d.]+%?)\s+([\d.]+%?)\s+(-?[\d.]+)(deg|turn|rad)?(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
+  if (m) { const C = part(m[2], 150), h = degrees(m[3], m[4]) * Math.PI / 180; return [...fromLab(part(m[1], 100), C * Math.cos(h), C * Math.sin(h)), alpha(m[5])]; }
   m = s.match(/^oklab\(\s*([\d.]+%?)\s+(-?[\d.]+%?)\s+(-?[\d.]+%?)(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
   if (m) return [...fromOk([part(m[1], 1), part(m[2], 0.4), part(m[3], 0.4)]), alpha(m[4])];
   m = s.match(/^oklch\(\s*([\d.]+%?)\s+([\d.]+%?)\s+(-?[\d.]+)(deg|turn|rad)?(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
@@ -80,6 +84,14 @@ const degrees = (v, unit) => { const d = parseFloat(v) * (unit === "turn" ? 360 
 const alpha = v => Math.max(0, Math.min(1, v === undefined ? 1 : v.endsWith("%") ? parseFloat(v) / 100 : parseFloat(v)));
 const part = (v, range) => v.endsWith("%") ? parseFloat(v) / 100 * range : parseFloat(v);
 const fromOk = lab => fromOklab(lab).map(c => Math.round(toSrgb(Math.max(0, Math.min(1, c)))));
+// CIE Lab, whose white is D50 as CSS has it, through XYZ to sRGB (the matrix carries the change of
+// white to sRGB's D65, by the Bradford method).
+function fromLab(L, a, b) {
+  const e = 216 / 24389, k = 24389 / 27, fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
+  const x = 0.96422 * (fx ** 3 > e ? fx ** 3 : (116 * fx - 16) / k), y = L > k * e ? fy ** 3 : L / k, z = 0.82521 * (fz ** 3 > e ? fz ** 3 : (116 * fz - 16) / k);
+  return [3.1338561 * x - 1.6168667 * y - 0.4906146 * z, -0.9787684 * x + 1.9161415 * y + 0.0334540 * z, 0.0719453 * x - 0.2289914 * y + 1.4052427 * z]
+    .map(c => Math.round(toSrgb(Math.max(0, Math.min(1, c)))));
+}
 
 const toLin = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
 const toSrgb = c => 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
@@ -126,7 +138,7 @@ export function remap(color, role) {
 }
 
 // Bounded, so a crafted value of unclosed rgb( cannot make matching quadratic.
-const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|(?:rgba?|hsla?|hwb|oklab|oklch|color)\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
+const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
 const remapValue = (value, role) => value.replace(COLOR_TOKEN, t => remap(t, role) || t);
 
 // Colour declarations in a style sheet or a style attribute. Declarations with an image are kept.

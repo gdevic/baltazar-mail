@@ -8,12 +8,12 @@
 // shows the message it came with in the reader.
 
 import { tile, sizeStr, open as preview, download } from "./viewer.js";
-import { esc, noBidi } from "./text.js";
+import { esc, noBidi, plural } from "./text.js";
+import { norm } from "./mime.js";
 
 const $ = id => document.getElementById(id);
-export const PAGE = 100;
+const PAGE = 100;
 const KEY = "folderFiles";
-const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 // "2 attachments", or "100+ attachments" while more pages remain
 const counted = () => `${st.items.length}${st.more ? "+" : ""} attachment${st.items.length === 1 && !st.more ? "" : "s"}`;
 
@@ -21,7 +21,6 @@ const counted = () => `${st.items.length}${st.more ? "+" : ""} attachment${st.it
 // Images built into a message's text (disposition inline) are not files, and neither is a picture
 // without a name: a sender's logo or icon that a provider counts as an attachment.
 export const isFile = a => !!a && a.disposition !== "inline" && (!!a.filename || !/^image$/i.test(a.type || ""));
-const norm = s => String(s || "").normalize("NFC").trim().toLowerCase();
 // A file sent again is one entry, listed with the newest message that carries it: the same
 // content where the provider names it (Yahoo's objectId), otherwise the same name and size.
 const sameAs = a => a.objectId ? `o:${a.objectId}` : a.filename && a.size ? `n:${norm(a.filename)}:${a.size}` : null;
@@ -90,8 +89,6 @@ export function init(h) {
   rows.oncontextmenu = e => { const i = at(e); if (i < 0) return; e.preventDefault(); select(i); rowMenu(e.clientX, e.clientY); };
 }
 
-export const isShown = () => st.shown;
-export const folderId = () => st.folderId;
 // The folders the list covers, to refresh it when one of them changes.
 export const scopeIds = () => (st.shown && hooks.scope(st.folderId, withSubs(st.folderId))?.ids) || [];
 

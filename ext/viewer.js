@@ -40,11 +40,10 @@ export function kindOf(a) {
   return "other";
 }
 const LABEL = { pdf: "PDF", image: "IMG", html: "HTML", audio: "AUD", video: "VID", zip: "ZIP", doc: "DOC", sheet: "XLS", slide: "PPT", code: "CODE", text: "TXT", other: "FILE" };
-const CLASS = { pdf: "k-pdf", image: "k-image", html: "k-html", audio: "k-audio", video: "k-video", zip: "k-zip", doc: "k-doc", sheet: "k-sheet", slide: "k-slide", code: "k-code", text: "k-text", other: "k-other" };
 // The coloured tile a file shows as: its kind's label, or for text and code its own extension.
 export function tile(a) {
   const k = kindOf(a), ext = extOf(a.filename);
-  return { kind: k, cls: CLASS[k], text: (k === "text" || k === "code") && ext ? ext.toUpperCase().slice(0, 4) : LABEL[k] };
+  return { kind: k, cls: `k-${k}`, text: (k === "text" || k === "code") && ext ? ext.toUpperCase().slice(0, 4) : LABEL[k] };
 }
 
 // { thumb(msgId, a) -> data URL | null, bytes(msgId, a) -> { bytes, type, filename }, docPages?(docId, start, end, retry),

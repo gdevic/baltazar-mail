@@ -22,15 +22,17 @@ export function rich(text) {
   return out;
 }
 
-// Copies a value and says so on the button; where the clipboard refuses, the value is selected for
-// the keyboard's copy instead.
+// Copies a value and says so on the button; where the clipboard refuses, the value on the page
+// (shown) is selected for the keyboard's copy instead. A value that is not on the page has nothing
+// to select, so the refusal is the caller's.
 export async function copyText(value, button, shown) {
   const label = button.dataset.label ||= button.textContent;
   try {
     await navigator.clipboard.writeText(value);
     button.textContent = "Copied";
-  } catch {
-    if (shown) { const r = document.createRange(); r.selectNodeContents(shown); getSelection().removeAllRanges(); getSelection().addRange(r); }
+  } catch (e) {
+    if (!shown) throw e;
+    const r = document.createRange(); r.selectNodeContents(shown); getSelection().removeAllRanges(); getSelection().addRange(r);
     button.textContent = /Mac/.test(navigator.platform) ? "Press ⌘C" : "Press Ctrl+C";
   }
   clearTimeout(button.copyTimer);

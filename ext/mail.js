@@ -9,9 +9,9 @@ import * as contactsFile from "./contactsfile.js";
 import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
-import { esc, noBidi } from "./text.js";
+import { esc, noBidi, plural } from "./text.js";
 import { cleanLink } from "./links.js";
-import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow } from "./guide.js";
+import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow, copyText } from "./guide.js";
 import * as awake from "./awake.js";
 
 const $ = id => document.getElementById(id);
@@ -109,7 +109,6 @@ const status = (msg, ms) => { saidAt = Date.now(); $("st-msg").textContent = msg
 // once what it last said has been there long enough to read, and does not count as said itself.
 const SAID_FOR = 4000;
 const statusQuietly = msg => { if (Date.now() - saidAt >= SAID_FOR) $("st-msg").textContent = msg; };
-const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || null) : null;
 // System folders of the primary account (the one holding the mailbox's own Inbox, folder 1 at
 // Yahoo); linked accounts bring an Inbox, Sent and so on of their own.
@@ -174,11 +173,7 @@ $("notice-close").onclick = () => $("notice").classList.add("hidden");
 async function copyReport(report, button) {
   let text = report;
   try { const how = (await chrome.management.getSelf()).installType; text = text.replace(/^[^\n]*/, m => `${m} (${how})`); } catch { /* version alone */ }
-  try {
-    await navigator.clipboard.writeText(text);
-    button.textContent = "Copied";
-    setTimeout(() => { button.textContent = "Copy details"; }, 1500);
-  } catch { status("could not copy to the clipboard"); }
+  try { await copyText(text, button); } catch { status("could not copy to the clipboard"); }
 }
 $("notice-copy").onclick = () => copyReport(noticeReport, $("notice-copy"));
 
@@ -796,7 +791,7 @@ function emptyNote() {
     const f = state.byId.get(v.folderId);
     main = `No messages in ${esc(folderName(f) || "this folder")}.`;
     // An empty parent folder often just groups subfolders; say where the mail is.
-    const subs = f ? state.folders.filter(x => x.name.startsWith(f.name + "/") && !isHidden(x)) : [];
+    const subs = f ? subfolders(f).filter(x => !isHidden(x)) : [];
     const total = subs.reduce((s, x) => s + (x.total || 0), 0);
     if (subs.length) sub = total ? `Its ${subs.length} subfolder${subs.length === 1 ? " holds" : "s hold"} ${total.toLocaleString()} message${total === 1 ? "" : "s"}.` : "Its subfolders are empty too.";
   }
@@ -2080,7 +2075,7 @@ async function openFiles(id) {
 // menus, dates and errors.
 function filesScope(id, withSubs) {
   const f = state.byId.get(id); if (!f) return null;
-  const subs = state.folders.filter(x => x.name.startsWith(f.name + "/") && sameAcct(x, f) && !isHidden(x));
+  const subs = subfolders(f).filter(x => !isHidden(x));
   return { name: folderName(f).split("/").pop(), full: folderName(f), ids: [f.id, ...(withSubs ? subs.map(x => x.id) : [])], subs: subs.length };
 }
 // The subfolder a file's message is in, named only when the message is not in the folder itself.
@@ -2225,7 +2220,7 @@ function scopeOfView(v = state.view) {
   if (v.kind === "search") return v.scope || (v.back ? scopeOfView(v.back) : null);
   const f = state.byId.get(v.kind === "files" ? v.of : v.folderId);
   if (!f) return null;
-  const subs = state.folders.filter(x => x.name.startsWith(f.name + "/") && !isHidden(x));
+  const subs = subfolders(f).filter(x => !isHidden(x));
   return { id: f.id, name: folderName(f).split("/").pop(), full: folderName(f), ids: [f.id, ...subs.map(x => x.id)], subs: subs.length };
 }
 
@@ -2758,11 +2753,11 @@ function buildTotals() {
 // that saw new mail during the first build) runs once it ends, so that mail is learned while it is
 // still in Inbox or Sent.
 let contactsRun = null, contactsAgain = false;
-function syncContacts(full = false) {
+function syncContacts() {
   if (contactsRun) { contactsAgain = true; return contactsRun; }
-  return contactsRun = runContactsSync(full).finally(() => { contactsRun = null; if (contactsAgain) { contactsAgain = false; syncContacts(); } });
+  return contactsRun = runContactsSync().finally(() => { contactsRun = null; if (contactsAgain) { contactsAgain = false; syncContacts(); } });
 }
-async function runContactsSync(full) {
+async function runContactsSync() {
   try {
     const own = [$("account").textContent];
     try { own.push(...(await api.accounts()).accounts.map(a => a.email)); } catch {}
@@ -2771,7 +2766,7 @@ async function runContactsSync(full) {
     const slow = first && !!api.LIMITS.scanAfter;
     if (slow && !(await chrome.storage.local.get(CONTACTS_AFTER))[CONTACTS_AFTER]) await chrome.storage.local.set({ [CONTACTS_AFTER]: Date.now() + api.LIMITS.scanAfter });
     let shownAt = 0;
-    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, drafts: folderByType("DRAFT")?.id, totals: buildTotals(), full, pace: slow ? untilIdle : null,
+    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, drafts: folderByType("DRAFT")?.id, totals: buildTotals(), pace: slow ? untilIdle : null,
       progress: first ? ({ read, total }) => {
         building = { read, total, from: building?.from ?? read, at: building?.at ?? Date.now() };
         statusQuietly(`building Contacts: ${buildProgress()}`);

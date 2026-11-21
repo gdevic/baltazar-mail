@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { noBidi } from "./text.js";
+import { nameLine } from "./contactsfile.js";
 
 // Address book built from the headers of the user's own mail (every folder but Spam, Trash and
 // Drafts when the book is first built, Inbox and Sent from then on), kept in IndexedDB. It feeds
@@ -153,9 +153,9 @@ export const isHidden = e => e.hidden ?? (!e.lastSent && guessed(e));
 // entry a name of their own (given), which is shown before any of them. names holds names recorded
 // before sources were kept, and counts as anyone else's.
 const SOURCES = ["mine", "self", "others"];
-const NAMES_KEPT = 8, NAME_MAX = 100;
+const NAMES_KEPT = 8;
 export function noteName(e, raw, source) {
-  const n = noBidi(raw).trim().slice(0, NAME_MAX);
+  const n = nameLine(raw);
   if (!n) return;
   const m = ((e.nameBy ||= {})[source] ||= {});
   m[n] = (m[n] || 0) + 1;
@@ -298,7 +298,14 @@ async function scanFolder(folderId, inSent, full, progress, pace, skip = null) {
 // provider whose first build goes only as the user allows (see paceWait). totals: how many
 // messages { sent, inbox, rest } hold, rest being what the last pass has to read. progress({ read,
 // total }): rows read so far of those the passes have to read, as far as totals says.
-export async function sync({ inbox, sent, drafts, totals = {}, full = false, progress, pace } = {}) {
+// One tab at a time reads mail into the book. A sync asked for in another tab while one runs is
+// left to that one, which fills the same book, so two tabs never ask for every page twice; a full
+// sync (a rebuild) waits its turn instead.
+export function sync(opts = {}) {
+  const locks = globalThis.navigator?.locks;
+  return locks ? locks.request("baltazar-mail-contacts", { ifAvailable: !opts.full }, lock => lock ? syncNow(opts) : 0) : syncNow(opts);
+}
+async function syncNow({ inbox, sent, drafts, totals = {}, full = false, progress, pace } = {}) {
   setInbox(inbox);
   await loadAll();
   const built = await getMeta("built");
@@ -414,7 +421,7 @@ export async function pinMany(emails, pinned = true) {
 }
 // The user's own name for an entry; "" takes it back, and the name the mail gives shows again.
 export async function rename(email, name) {
-  const given = noBidi(name).trim().slice(0, NAME_MAX);
+  const given = nameLine(name);
   await setFlags([email], e => { if (given) e.given = given; else delete e.given; e.name = bestName(e); });
 }
 // Contacts deleted: out of every list, and kept out whatever mail names them later, until a

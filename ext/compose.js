@@ -32,7 +32,6 @@ class AddrField {
   }
   set(list) { this.list = (list || []).map(a => ({ name: a.name || "", email: a.email })); this.render(); }
   get() { this.commit(false); return this.list.slice(); }
-  text() { return this.list.map(fmt).join(", ") + (this.input.value.trim() ? (this.list.length ? ", " : "") + this.input.value.trim() : ""); }
   isEmpty() { return !this.list.length && !this.input.value.trim(); }
   focus() { this.input.focus(); }
   add(a) { if (!this.list.some(x => x.email.toLowerCase() === a.email.toLowerCase())) this.list.push(a); dirty = true; this.render(); }
@@ -232,7 +231,7 @@ async function forgetFormat(csid) {
   if (csid in all) { delete all[csid]; try { await chrome.storage.local.set({ draftFormats: all }); } catch { /* harmless */ } }
 }
 // true for HTML, false for plain text
-export async function draftIsHtml(message, body) {
+async function draftIsHtml(message, body) {
   const rec = (await formatRecords())[message?.csid];
   if (rec) return rec === "html";
   const type = String(message?.headers?.mimeType || "").toLowerCase();
@@ -406,7 +405,7 @@ function switchMode(v) {
 // ---------- font controls ----------
 // The fonts offered, by the name shown, each with fallbacks for recipients who lack it: whatever
 // font is picked goes into the sent message, which is read on other systems.
-export const FONTS = [
+const FONTS = [
   ["Helvetica", "Helvetica Neue, Helvetica, Arial, sans-serif"],
   ["Arial", "Arial, Helvetica, sans-serif"],
   ["Segoe UI", "Segoe UI, -apple-system, Roboto, Helvetica Neue, Arial, sans-serif"],
@@ -446,7 +445,7 @@ function showValue(sel, value) {
   sel.value = opt.value;
 }
 
-export function syncFontControls() {
+function syncFontControls() {
   const ed = $("c-editor");
   const s = getSelection();
   let node = s.rangeCount && ed.contains(s.anchorNode) ? s.anchorNode : ed;
@@ -835,7 +834,7 @@ function dataImage(src) {
   } catch { return null; }
 }
 
-function extractInline(html, taken = new Set()) {
+function extractInline(html, taken) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   releaseImages(doc.body);
   const inline = [];
@@ -957,7 +956,7 @@ function withFiles(list, files) {
 // Files that would take the message over the provider's size limit are left out, with a notice.
 // A file already attached is not added again, so it counts once. Returns how many were attached.
 function addFiles(files) {
-  const have = draft.files.reduce((s, f) => s + f.size, 0) + (draft.refs || []).reduce((s, r) => s + (r.size || 0), 0);
+  const have = draft.files.reduce((s, f) => s + f.size, 0) + draft.refs.reduce((s, r) => s + (r.size || 0), 0);
   const fits = [], over = [];
   let used = have;
   for (const f of files) {
@@ -973,10 +972,10 @@ function addFiles(files) {
 function renderFiles() {
   const el = $("c-filelist");
   const kb = n => `${Math.max(1, Math.round(n / 1024))} KB`;
-  el.innerHTML = (draft.refs || []).map((r, i) => `<span class="c-file" title="Forwarded from the original message">↪ ${esc(r.filename)} <i>${kb(r.size)}</i> <a href="#" data-ref="${i}" title="Remove" tabindex="-1">×</a></span>`).join("") +
+  el.innerHTML = draft.refs.map((r, i) => `<span class="c-file" title="Forwarded from the original message">↪ ${esc(r.filename)} <i>${kb(r.size)}</i> <a href="#" data-ref="${i}" title="Remove" tabindex="-1">×</a></span>`).join("") +
     draft.files.map((f, i) => `<span class="c-file">${esc(f.name)} <i>${kb(f.size)}</i> <a href="#" data-i="${i}" title="Remove" tabindex="-1">×</a></span>`).join("");
   // The row sits under Subject and shows only while something is attached.
-  $("c-attached-row").classList.toggle("hidden", !(draft.refs || []).length && !draft.files.length);
+  $("c-attached-row").classList.toggle("hidden", !draft.refs.length && !draft.files.length);
   el.onclick = e => {
     const a = e.target.closest("a[data-i], a[data-ref]"); if (!a) return;
     e.preventDefault();
@@ -1032,7 +1031,7 @@ export function replyRecipients(mode, h, mine) {
 // A picture is content, though it adds nothing to the text.
 function hasContent() {
   const editor = $("c-editor");
-  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? editor.innerText.trim() || editor.querySelector("img") : $("c-text").value.trim()) || draft.files.length || draft.refs?.length);
+  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? editor.innerText.trim() || editor.querySelector("img") : $("c-text").value.trim()) || draft.files.length || draft.refs.length);
 }
 
 function strictGet(f) { if (!f.commit(true)) throw new Error(`Not an address: ${f.input.value.trim()}`); return f.get(); }
@@ -1053,7 +1052,7 @@ function collect(upload = false, { chipsOnly = false } = {}) {
   const d = {
     csid: draft.csid, from, replyTo: acct?.replyToAddress ? { email: acct.replyToAddress } : from,
     to: who(fields.to), cc: who(fields.cc), bcc: who(fields.bcc),
-    subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files, refs: draft.refs || [],
+    subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files, refs: draft.refs,
     ownRefs: false, draftFolderId: hooks.folderByType("DRAFT")?.id,
   };
   if (!upload && draft.files.some(f => stored.has(f))) {
@@ -1111,7 +1110,7 @@ async function saveNow(silent = false, { tick = false } = {}) {
 }
 function forgetStored(mine) { for (const f of mine.files) stored.delete(f); }
 // Every file uploaded again, with only the references to other messages' parts.
-function uploadAll(mine) { return { files: mine.files, refs: mine.refs || [], ownRefs: false }; }
+function uploadAll(mine) { return { files: mine.files, refs: mine.refs, ownRefs: false }; }
 // Notes which part of the saved draft holds each file (names are unique within a message).
 function remember(mine, message) {
   if (!message?.id) return;
@@ -1156,7 +1155,7 @@ async function reopenFrom(snap) {
     return;
   }
   await loadAccounts();
-  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs || [], savedId: snap.savedId, html: snap.html, images: snap.images };
+  draft = { csid: snap.csid, mode: snap.mode, inReplyTo: snap.inReplyTo, files: snap.files, refs: snap.refs, savedId: snap.savedId, html: snap.html, images: snap.images };
   $("c-title").textContent = "Message not sent";
   $("c-from").value = snap.d.from.email;
   fields.to.set(snap.d.to); fields.cc.set(snap.d.cc); fields.bcc.set(snap.d.bcc);

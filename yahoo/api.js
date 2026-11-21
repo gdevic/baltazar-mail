@@ -169,7 +169,7 @@ const uuid = () => crypto.randomUUID();
 // One batch envelope, one HTTP round trip. Returns the inner responses array. retry allows one
 // fresh sign-in after a 401/403 or a session Yahoo refuses (EC-4008, EC-4003) and, separately,
 // one retry after EP-4010 (header rule not ready).
-export async function batch(name, requests, retry = true, files = [], headers = {}) {
+async function batch(name, requests, retry = true, files = [], headers = {}) {
   return attempt(name, requests, files, headers, { auth: retry, rules: retry });
 }
 async function attempt(name, requests, files, headers, tries) {

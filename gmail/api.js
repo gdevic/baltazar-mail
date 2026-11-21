@@ -24,7 +24,6 @@ const BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1";
 const ALL = "ALL";                       // the All Mail pseudo folder: every message without a label filter
 const SYSTEM = { INBOX: ["INBOX", "Inbox"], DRAFT: ["DRAFT", "Drafts"], SENT: ["SENT", "Sent"], SPAM: ["BULK", "Spam"], TRASH: ["TRASH", "Trash"] };
 const FOLDER_LABELS = new Set(["INBOX", "SPAM", "TRASH"]);   // system labels that act as a message's folder
-const HIDDEN = /^(STARRED|UNREAD|IMPORTANT|CHAT|CATEGORY_.*)$/;
 const PAGE_MAX = 500;
 
 export class ApiError extends Error {
@@ -131,16 +130,14 @@ function compile(node, neg = false, within = null) {
 export const dialect = { atom, compile: ast => compile(ast) };
 
 // ---------- sign-in ----------
-let session = null;
 export async function bootstrap(force = false) {
   const t = await getToken({ force });
-  session = { email: t.email, at: Date.now() };
-  return session;
+  return { email: t.email, at: Date.now() };
 }
 // The sign-in button. A sign-in that succeeds ends the setup guide.
 export async function signIn() {
   const t = await getToken({ interactive: true });
-  session = { email: t.email, at: Date.now() };
+  const session = { email: t.email, at: Date.now() };
   await chrome.storage.local.remove(SETUP);
   return session;
 }
@@ -189,7 +186,7 @@ export const setup = {
 // Ends the sign-in at Google, then forgets everything learnt about the mailbox.
 export async function signOut() {
   await revoke();
-  session = null; historyId = null; profileCache = null; labelList = []; draftsLoadedAt = 0;
+  historyId = null; labelList = []; draftsLoadedAt = 0;
   for (const m of [modseq, lastCounts, knownCounts, labelName, labelsOf, rowCache, draftOf, knownDrafts, cursors, partRefs, bytesCache, thumbCache, inlineCache, originals]) m.clear();
 }
 
@@ -370,12 +367,8 @@ export function decodeBatch(text, boundary, n) {
 const labelName = new Map();       // label id -> name shown as the folder's path
 const labelsOf = new Map();        // message id -> its labelIds, from every row and body seen
 let labelList = [];                // the last labels.list answer
-let profileCache = null;
 
-async function profile() {
-  profileCache = await call("GET", "/profile");
-  return profileCache;
-}
+const profile = () => call("GET", "/profile");
 
 // Changes since the last look, as Gmail's history reports them: each label named in a record
 // gets a new stamp, which the client compares as a folder's highestModSeq. A history Gmail no
@@ -557,7 +550,7 @@ function folderOf(labelIds = [], listed = null) {
   const has = l => labelIds.includes(l);
   const id = listed && listed !== ALL && has(listed) ? listed
     : has("TRASH") ? "TRASH" : has("SPAM") ? "SPAM" : has("DRAFT") ? "DRAFT" : has("INBOX") ? "INBOX"
-    : labelIds.find(l => labelName.has(l) && !SYSTEM[l] && !HIDDEN.test(l)) || (has("SENT") ? "SENT" : ALL);
+    : labelIds.find(l => labelName.has(l) && !SYSTEM[l]) || (has("SENT") ? "SENT" : ALL);
   return { id, name: labelName.get(id) || id };
 }
 

@@ -33,20 +33,32 @@ function quotedPrintable(text) {
   return out + line;
 }
 
-// RFC 2047 encoded words for header text outside ASCII, each under 76 characters and split only
-// between characters, folded onto continuation lines.
-function encodedWords(s) {
+// RFC 2047 encoded words for header text outside ASCII, split only between characters and folded
+// onto continuation lines, so that no line holding one passes 76 characters: lead is how much of
+// the first line comes before the first word (a header's name), the others start with a space.
+function encodedWords(s, lead = 1) {
+  const room = n => Math.floor((75 - 12 - n) / 4) * 3;     // the bytes a word of n's line can hold
   const chunks = [];
-  let buf = [];
+  let buf = [], max = room(lead);
   for (const ch of s) {
     const b = enc.encode(ch);
-    if (buf.length + b.length > 45) { chunks.push(buf); buf = []; }
+    if (buf.length && buf.length + b.length > max) { chunks.push(buf); buf = []; max = room(1); }
     buf.push(...b);
   }
   if (buf.length) chunks.push(buf);
   return chunks.map(c => `=?utf-8?B?${base64(Uint8Array.from(c))}?=`).join(`${CRLF} `);
 }
-const headerText = s => ASCII.test(s) ? s : encodedWords(s);
+// ASCII header text folded at its spaces to keep lines short (RFC 5322 asks for 78 at most);
+// a word longer than a line goes whole.
+function foldText(s, lead) {
+  let out = "", line = lead;
+  for (const word of s.split(" ")) {
+    if (line > lead && line + 1 + word.length > 78) { out += `${CRLF} ${word}`; line = 1 + word.length; }
+    else { out += (line > lead ? " " : "") + word; line += (line > lead ? 1 : 0) + word.length; }
+  }
+  return out;
+}
+const headerText = (s, lead) => ASCII.test(s) ? foldText(s, lead) : encodedWords(s, lead);
 
 // One address: a local part and a domain around a single @, with no white space and none of the
 // characters that separate addresses or open a comment, a quoted string or a route. The composer
@@ -61,7 +73,7 @@ function formatAddress(a) {
   const email = String(a?.email || "").trim(), name = String(a?.name || "").trim();
   if (!ADDR_SPEC.test(email)) throw new Error(`Not an address: ${email.slice(0, 80) || "(none given)"}`);
   if (!name) return email;
-  if (!ASCII.test(name)) return `${encodedWords(name)} <${email}>`;
+  if (!ASCII.test(name)) return `${encodedWords(name, 5)}${CRLF} <${email}>`;
   return SPECIALS.test(name) ? `"${name.replace(/["\\]/g, "\\$&")}" <${email}>` : `${name} <${email}>`;
 }
 const addressList = list => (list || []).map(formatAddress).filter(Boolean).join(`,${CRLF} `);
@@ -70,12 +82,20 @@ const addressList = list => (list || []).map(formatAddress).filter(Boolean).join
 export const rfcDate = (d = new Date()) => d.toUTCString().replace(/GMT$/, "+0000");
 
 // A file name parameter: plain ASCII in quotes, otherwise RFC 2231 with an encoded-word fallback.
-// RFC 2231 keeps ' ( ) and * for its own syntax, so they are escaped as well.
+// RFC 2231 keeps ' ( ) and * for its own syntax, so they are escaped as well. Each goes on lines
+// of its own: the fallback's words one a line inside its quotes, and the RFC 2231 value in
+// numbered pieces (key*0*, key*1*, ...), cut between escapes.
 const extValue = s => encodeURIComponent(s).replace(/['()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 function nameParams(name, key) {
   const n = String(name || "attachment").replace(/[\r\n]/g, " ");
   if (ASCII.test(n)) return `${key}="${n.replace(/["\\]/g, "\\$&")}"`;
-  return `${key}="${encodedWords(n).replace(/\r\n /g, " ")}"; ${key}*=utf-8''${extValue(n)}`;
+  const pieces = [], value = `utf-8''${extValue(n)}`;
+  for (let i = 0; i < value.length;) {
+    let end = Math.min(value.length, i + 60);
+    if (value[end - 1] === "%") end -= 1; else if (value[end - 2] === "%") end -= 2;
+    pieces.push(value.slice(i, end)); i = end;
+  }
+  return `${CRLF} ${key}="${encodedWords(n, key.length + 3)}";` + pieces.map((p, i) => `${CRLF} ${key}*${i}*=${p}`).join(";");
 }
 
 // ---------- entities ----------
@@ -100,9 +120,10 @@ async function fileEntity(file, { inline = false, contentId = null } = {}) {
 }
 
 const boundary = () => `=_${crypto.randomUUID()}`;
-function multipart(subtype, parts) {
+// type: the type of the first part, which multipart/related names (RFC 2387)
+function multipart(subtype, parts, type = null) {
   const b = boundary();
-  return entity([`Content-Type: multipart/${subtype}; boundary="${b}"`], parts.map(p => `--${b}${CRLF}${p}${CRLF}`).join("") + `--${b}--${CRLF}`);
+  return entity([`Content-Type: multipart/${subtype};${CRLF} boundary="${b}"${type ? `;${CRLF} type="${type}"` : ""}`], parts.map(p => `--${b}${CRLF}${p}${CRLF}`).join("") + `--${b}--${CRLF}`);
 }
 
 // ---------- the message ----------
@@ -112,7 +133,7 @@ function multipart(subtype, parts) {
 // entity, and with files in a mixed one.
 export async function build(m) {
   let body = m.html != null ? textEntity("text/html", m.html) : textEntity("text/plain", m.text || "");
-  if (m.inline?.length) body = multipart("related", [body, ...await Promise.all(m.inline.map(i => fileEntity(i.file, { inline: true, contentId: i.contentId })))]);
+  if (m.inline?.length) body = multipart("related", [body, ...await Promise.all(m.inline.map(i => fileEntity(i.file, { inline: true, contentId: i.contentId })))], m.html != null ? "text/html" : "text/plain");
   const files = [...(m.files || []), ...(m.extra || [])];
   if (files.length) body = multipart("mixed", [body, ...await Promise.all(files.map(f => fileEntity(f)))]);
   const headers = [`From: ${formatAddress(m.from)}`];
@@ -120,7 +141,7 @@ export async function build(m) {
   if (m.cc?.length) headers.push(`Cc: ${addressList(m.cc)}`);
   if (m.bcc?.length) headers.push(`Bcc: ${addressList(m.bcc)}`);
   if (m.replyTo?.email && m.replyTo.email !== m.from?.email) headers.push(`Reply-To: ${formatAddress(m.replyTo)}`);
-  headers.push(`Subject: ${headerText(String(m.subject || "").replace(/[\r\n]+/g, " "))}`);
+  headers.push(`Subject: ${headerText(String(m.subject || "").replace(/[\r\n]+/g, " "), 9)}`);
   headers.push(`Date: ${m.date || rfcDate()}`);
   headers.push(`Message-ID: <${m.messageId || `${crypto.randomUUID()}@baltazar-mail`}>`);
   if (m.inReplyTo) headers.push(`In-Reply-To: ${m.inReplyTo}`);

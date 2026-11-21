@@ -43,7 +43,7 @@ const headersOf = raw => { const h = {}; for (const line of text(raw).split("\r\
   ok(text(raw).includes("Content-ID: <img1@baltazar-mail>") && /Content-Disposition: inline; filename="inline-1.png"/.test(text(raw)), "inline part carries its Content-ID and disposition");
   ok(JSON.stringify([...extract(parsed, "1.2").bytes]) === JSON.stringify([...png]), "inline bytes round-trip");
   ok(text(extract(parsed, "2").bytes) === "name,qty\nZ80,2\n", "a File attachment round-trips");
-  ok(/filename\*=utf-8''%C3%A9t%C3%A9\.pdf/.test(text(raw)), "non-ASCII file name in RFC 2231 form");
+  ok(/filename\*0\*=utf-8''%C3%A9t%C3%A9\.pdf/.test(text(raw)), "non-ASCII file name in RFC 2231 form");
 }
 // a plain-text message is one entity, with trailing white space protected
 {
@@ -66,7 +66,17 @@ const headersOf = raw => { const h = {}; for (const line of text(raw).split("\r\
 // a file name outside ASCII escapes what RFC 2231 keeps for itself
 {
   const raw = await build({ from: { email: "me@x.com" }, to: [{ email: "a@x.com" }], subject: "s", text: "", files: [{ name: "été (1)'*.pdf", type: "application/pdf", bytes: new Uint8Array([1]) }] });
-  ok(text(raw).includes("filename*=utf-8''%C3%A9t%C3%A9%20%281%29%27%2A.pdf"), "RFC 2231 value escapes ' ( ) *: " + (text(raw).match(/filename\*=\S+/) || [])[0]);
+  ok(text(raw).includes("filename*0*=utf-8''%C3%A9t%C3%A9%20%281%29%27%2A.pdf"), "RFC 2231 value escapes ' ( ) *: " + (text(raw).match(/filename\*0\*=\S+/) || [])[0]);
+}
+// header lines stay short: a long name outside ASCII goes in RFC 2231 pieces, a subject is folded,
+// and no line holding an encoded word passes 76 characters
+{
+  const name = "Отчёт о проделанной работе за третий квартал две тысячи двадцать шестого года.pdf";
+  const raw = await build({ from: { email: "me@x.com" }, to: [{ name: "Зоя Кузнецова-Святославская", email: "z@x.com" }], subject: "Протокол встречи по бюджету на следующий год и всем связанным вопросам " + "word ".repeat(30),
+    html: "<p>a</p>", inline: [{ file: { name: "p.png", type: "image/png", bytes: new Uint8Array([137, 80, 78, 71]) }, contentId: "c1" }], files: [{ name, type: "application/pdf", bytes: new Uint8Array([37, 80]) }] });
+  const lines = text(raw).split("\r\n"), parts = listParts(raw).parts;
+  ok(!lines.some(l => l.length > 78) && !lines.some(l => /=\?/.test(l) && l.length > 76) && parts.some(p => p.filename === name) && /filename\*1\*=/.test(text(raw)) && /type="text\/html"/.test(text(raw)),
+    "short header lines, the name read back, multipart/related names its type: " + JSON.stringify(lines.filter(l => l.length > 76).map(l => l.length)));
 }
 // an address is written only when it is one address
 {

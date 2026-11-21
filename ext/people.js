@@ -33,7 +33,7 @@
 // the list last for the session.
 
 import * as contacts from "./contacts.js";
-import { esc, noBidi } from "./text.js";
+import { esc, noBidi, plural } from "./text.js";
 
 const $ = id => document.getElementById(id);
 const CHUNK = 300;               // rows listed at first, and added by Show more
@@ -41,7 +41,6 @@ const RECENT = 10;               // messages on a person's page
 const FIND_MAX = 20;             // addresses one search can name
 const WRITE_MAX = 100;           // people one message can be started to
 const FRESH = 3600;              // seconds a contact's last mail must be old before a search finding none is believed
-const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : (/(s|ch)$/.test(w) ? "es" : "s")}`;
 
 const PIN = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.6 1.8 14.2 6.4 12.9 7.1 10.6 6.9 8.3 9.2 8.5 12 7.4 13.1 2.9 8.6 4 7.5 6.8 7.7 9.1 5.4 8.9 3.1z M5.1 10.9 2 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const EYE = `<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>`;
