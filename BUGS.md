@@ -6,14 +6,9 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 | # | Severity | Area | Finding | Confidence |
 |---|---|---|---|---|
-| COMP-3 | Medium | Writing | A new message holding only a picture is closed without saving or asking | confirmed |
-| COMP-5 | Medium | Writing | A draft whose picture could not be fetched opens, and its next save strips the picture | confirmed |
-| COMP-6 | Medium | Writing | A message restored by undo-send is overwritten by a composer still loading | confirmed |
 | COMP-2 | Medium | Writing | SVG, AVIF, TIFF, HEIC and ICO pictures in the text are left out of the message | reproduced |
 | COMP-4 | Medium | Writing | Autosave commits, or complains about, the address being typed | confirmed |
-| MIME-1 | Medium | Attachments | Base64 padded block by block decodes to corrupt bytes | reproduced |
 | ADPT-4 | Medium | Gmail | A send answered 5xx after it was sent goes out twice | likely |
-| CONT-1 | Medium | Contacts | A database version upgrade forgets whose address book it is | reproduced |
 | CONT-6 | Medium | Contacts | Importing an unchanged export rewrites the user's choices | reproduced |
 | CONT-4 | Medium | Contacts | An import line with several bracketed addresses becomes one contact | reproduced |
 | CONT-2 | Medium | Contacts | Undoing the delete of a draft records its recipients as people the user wrote to | reproduced |
@@ -37,18 +32,6 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 ## Medium
 
-### COMP-3. A new message holding only a picture is closed without saving or asking
-
-`ext/compose.js:997-999`: `hasContent` reads the editor's `innerText`, to which an img adds nothing, and close, autosave, `hasUnsaved` (the tab's leave prompt) and Discard rely on it. On an account without a signature, a screenshot pasted into a new message is lost without a prompt when the user opens another message, presses Esc or closes the tab. Fix: count an img in the editor as content. Confirmed.
-
-### COMP-5. A draft whose picture could not be fetched opens, and its next save strips the picture
-
-`ext/mail.js:1434-1437` (`editDraft`), `ext/mail.js:1048-1056` (`inlineImages`), `ext/compose.js:816` (`extractInline`), `isStrayImage` in `yahoo/api.js:36-39` and `gmail/api.js:55`. `editDraft` keeps a draft closed when its attachments cannot be loaded, as its comment says it does for images too, but it does not check the inline pictures: one that failed (a network blip, a Gmail error, a Yahoo part refused in a message over 10 MB) or any past the 60th keeps its source address, which the next autosave removes as a stray image. Fix: have `inlineImages` report its own sources it could not convert, and keep the draft closed then. Confirmed.
-
-### COMP-6. A message restored by undo-send is overwritten by a composer still loading
-
-`ext/compose.js:1102-1128` (`reopenFrom`), `ext/compose.js:235-242` (`open` checks nothing), `ext/mail.js:1408-1452` (`startCompose`, `editDraft`), `ext/mail.js:1482-1491` (`cancelSend`). Both callers close the composer, wait on the network, then call `compose.open`; their only guard is `composeSeq`, which `reopenFrom` does not change. Send message A (10 s hold), open draft B, which has attachments, and press z while B loads, or let A's send fail: A reopens and B's `open()` replaces it, so A is lost or kept only as of its last autosave. Reply on a message with inline pictures has the same window. Fix: close (saving) again in `open()`, or right before it in both callers. Confirmed.
-
 ### COMP-2. SVG, AVIF, TIFF, HEIC and ICO pictures in the text are left out of the message
 
 `ext/compose.js:145-157` (the picker, paste and drop take any `image/*`), `ext/compose.js:626-638` (`insertImages` checks only the size), `ext/compose.js:817-819` (`extractInline` drops what it cannot send inline), `ext/bytes.js:29-33` (`sniffImage` knows PNG, JPEG, GIF, BMP and WebP). The picture shows in the editor, never reaches the recipient, and is gone from a reopened draft, with no message; dropped elsewhere on the composer the same file would have been attached. Fix: attach a picture that cannot go inline, with a status line. Reproduced.
@@ -57,17 +40,9 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 `ext/compose.js:312` (the timer), `ext/compose.js:1004-1009` and `1042` (`collect` calls `strictGet`), `ext/compose.js:1001`, `ext/compose.js:39-43` (`commit(true)` adds what parses and warns about what does not). If the 30 s tick lands while `john.smith@company.com` is half typed, either `john.smith@company.c` becomes a chip and the rest is typed on its own, or "Not an address: john.smith@comp" appears, and again every 30 s. The comment on `saveNow` promises no message about an unfinished address during a silent save. Fix: a draft save takes only the chips; `strictGet` is for sending. Confirmed.
 
-### MIME-1. Base64 padded block by block decodes to corrupt bytes
-
-`ext/mime.js:156` removes `=` padding inside the stream, which shifts every later byte. A sender that pads each encoded block (a loop of `base64_encode` over 8 KB reads) gives, in the Yahoo edition, a download of the right length with wrong bytes, a failed preview, or an error; inline images cut from the source are hit the same way. Gmail decodes on its server. Fix: split after each run of `=` that has more data after it, and decode the pieces separately. Reproduced with tools/fixtures/budget.xlsx.
-
 ### ADPT-4. Gmail: a send answered 5xx after it was sent goes out twice
 
 `gmail/api.js:288-291` (`call` retries 500 to 504), `gmail/api.js:962-974` (`upload`), `gmail/api.js:1003-1004` (`send`). When `drafts.send` answers 503 although the message went out, `call()` repeats it and gets 404, since the draft is gone; `send()` reads that as a draft deleted elsewhere and sends again with `messages.send`. The retry in `saveDraft` can likewise leave a second draft. Fix: never retry a send upload on 5xx and never fall back to `messages.send` after a retried `drafts.send`; word a 5xx as the timeout is worded ("check Sent"). Likely: the chain is reproduced against the mock; that Gmail answers 5xx after sending is not recorded.
-
-### CONT-1. A database version upgrade forgets whose address book it is
-
-`ext/contacts.js:43` clears the whole meta store on an upgrade, the `account` key with it, and `useAccount` (`ext/contacts.js:340-345`) treats a book without an account as the first account's. A user with two accounts whose book was built for one, who first opens the next database version while signed in as the other, gets the first account's book, with its pins, hidden addresses, given names and deleted contacts, marked as the second's. It happens at the next `DB_VERSION` bump. Fix: on an upgrade delete every meta key but `account`. Reproduced.
 
 ### CONT-6. Importing an unchanged export rewrites the user's choices
 

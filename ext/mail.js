@@ -1043,17 +1043,25 @@ function cleanHtml(html) {
 // Inline images (cid parts of the message) cannot be loaded by the sandboxed frame, which has no
 // session; the provider fetches them here (api.inlineSource) and they go to the frame as data:
 // URLs. body: the api.body result the HTML belongs to. Only sources the provider recognises as
-// references to that message's own parts are asked for, at most 60 per message, so references to
-// anything else take none of the 60.
-async function inlineImages(html, body) {
+// references to that message's own parts are asked for, at most max per message (60 to read
+// one), so references to anything else take none of them.
+const ownImages = (root, body) => [...root.querySelectorAll("img[src]")].filter(img => api.isInlineRef(img.getAttribute("src"), body));
+async function inlineImages(html, body, max = 60) {
   const tpl = document.createElement("template");      // inert: nothing in it loads
   tpl.innerHTML = html;
-  const imgs = [...tpl.content.querySelectorAll("img[src]")].filter(img => api.isInlineRef(img.getAttribute("src"), body));
+  const imgs = ownImages(tpl.content, body);
   if (!imgs.length) return html;
-  const srcs = [...new Set(imgs.map(img => img.getAttribute("src")))].slice(0, 60);
+  const srcs = [...new Set(imgs.map(img => img.getAttribute("src")))].slice(0, max);
   const got = new Map(await Promise.all(srcs.map(async s => [s, await api.inlineSource(s, body).catch(() => null)])));
   for (const img of imgs) { const d = got.get(img.getAttribute("src")); if (typeof d === "string") img.setAttribute("src", d); }
   return tpl.innerHTML;
+}
+// How many of the message's own inline pictures its HTML still refers to, after inlineImages:
+// those that could not be fetched.
+function imagesLeft(html, body) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  return new Set(ownImages(tpl.content, body).map(img => img.getAttribute("src"))).size;
 }
 
 // ---------- contact cards ----------
@@ -1414,18 +1422,20 @@ async function startCompose(mode) {
   if (mode !== "new" && (!body || !state.openId || body.message.id !== state.openId)) { status("open a message first"); return; }
   hideReaderForCompose(true);
   try {
-    if (mode === "new") { await compose.open({ mode, myEmail: me }); return true; }
+    // the reader stays hidden only if a composer is open once the opening is over
+    if (mode === "new") { const opened = await compose.open({ mode, myEmail: me }); hideReaderForCompose(compose.isOpen()); return opened; }
     status("preparing...");
     const html = await inlineImages(body.html, body);
     if (seq !== composeSeq) return;
     body.html = html;
-    await compose.open({ mode, message: body.message, body, images, myEmail: me });
+    const opened = await compose.open({ mode, message: body.message, body, images, myEmail: me });
+    hideReaderForCompose(compose.isOpen());
     status("");
-    return true;
+    return opened;
   } catch (e) { if (!compose.isOpen()) hideReaderForCompose(false); handleError(e, "compose"); }
 }
 
-async function editDraft(i) {
+async function editDraft(i, { anyway = false } = {}) {
   const m = state.messages[i]; if (!m) return;
   const seq = ++composeSeq;              // a later click on another draft wins
   if (!(await compose.close(true))) return;
@@ -1435,8 +1445,16 @@ async function editDraft(i) {
   if (seq !== composeSeq) return;
   // Each save replaces the draft, so its inline images and attachments must travel again with
   // it: images as embedded data, attachments as files fetched from the provider. If they cannot
-  // be loaded the draft stays closed, so a save cannot strip them.
-  r.html = await inlineImages(r.html, r);
+  // be loaded the draft stays closed, so a save cannot strip them; a picture that cannot be had
+  // at all may be given up with Open anyway.
+  r.html = await inlineImages(r.html, r, Infinity);
+  if (seq !== composeSeq) return;
+  const missing = imagesLeft(r.html, r);
+  if (missing && !anyway) {
+    const reopen = () => { clearNotice("draft"); const j = state.messages.findIndex(x => x.id === m.id); if (j >= 0) editDraft(j, { anyway: true }); };
+    notify(`Could not load ${plural(missing, "picture")} of the draft, so it was not opened: saving it would leave ${missing === 1 ? "that picture" : "them"} out.`, { key: "draft", what: "draft", action: { label: "Open anyway", run: reopen } });
+    return;
+  }
   const atts = r.attachments.filter(a => a.disposition !== "inline" && a.partId);
   let files = [];
   if (atts.length) {
@@ -1451,6 +1469,7 @@ async function editDraft(i) {
   if (seq !== composeSeq) return;
   hideReaderForCompose(true);
   await compose.open({ mode: "draft", message: r.message, body: r, files, partIds: atts.map(a => a.partId), myEmail: $("account").textContent });
+  hideReaderForCompose(compose.isOpen());
   status("");
 }
 

@@ -150,10 +150,23 @@ export function listParts(bytes) {
   return { s, parts: out };
 }
 
+// Base64 as senders write it: what is not in the alphabet is dropped, and padding with more text
+// after it ends a block, since some senders encode and pad each block of a file on its own (and
+// a soft line break leaves an "=" in the text), so each block is decoded by itself. A block that
+// ends one character into a group carries no byte in it.
+function base64(text) {
+  let bin = "";
+  for (const block of text.replace(/[^A-Za-z0-9+/=]/g, "").split(/(?<==)(?=[A-Za-z0-9+/])/)) {
+    const b = block.replace(/=+$/, "");
+    bin += atob(b.length % 4 === 1 ? b.slice(0, -1) : b);
+  }
+  return bin;
+}
+
 function decodeBody(s, p) {
   const body = s.slice(p.start, p.end);
   let bin;
-  if (p.encoding === "base64") bin = atob(body.replace(/[^A-Za-z0-9+/=]/g, "").replace(/=+(?=[A-Za-z0-9+/])/g, ""));
+  if (p.encoding === "base64") bin = base64(body);
   // quoted-printable: whitespace at a line end is padding, also after a soft break's "="
   else if (p.encoding === "quoted-printable") bin = body.replace(/=[ \t]*\r?\n/g, "").replace(/[ \t]+(?=\r?\n|$)/g, "").replace(/=([0-9A-Fa-f]{2})/g, (x, h) => String.fromCharCode(parseInt(h, 16)));
   else bin = body;

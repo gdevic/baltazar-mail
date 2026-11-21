@@ -390,6 +390,42 @@ scenario("an address book of another database version is invalidated once: a low
     "a book of a higher version is dropped whole and a new one built under this version: " + JSON.stringify(newer));
 }, { settings: { pollSec: 600 } });
 
+// The upgrade keeps whose book it is: one kept for another account starts afresh for this one,
+// and the account's own keeps what the user chose.
+scenario("an address book of an older version kept for another account is not handed to this one", async (h, expect) => {
+  const { page } = h;
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the app's own build has finished
+  const r = {};
+  for (const account of ["other@yahoo.com", "me@yahoo.com"]) {
+    await page.goto(`chrome-extension://${h.extId}/mail.css`);
+    await page.evaluate(account => new Promise((ok, no) => {
+      const del = indexedDB.deleteDatabase("baltazar-mail");
+      del.onerror = () => no(del.error);
+      del.onsuccess = () => {
+        const req = indexedDB.open("baltazar-mail", 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore("contacts", { keyPath: "email" }); req.result.createObjectStore("meta", { keyPath: "key" }); };
+        req.onerror = () => no(req.error);
+        req.onsuccess = () => {
+          const d = req.result, t = d.transaction(["contacts", "meta"], "readwrite");
+          t.objectStore("contacts").put({ email: "pin@old.example", name: "Pin Ned", nameBy: {}, last: 1500000000, lastSent: 0, pinned: 1600000000 });
+          for (const m of [{ key: "built", value: 1600000000000 }, { key: "account", value: account }]) t.objectStore("meta").put(m);
+          t.oncomplete = () => { d.close(); ok(); }; t.onerror = () => no(t.error);
+        };
+      };
+    }), account);
+    await h.open();
+    await page.waitForSelector("#rows .row", { timeout: 15000 });
+    await page.waitForFunction(() => /^Contacts: [\d,.\s]+ addresses/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+    r[account] = await page.evaluate(async () => {
+      const pin = await (await import("./contacts.js")).lookup("pin@old.example");
+      const owner = await new Promise(ok => { const req = indexedDB.open("baltazar-mail"); req.onsuccess = () => { const d = req.result, g = d.transaction("meta").objectStore("meta").get("account"); g.onsuccess = () => { d.close(); ok(g.result?.value); }; }; });
+      return { pinned: pin?.pinned || 0, owner };
+    });
+  }
+  expect(r["other@yahoo.com"].pinned === 0 && r["other@yahoo.com"].owner === "me@yahoo.com", "another account's book is not kept: " + JSON.stringify(r["other@yahoo.com"]));
+  expect(r["me@yahoo.com"].pinned === 1600000000 && r["me@yahoo.com"].owner === "me@yahoo.com", "the account's own book keeps its pin: " + JSON.stringify(r["me@yahoo.com"]));
+}, { settings: { pollSec: 600 } });
+
 // ---------- Contacts ----------
 // In the mocked mailbox o@x.com is the one person written to (it is copied on the mail in Sent);
 // s1 to s8 only wrote, so they are among the others.
@@ -1629,6 +1665,39 @@ scenario("a typed address is never replaced by a suggestion that only contains i
     "Enter keeps the typed address or its exact contact, and completes a partial one: " + JSON.stringify(chips));
 });
 
+// a new message without a signature, holding only a pasted picture
+scenario("a message holding only a picture is saved when it is closed", async ({ page, calls }, expect) => {
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.evaluate(png => {
+    const ed = document.getElementById("c-editor");
+    ed.innerHTML = `<img src="data:image/png;base64,${png}" width="2" height="2">`;
+    ed.focus(); ed.dispatchEvent(new Event("input", { bubbles: true }));
+  }, "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==");
+  await page.keyboard.press("Escape");
+  await composerHidden(page);
+  const saved = msgOf(saves(calls).pop())?.message;
+  expect(saved && (saved.attachments || []).some(a => a.disposition === "inline"), "the picture is saved to Drafts: " + JSON.stringify(saved?.attachments || null));
+});
+
+// z brings a held message back while a draft is still loading: when the draft opens, the message
+// brought back is saved to Drafts first, not overwritten.
+scenario("a message brought back by undo-send is saved when a loading draft opens over it", async ({ page, ctx, calls }, expect) => {
+  await newMessage(page, { subject: "Alpha", text: "hello" });
+  await page.keyboard.press("Control+Enter");
+  await composerHidden(page);
+  // the draft's attachments come from its source, which is slow to come
+  await ctx.route(u => u.href.includes("/content/rawplaintext"), async route => { await sleep(3000); await route.fallback(); });
+  await folder(page, "Draft");
+  await page.locator("#rows .row").first().click();
+  await page.waitForTimeout(600);
+  await page.keyboard.press("z");
+  await page.waitForFunction(() => document.getElementById("c-subject").value === "Alpha", null, { timeout: 5000 }).catch(() => {});
+  const back = await page.inputValue("#c-subject");
+  await page.waitForFunction(() => document.getElementById("c-subject").value === "Subject 3-1", null, { timeout: 15000 }).catch(() => {});
+  const r = { back, now: await page.inputValue("#c-subject"), saved: saves(calls).map(c => msgOf(c)?.message?.headers?.subject), reader: await page.locator("#reader").isHidden() };
+  expect(r.back === "Alpha" && r.now === "Subject 3-1" && r.saved.includes("Alpha") && r.reader, "the message brought back is in Drafts, and the draft is open: " + JSON.stringify(r));
+}, { settings: { undoSendSec: 10 } });
+
 scenario("Write in Contacts leaves alone a message that cannot be put away", async ({ page }, expect) => {
   await newMessage(page, { subject: "Keep" });
   await page.locator("#c-to input").type("car");          // unfinished, so the message cannot be saved
@@ -1755,6 +1824,23 @@ scenario("reopened draft keeps its Bcc", async ({ page, calls, mock }, expect) =
   expect(chips.join().includes("secret@x.com") && shown, "the draft's Bcc is shown: " + JSON.stringify({ chips, shown }));
   expect(bcc.some(a => a.email === "secret@x.com"), "saving the draft keeps its Bcc: " + JSON.stringify(bcc));
 });
+
+// A draft is saved whole each time, so one whose picture cannot be fetched is kept closed rather
+// than saved without it, unless the user gives the picture up.
+scenario("a draft whose picture cannot be loaded stays closed until opened anyway", async ({ page, ctx, mock }, expect) => {
+  const LOST = "/parts/@.id==9/thumbnail";       // a part the message source does not hold either
+  mock.patchBody = (id, m, body) => { if (id.startsWith("MSG3_")) body.html += `<img src="https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==${id}/content${LOST}&amp;appid=x&amp;pid=9">`; };
+  await ctx.route(u => u.href.includes(LOST), route => route.fulfill({ status: 500, body: "" }));
+  await folder(page, "Draft");
+  await page.locator("#rows .row").first().click();
+  await page.waitForFunction(() => /Could not load/.test(document.getElementById("notice-text").textContent), null, { timeout: 15000 }).catch(() => {});
+  const r = { open: await page.locator("#compose:not(.hidden)").count(), said: await notice(page) };
+  await page.locator("#notice-text button.link").click();
+  await page.waitForSelector("#compose:not(.hidden)", { timeout: 15000 }).catch(() => {});
+  r.anyway = await page.locator("#compose:not(.hidden)").count();
+  expect(r.open === 0 && /^Could not load 1 picture of the draft, so it was not opened: saving it would leave that picture out\. Open anyway$/.test(r.said) && r.anyway === 1,
+    "the draft opens only when its picture is given up: " + JSON.stringify(r));
+}, { allow: /status of 500/ });
 
 scenario("text typed during a save is saved", async ({ page, calls, mock }, expect) => {
   mock.handler = async ({ name }) => { if (name === "messages.saveV3") await sleep(800); };

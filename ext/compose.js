@@ -240,7 +240,18 @@ export async function draftIsHtml(message, body) {
 
 // ---------- open ----------
 // opts: { mode: "new"|"reply"|"replyAll"|"forward"|"draft", message, body (from api.body), myEmail }
-export async function open(opts) {
+// Openings, of a new message and of one brought back unsent, run one at a time, and each first
+// puts away (saving) the message already open: one brought back while another was loading is
+// saved to Drafts, not overwritten. Answers whether the message opened.
+let opening = Promise.resolve();
+function oneAtATime(fn) {
+  const run = opening.then(fn, fn);
+  opening = run.catch(() => {});
+  return run;
+}
+export function open(opts) { return oneAtATime(() => openNow(opts)); }
+async function openNow(opts) {
+  if (!(await close(true))) return false;
   await loadAccounts();
   const me = opts.myEmail;
   const primary = accounts.find(a => a.isPrimary) || accounts[0] || { email: me, sendingName: "" };
@@ -319,6 +330,7 @@ export async function open(opts) {
   clearInterval(autosaveTimer);
   autosaveTimer = setInterval(() => { if (dirty && hasContent()) saveNow(true); }, 30000);
   if (opts.mode === "new") fields.to.focus(); else focusEditor();
+  return true;
 }
 
 // Caret at the top of the editor (top-posting), never inside the signature.
@@ -1007,8 +1019,10 @@ export function replyRecipients(mode, h, mine) {
   return { to, cc };
 }
 
+// A picture is content, though it adds nothing to the text.
 function hasContent() {
-  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? $("c-editor").innerText.trim() : $("c-text").value.trim()) || draft.files.length || draft.refs?.length);
+  const editor = $("c-editor");
+  return !!(!fields.to.isEmpty() || $("c-subject").value.trim() || (draft.html ? editor.innerText.trim() || editor.querySelector("img") : $("c-text").value.trim()) || draft.files.length || draft.refs?.length);
 }
 
 function strictGet(f) { if (!f.commit(true)) throw new Error(`Not an address: ${f.input.value.trim()}`); return f.get(); }
@@ -1106,7 +1120,7 @@ async function send() {
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
     run: async () => { await settle(); const r = await api.send(d, sentId).catch(e => { if (e.savedId) mine.savedId = snapshot.savedId = e.savedId; throw e; }); forgetFormat(d.csid); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
-    restore: async () => { await settle(); return reopenFrom(snapshot); },
+    restore: async () => { await settle(); return oneAtATime(() => reopenFrom(snapshot)); },
   });
 }
 

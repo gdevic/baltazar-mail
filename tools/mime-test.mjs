@@ -45,5 +45,20 @@ ok(name(`attachment`) === "", "no name");
   ok(fwd.parts.some(p => p.partId === "2.2" && p.filename === "inner.pdf") && dec(extract(fwd, "2.2", "inner.pdf").bytes) === "%PDF" && fwd.parts.some(p => p.partId === "2" && p.type === "message/rfc822"),
     "attachments inside a forwarded message: " + fwd.parts.map(p => `${p.partId}:${p.type}:${p.filename}`).join());
 }
+// base64 as senders write it: each block padded on its own, a soft break, too much padding
+{
+  const fs = await import("node:fs");
+  const file = fs.readFileSync(new URL("./fixtures/budget.xlsx", import.meta.url));
+  const part = b64 => listParts(new TextEncoder().encode(`Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64}\r\n`));
+  const bytesOf = b64 => Buffer.from(extract(part(b64), "1").bytes);
+  for (const size of [8192, 4096, 1000]) {
+    const blocks = [];
+    for (let i = 0; i < file.length; i += size) blocks.push(file.subarray(i, i + size).toString("base64"));
+    ok(bytesOf(blocks.join("\r\n")).equals(file), `blocks of ${size} bytes, each padded, decode to the file`);
+  }
+  const text = b64 => bytesOf(b64).toString("latin1");
+  const odd = ["QQ==\r\nQUJD", "QUJD=\r\nREVG", "QUI==", "QUJD\r\nREVG"];
+  ok(JSON.stringify(odd.map(text)) === JSON.stringify(["AABC", "ABCDEF", "AB", "ABCDEF"]), "padding inside the text, a soft break and too much padding: " + JSON.stringify(odd.map(text)));
+}
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

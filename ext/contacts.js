@@ -17,9 +17,10 @@ import { noBidi } from "./text.js";
 // by one with any change that makes a book built before no longer what a build would now give,
 // and every such book is invalidated, once, the first time the new version opens it:
 //  - a book of a lower version has its build unmarked (the meta store, with the scan's bookmarks,
-//    is emptied), so it is built anew as a first build is, keeping all that the user chose for an
-//    address (CHOICES, see resetRows): the user did not ask for this build, so it takes nothing of
-//    theirs away, unlike a Rebuild (rebuild);
+//    is emptied of all but the account the book is kept for, so that another account signing in
+//    still starts afresh), so it is built anew as a first build is, keeping all that the user
+//    chose for an address (CHOICES, see resetRows): the user did not ask for this build, so it
+//    takes nothing of theirs away, unlike a Rebuild (rebuild);
 //  - a book of a higher version, which a newer copy of the extension made, cannot be opened as
 //    this one at all: it is dropped whole, the user's choices with it, and a new one begun.
 // A book of this version is kept as built, however often it is opened.
@@ -40,7 +41,8 @@ function openDb() {
     const req = indexedDB.open(DB, DB_VERSION);
     req.onupgradeneeded = e => {
       const d = req.result;
-      if (e.oldVersion) req.transaction.objectStore(META).clear();
+      // an older book is built anew, for the account it was kept for
+      if (e.oldVersion) { const meta = req.transaction.objectStore(META); meta.delete(IDBKeyRange.upperBound("account", true)); meta.delete(IDBKeyRange.lowerBound("account", true)); }
       else { d.createObjectStore(STORE, { keyPath: "email" }); d.createObjectStore(META, { keyPath: "key" }); }
     };
     req.onsuccess = () => ok(req.result);
