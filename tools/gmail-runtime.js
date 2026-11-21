@@ -4,12 +4,13 @@
 // node tools/gmail-runtime.js
 const path = require("path");
 const fs = require("fs");
-const { launch } = require("./harness");
+const { launch, watchdog, viewerKey } = require("./harness");
 const { FX } = require("./gmail-mock.js");
 
 (async () => {
   const mime = await import("../ext/mime.js");
   const h = await launch({ provider: "gmail", gmail: { mime } });
+  watchdog(h, __filename);
   const { ctx, page, extId, profile, gmail, errors, cspViolations, unexpectedHosts } = h;
   const results = {};
   const CID = "123456789012-abc123def456ghi789.apps.googleusercontent.com";   // the client the user sets up
@@ -504,7 +505,7 @@ const { FX } = require("./gmail-mock.js");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#v-body .v-box", { timeout: 8000 }).catch(() => {});
     f.viewer = { name: await page.locator("#v-name").textContent(), meta: await page.locator("#v-meta").textContent(), fetched: gmail.calls.slice(c1).some(c => /\/attachments\//.test(c.path)) };
-    await page.keyboard.press("Escape");
+    await viewerKey(page, "Escape");
     await page.waitForSelector("#viewer.hidden", { state: "attached", timeout: 5000 }).catch(() => {});
     await page.keyboard.press("Escape"); await page.waitForTimeout(800);
     f.off = { pane: await page.locator("#files-pane").isVisible(), title: await page.locator("#list-title").textContent() };

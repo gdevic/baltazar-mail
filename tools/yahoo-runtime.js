@@ -2,10 +2,12 @@
 // drives reading, folder switching, and compose/send. node tools/yahoo-runtime.js
 const path = require("path");
 const fs = require("fs");
-const { launch } = require("./harness");
+const { launch, watchdog, viewerKey } = require("./harness");
 
 (async () => {
-  const { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, FX } = await launch();
+  const h = await launch();
+  watchdog(h, __filename);
+  const { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, FX } = h;
   await page.goto(`chrome-extension://${extId}/mail.html`);
   const results0 = {};
   // rowH is the old pixel row height: 18 px (compact) becomes 80%, still 18 px rows
@@ -623,6 +625,8 @@ const { launch } = require("./harness");
     await inContacts(false); await page.waitForSelector("#rows .row", { timeout: 5000 }).catch(() => {});
     await page.locator("#contacts-link").click(); await inContacts(true);
     await page.waitForSelector("#p-rows .prow.sel", { timeout: 5000 }).catch(() => {});
+    // the list as it was is on screen at once; the cursor reaches the filter box once Contacts has read the list again
+    await page.waitForFunction(() => document.activeElement?.id === "p-filter", null, { timeout: 5000 }).catch(() => {});
     ab.kept = { on: await onTab(), filter: await page.inputValue("#p-filter"), row: await text("#p-rows .prow.sel .pm"), page: await text("#person .p-mail"), focus: await page.evaluate(() => document.activeElement.id) };
     // Esc clears the filter; Ctrl+A in the list selects the whole tab; Hide moves it to Hidden, and z takes that back
     await page.keyboard.press("Escape"); await page.waitForTimeout(250);
@@ -834,9 +838,9 @@ const { launch } = require("./harness");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#viewer:not(.hidden)", { timeout: 3000 }).catch(() => {});
     f.viewer = { name: await page.locator("#v-name").textContent(), meta: await page.locator("#v-meta").textContent() };
-    await page.keyboard.press("ArrowRight"); await page.waitForTimeout(300);
+    await viewerKey(page, "ArrowRight"); await page.waitForTimeout(300);
     f.viewer.next = await page.locator("#v-meta").textContent();
-    await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+    await viewerKey(page, "Escape"); await page.waitForTimeout(200);
     await page.keyboard.press("j"); await page.waitForTimeout(100);
     f.keys = { sel: await page.locator("#f-rows .frow.sel").evaluate(e => e.dataset.i).catch(() => null), viewer: await page.locator("#viewer").isVisible() };
     // a row's type badge is outlined under the mouse; clicked, it shows the file's message and opens the file
@@ -850,7 +854,7 @@ const { launch } = require("./harness");
     await page.waitForSelector("#viewer:not(.hidden)", { timeout: 3000 }).catch(() => {});
     await page.waitForFunction(() => document.getElementById("r-subject").textContent === "Subject 1-6", null, { timeout: 5000 }).catch(() => {});
     Object.assign(f.badge, { subject: await page.locator("#r-subject").textContent(), name: await page.locator("#v-name").textContent(), meta: await page.locator("#v-meta").textContent() });
-    await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+    await viewerKey(page, "Escape"); await page.waitForTimeout(200);
     const listed = async () => ({ pane: await page.locator("#files-pane").isVisible(), rows: await page.locator("#rows .row").count(), title: await page.locator("#list-title").textContent() });
     await page.keyboard.press("Escape"); await page.waitForTimeout(600);
     f.esc = await listed();

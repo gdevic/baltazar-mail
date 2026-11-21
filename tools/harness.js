@@ -310,4 +310,38 @@ async function launch(opts = {}) {
   return { ctx, page, extId, profile, calls, docCalls, rawCalls, ghCalls, mock, folders, goneElsewhere, errors, cspViolations, unexpectedHosts, open, close, FX, thumbPng, provider, gmail, signIn, firstRun };
 }
 
-module.exports = { launch, msg, accounts, now, buildForTest };
+// A runtime suite that stops making progress is ended, naming the line of the suite it was
+// waiting on, long before CI's job limit would end it without a word. Every call the suite (file)
+// makes on a page, frame, locator, keyboard, mouse or the context notes the line it came from;
+// once none has been made for `minutes`, the browser is closed and the process ends.
+function watchdog(h, file, minutes = 3) {
+  let where = "before its first step", since = Date.now();
+  const note = () => {
+    const line = new Error().stack.split("\n").find(l => l.includes(file));
+    if (line) { where = line.trim().replace(/^at\s+/, ""); since = Date.now(); }
+  };
+  const { page, ctx } = h;
+  for (const proto of new Set([page, page.mainFrame(), page.locator("body"), page.frameLocator("body"), page.keyboard, page.mouse, ctx].map(Object.getPrototypeOf))) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      const fn = Object.getOwnPropertyDescriptor(proto, name).value;
+      if (name === "constructor" || name === "then" || name.startsWith("_") || typeof fn !== "function") continue;
+      proto[name] = function (...args) { note(); return fn.apply(this, args); };
+    }
+  }
+  const timer = setInterval(() => {
+    if (Date.now() - since < minutes * 60000) return;
+    clearInterval(timer);
+    console.error(`STUCK: no step for ${minutes} minutes; waiting at ${where}`);
+    Promise.race([h.close(), new Promise(r => setTimeout(r, 10000))]).finally(() => process.exit(1));
+  }, 5000);
+  timer.unref();
+}
+
+// A key for the attachment viewer, dispatched in the mail page as a keydown. A preview frame takes
+// the focus once it has drawn, and Playwright's own press waits for the key's release to reach that
+// frame, which the key itself removes (Esc closes the viewer, an arrow shows the next file): such a
+// press never returns. Whether the frame has drawn yet is a matter of timing, so every key the
+// viewer is sent while a preview may be on screen goes this way.
+const viewerKey = (page, key) => page.evaluate(k => document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })), key);
+
+module.exports = { launch, msg, accounts, now, buildForTest, watchdog, viewerKey };
