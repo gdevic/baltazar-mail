@@ -25,8 +25,11 @@ export const PROVIDER = {
 };
 // Where the reader and the print page may load message images from: Yahoo's image proxy.
 export const IMAGE_SRC = "https://*.yusercontent.com";
-// messageBytes: attachments per message; scanMax: rows per folder a full address-book scan reads.
-export const LIMITS = { messageBytes: 25 * 1048576, scanMax: Infinity };
+// messageBytes: attachments per message; scanMax: rows per folder a full address-book scan reads;
+// scanGap: the pause (ms) between its steps. The first build reads the whole mailbox, a few
+// hundred requests one after another, and Yahoo names no limit for them: the pause keeps the
+// build to less than a request a second, the pace of someone paging through folders.
+export const LIMITS = { messageBytes: 25 * 1048576, scanMax: Infinity, scanGap: 1000 };
 
 // An image still addressed to Yahoo's mail hosts (a part that could not be inlined) would show
 // recipients the mailbox id and could not load for them anyway; outgoing mail and print drop it.
@@ -42,7 +45,8 @@ const bareAddress = email => String(email).replace(/["()\\\s]/g, "");
 export const queries = {
   starred: (unreadOnly = false) => `is:flagged ${LIST_FILTER}${unreadOnly ? " is:unread" : ""}`,
   unreadIn: folderId => `folderId:${folderId} is:unread`,
-  person: email => { const e = bareAddress(email); return `(from:("${e}") OR to:("${e}"))`; },
+  // to: finds the address in To only and cc: in Cc; nothing finds it in a Bcc (verified 2026-11-20)
+  person: email => { const e = bareAddress(email); return `(from:("${e}") OR to:("${e}") OR cc:("${e}"))`; },
   // mail with attachments, for a folder's list of attachments (searchScoped raw); its rows carry
   // each file's partId, size, type, links and objectId (verified 2026-11-20)
   files: () => "has:attachment",
@@ -246,6 +250,23 @@ export async function list(folderId, count = 100, offset = 0) {
   const res = first(r);
   return { messages: res.messages || [], query: res.query, ms: r.ms };
 }
+
+// Every message outside Spam and Trash, newest first, whatever folder it is in, but for the
+// folders named in exclude: what the address book's first build reads after Sent and Inbox. It
+// pages to the end of 8,526 messages in 203 folders, 100 rows in about 400 ms, and the folders'
+// totals add up to exactly that many rows (verified 2026-11-20).
+const LISTED_NOWHERE = ["TRASH", "BULK", "SYNC", "INVISIBLE"];
+export async function listAll(count = 100, offset = 0, { exclude = [] } = {}) {
+  exclude.forEach(checkFolder);
+  const r = await batch("messageGroups.getList", [{
+    id: "GetMessageGroupList", method: "GET",
+    uri: q(`${[ALL_MAIL, LIST_FILTER, ...exclude.map(id => `-folderId:${id}`)].join(" ")} count:${count} offset:${offset} -sort:date`),
+  }]);
+  const res = first(r);
+  return { messages: res.messages || [], query: res.query, ms: r.ms };
+}
+// How many messages listAll has to list, told from the folder list.
+export const countAll = (folders, exclude = []) => folders.filter(f => !f.types.some(t => LISTED_NOWHERE.includes(t)) && !exclude.map(String).includes(String(f.id))).reduce((n, f) => n + (f.total || 0), 0);
 
 // raw: term is already in Yahoo's query language (from:(..) OR to:(..)); otherwise a keyword search.
 export async function search(term, folderId = null, count = 100, offset = 0, raw = false) {

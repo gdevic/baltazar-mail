@@ -625,6 +625,12 @@ export function list(folderId, count = 100, offset = 0, { background = false } =
   return listRows({ labelIds: id === ALL ? [] : [id] }, count, offset, id, background ? BACKGROUND : FOREGROUND);
 }
 
+// Every message outside Spam and Trash, newest first, whatever its labels: All Mail. It lists the
+// mail of every label, so the caller passes over the rows it has read elsewhere.
+export const listAll = (count = 100, offset = 0, opts = {}) => list(ALL, count, offset, opts);
+// How many messages listAll has to list, told from the folder list.
+export const countAll = folders => folders.find(f => f.id === ALL)?.total || 0;
+
 // raw: term is already in Gmail's search language; otherwise words to find.
 export function search(term, folderId = null, count = 100, offset = 0, raw = false) {
   const q = raw ? term : String(term || "").trim();

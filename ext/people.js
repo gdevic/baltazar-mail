@@ -10,7 +10,10 @@
 // first in People, in the order they were pinned, under a heading of their own. The pin and the
 // eye on a row pin and hide it; a pinned address cannot be hidden, nor a hidden one pinned.
 // Contacts mirrors the mail that is kept: a person whose page finds no mail left is forgotten
-// there and then (see forgetIfGone), which undo takes back.
+// there and then (see forgetIfGone), which undo takes back; someone mail was copied to (Cc or Bcc)
+// stays, since a search cannot be relied on for all such mail. And a person whose page shows a
+// message the user wrote, which the book had not learned of, is listed under People from then on
+// (see learnWrote).
 // All mail, Mail from and Mail to are greyed out for a person once it is known that there is no
 // such mail (see ways): never on a guess, so a button that works is never greyed.
 // While the book's first build is under way, a notice above the list says so (hooks.note).
@@ -59,10 +62,10 @@ const NO_PIN = "Unhide it first: a hidden address cannot be pinned";
 
 // hooks: { write(list of { name, email }), mailWith(email, openId) -> all mail with the
 //   person (openId: the message to open there), find(emails, "from" | "to"), recent(email, count)
-//   -> { messages }, subject(row) -> its subject as text, date(epoch), menu(x, y, items, onPick),
-//   status(msg), leave() -> back to the view Contacts was opened from, undoable({ label, count,
-//   undo(), redo() }) -> a change the app's undo can take back, note() -> what to say above the
-//   list while the book is still being built, or "" }
+//   -> { messages }, draft(row) -> whether it is a draft, subject(row) -> its subject as text,
+//   date(epoch), menu(x, y, items, onPick), status(msg), leave() -> back to the view Contacts was
+//   opened from, undoable({ label, count, undo(), redo() }) -> a change the app's undo can take
+//   back, note() -> what to say above the list while the book is still being built, or "" }
 let hooks = null;
 // match: the pile shown, filtered and in order, the pinned people first (band: how many of them);
 // rows: as much of it as is listed; counts: what each pile has of the filter's matches; cur: the
@@ -205,7 +208,7 @@ function render() {
 // An empty pile says where the filter's matches are.
 function emptyHtml(q) {
   const pile = PILES[st.pile];
-  if (!q) return `<div>${st.all.length ? pile.none : "No contacts yet."}</div>${st.all.length ? (pile.sub ? `<div class="sub">${pile.sub}</div>` : "") : `<div class="sub">They are learned from the addresses in your Inbox and Sent mail.</div>`}`;
+  if (!q) return `<div>${st.all.length ? pile.none : "No contacts yet."}</div>${st.all.length ? (pile.sub ? `<div class="sub">${pile.sub}</div>` : "") : `<div class="sub">They are learned from the addresses in your mail.</div>`}`;
   const there = Object.keys(PILES).filter(k => k !== st.pile && st.counts[k]).map(k => `<a href="#" data-pile="${k}">${st.counts[k].toLocaleString()} in ${PILES[k].name}</a>`);
   return `<div>Nothing in ${pile.name} matches “${esc(q)}”.</div>${there.length ? `<div class="sub">${there.join(", ")}</div>` : ""}`;
 }
@@ -400,8 +403,24 @@ async function loadRecent(email) {
   asking.delete(email);
   if (messages) { recent.set(email, messages); if (recent.size > 40) { const old = recent.keys().next().value; recent.delete(old); ways.delete(old); } }
   if (messages && !messages.length && await forgetIfGone(email)) return;
+  if (messages?.length) await learnWrote(email, messages);
   if (pageFor === email && st.shown) recentHtml(email, messages);
   if (messages) learnWays(email, messages);
+}
+
+// The messages on a person's page are the proof of whom the user wrote to, wherever they are kept.
+// When one of them is the user's own and the book knew of none that late (a reply kept in a folder
+// no scan reads), the book takes its date (contacts.wrote); a draft was not sent, so it is no such
+// proof. A person that moves to another pile by it is shown there, still selected, if the cursor
+// is still theirs by then, and the status line says where.
+async function learnWrote(email, messages) {
+  const was = st.byEmail.get(email);
+  if (!was || !(await contacts.wrote(email, messages.filter(m => !hooks.draft(m))).catch(() => false))) return;
+  await load();
+  const now = st.byEmail.get(email);
+  if (!now || contacts.pileOf(now) === contacts.pileOf(was)) return;
+  hooks.status(`${email} is under ${PILES[contacts.pileOf(now)].name}: you wrote to it`);
+  if (st.shown && st.cur === email && !st.marked.size) reveal(email);
 }
 
 // Which mail there is with a person: any at all, any from them, any to them. true and false are
@@ -421,7 +440,7 @@ function learnWays(email, messages) {
   paintWays(email);
 }
 // The page's All mail, Mail from and Mail to as what is known lets them be.
-const WAY_TIPS = { mail: "All mail from or to this address (Enter)", from: "Mail this address sent", to: "Mail sent to this address, in To or Cc" };
+const WAY_TIPS = { mail: "All mail from or to this address (Enter)", from: "Mail this address sent", to: "Mail sent to this address" };
 function paintWays(email) {
   if (pageFor !== email) return;
   for (const what of ["mail", "from", "to"]) {
@@ -432,13 +451,14 @@ function paintWays(email) {
 }
 
 // Contacts mirrors the mail that is kept: a person whose page found no mail is forgotten, unless
-// the user pinned or hid them (contacts.forget leaves those), their last mail is too new for the
-// provider's search to be believed about it, or the user has just undone their forgetting. The
-// row goes, nobody is selected, and the arrow keys carry on from its place. True when forgotten.
+// the user pinned or hid them or mail was copied to them (contacts.forget leaves those, and says
+// why), their last mail is too new for the provider's search to be believed about it, or the user
+// has just undone their forgetting. The row goes, nobody is selected, and the arrow keys carry on
+// from its place. True when forgotten.
 const spared = new Set();        // addresses whose forgetting was undone, left alone for the session
 async function forgetIfGone(email) {
   const r = st.byEmail.get(email);
-  if (!r || r.pinned || spared.has(email) || Date.now() / 1000 - Math.max(r.last, r.lastSent) < FRESH) return false;
+  if (!r || r.pinned || r.copied || spared.has(email) || Date.now() / 1000 - Math.max(r.last, r.lastSent) < FRESH) return false;
   const rows = await contacts.forget([email]);
   if (!rows.length) return false;
   recent.delete(email); ways.delete(email);
@@ -451,6 +471,9 @@ async function forgetIfGone(email) {
   await load();
   return true;
 }
+// What the page says of someone mail was copied to when it finds none: the search is no proof
+// that none is left, so nothing is said to be gone.
+const COPIED_NONE = "No mail with this address was found. It stays in Contacts because mail was copied to it (Cc or Bcc).";
 // Why someone with no mail left is still listed.
 function keptWhy(r) {
   if (r.pinned) return " It stays in Contacts because you pinned it.";
@@ -461,7 +484,7 @@ function keptWhy(r) {
 function recentHtml(email, messages) {
   const box = $("person").querySelector(".p-recent"); if (!box) return;
   if (!messages) { box.innerHTML = "<i>Could not load the recent messages.</i>"; return; }
-  if (!messages.length) { box.innerHTML = `<i>No mail with this address is left outside Spam and Trash.${keptWhy(st.byEmail.get(email) || {})}</i>`; return; }
+  if (!messages.length) { const r = st.byEmail.get(email) || {}; box.innerHTML = `<i>${r.copied ? COPIED_NONE : `No mail with this address is left outside Spam and Trash.${keptWhy(r)}`}</i>`; return; }
   box.innerHTML = `<div class="p-head">Recent messages</div>` + messages.map(m => {
     const out = (m.headers?.from?.[0]?.email || "").toLowerCase() !== email;
     const subject = hooks.subject(m);

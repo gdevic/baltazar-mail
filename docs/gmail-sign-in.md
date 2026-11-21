@@ -46,9 +46,9 @@ When Google signed you in but the Gmail API is still off, the page links to it a
 
 The extension keeps you signed in while the browser holds your Google session. After **Sign out** in Settings, or when the browser's Google session ends, the page is a single button, since the Client ID stays. **Trouble signing in?** opens the same list of Google's errors, and **Use a different Client ID** goes back to the paste step.
 
-## The address book
+## Contacts
 
-Contacts and the address suggestions while you write come from your own Inbox and Sent, which the extension reads over time so that it never slows you down: it starts two minutes after you first sign in, then reads a little at a time, only once you have left the app alone for a minute or are in another tab. That takes about 40 minutes of such time all together, spread over as many sessions as it needs; Contacts and suggestions fill in as it goes, and Contacts says above its list while it is still being built.
+Contacts and the address suggestions while you write come from your own Inbox, Sent and All Mail, which the extension reads over time so that it never slows you down: it starts two minutes after you first sign in, then reads a little at a time, only once you have left the app alone for a minute or are in another tab. That takes up to an hour of such time all together, spread over as many sessions as it needs; Contacts and suggestions fill in as it goes, and Contacts says above its list while it is still being built.
 
 ## Other ways in
 

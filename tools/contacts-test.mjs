@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses } = await import("../dist/baltazar-mail-yahoo/contacts.js");
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",
@@ -82,6 +82,37 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
     "an address is a person once written to or pinned, hidden whenever it is hidden, and one of the others otherwise");
   const pins = pinnedFirst([{ email: "b@x.com", pinned: 200 }, { email: "c@x.com", pinned: 0 }, { email: "a@x.com", pinned: 100 }]).map(r => r.email).join(" ");
   check(pins === "a@x.com b@x.com", "the pinned ones, in the order they were pinned: " + pins);
+}
+// What one message teaches the book. A thread among many people (one To, a long Cc of bare and
+// named addresses, the user's own among them, one at an ISP's email. subdomain) loses nobody:
+// everyone but the user is one of the others, and those in Cc are marked as copied, which keeps
+// the one with the bulk-mail subdomain from being taken for a machine.
+{
+  setOwnAddresses(["Me@Yahoo.com"]);
+  const who = (email, name = "") => ({ name, email });
+  const pile = e => pileOf({ ...e, hidden: isHidden(e), pinned: 0 });
+  const cc = [who("ana@mac.example", "Ana Kos"), who("bruno@gmail.example"), who("vlado.babic@zg.isp-net.example"), who("me@yahoo.com", "Me Myself"), who("Iva@email.isp-net.example"),
+    who("infodata@zg.isp-net.example"), who("sektor@sektor.example"), who("miro@fondovi.info"), who("Tin@open.example", "Tin Maric"), who("projekt@kovina.example")];
+  const thread = new Map();
+  record({ headers: { date: "1700000000", from: [who("ivo@class.example", "Ivo Horvat")], to: [who("Dora.Peric@uni.example.edu", "Dora Peric")], cc } }, thread);
+  const got = [...thread.values()];
+  check(got.length === 11 && !thread.has("me@yahoo.com"), "everyone in From, To and Cc is recorded but the user: " + got.map(e => e.email).join(" "));
+  check(got.every(e => pile(e) === "others"), "all of them are among the others, none hidden: " + got.map(e => `${e.email}=${pile(e)}`).join(" "));
+  check(got.every(e => e.copied === (e.email !== "ivo@class.example" && e.email !== "dora.peric@uni.example.edu")), "those in Cc are marked as copied, and only those: " + got.filter(e => e.copied).map(e => e.email).join(" "));
+  const iva = thread.get("iva@email.isp-net.example");
+  check(machineAddress(iva.email) && !isHidden(iva) && isHidden({ ...iva, copied: false }), "an address at a bulk-mail subdomain is a person once mail was copied to it, and a machine's otherwise");
+  check(got.every(e => e.lastSent === 0 && e.last === 1700000000) && thread.get("ana@mac.example").nameBy.others["Ana Kos"] === 1 && thread.get("ivo@class.example").nameBy.self["Ivo Horvat"] === 1, "a message someone else wrote dates the mail, not a writing to them, and names them by source");
+  // Who wrote a message says which way it went, not where it is kept: a reply of the user's read
+  // from Inbox is a writing to its recipients, as is anything read from Sent.
+  const reply = new Map();
+  record({ headers: { date: "1700000500", from: [who("ME@yahoo.com", "Me Myself")], to: [who("serena@maker.example", "Maker Services")], cc: [who("lin@maker.example")] } }, reply);
+  const serena = reply.get("serena@maker.example"), lin = reply.get("lin@maker.example");
+  check(reply.size === 2 && serena.lastSent === 1700000500 && pile(serena) === "people" && !serena.copied && pile(lin) === "people" && lin.copied && serena.nameBy.mine["Maker Services"] === 1,
+    "a message the user wrote, kept in Inbox, lists its recipients under People: " + JSON.stringify([...reply.values()]));
+  const sent = new Map();
+  record({ headers: { date: "1700000900", from: [who("alias@elsewhere.example")], to: [who("pat@x.example")], bcc: [who("quiet@x.example")] } }, sent, true);
+  check(sent.size === 2 && sent.get("pat@x.example").lastSent === 1700000900 && sent.get("quiet@x.example").copied && !sent.has("alias@elsewhere.example"), "whatever is read from Sent is the user's, whichever address it was sent from: " + JSON.stringify([...sent.values()]));
+  setOwnAddresses([]);
 }
 // The Contacts filter and the two orders.
 {

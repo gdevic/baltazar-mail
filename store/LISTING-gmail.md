@@ -26,7 +26,7 @@ Single purpose description:
 Permission justifications:
 
 - `identity`: Opens Google™'s own sign-in page in a window when the user clicks Sign in with Google, through the OAuth client the user set up, and receives the access token Google answers with. The extension never sees a password. The token is renewed silently while the browser keeps the user's Google session, and Sign out in Settings revokes it.
-- `storage`: Keeps the user's settings (layout, theme and contrast, sizes, fonts, intervals), the time of the last release check, the format of drafts saved here, when the mail tab was last looked at (for the new-mail dot), when the browser put it to sleep in the last week (so Settings can say whether background mail checks were interrupted), when the address book's first build may start (two minutes after the mailbox first opened), the Client ID of the Google™ client the user set up and, during the setup, the step its guide is at, and, until Sign out, the address of the Google account signed in, so a silent renewal asks for that account only; and, for the browser session only, the Google access token, so the extension does not ask Google for every request, and a message being printed, until the print page has read it.
+- `storage`: Keeps the user's settings (layout, theme and contrast, sizes, fonts, intervals), the time of the last release check, the format of drafts saved here, when the mail tab was last looked at (for the new-mail dot), when the browser put it to sleep in the last week (so Settings can say whether background mail checks were interrupted), when the first build of Contacts may start (two minutes after the mailbox first opened), the Client ID of the Google™ client the user set up and, during the setup, the step its guide is at, and, until Sign out, the address of the Google account signed in, so a silent renewal asks for that account only; and, for the browser session only, the Google access token, so the extension does not ask Google for every request, and a message being printed, until the print page has read it.
 - Host permission `https://gmail.googleapis.com/*`: All mailbox operations (labels, message lists, search, reading, attachments, moving, deleting, drafts and sending) go to the Gmail™ API on this host, with the token from the user's sign-in.
 - Host permission `https://oauth2.googleapis.com/*`: Revoking the token when the user signs out.
 - OAuth scope `https://mail.google.com/`: The extension reads, writes and sends mail, and permanently deletes messages when the user empties Trash or Spam or deletes a message already in Trash; the narrower Gmail™ scopes do not allow permanent deletion.
@@ -36,7 +36,7 @@ Remote code: No, I am not using remote code. All code ships in the package; the 
 Data usage, what the extension handles (recommended declarations; all of it stays on the user's computer or goes only to Google):
 
 - Personal communications: email messages and attachments, fetched from Gmail when the user opens them and shown on screen; not stored.
-- Personally identifiable information: names and email addresses from the user's own Inbox and Sent headers, kept in a local address book for the Contacts list and for suggestions while writing and searching.
+- Personally identifiable information: names and email addresses from the headers of the user's own mail, kept locally for the Contacts list and for suggestions while writing and searching.
 - Authentication information: the Google access token, kept in the browser's session storage and cleared when the browser closes, and the address of the Google account signed in, kept in local storage until Sign out.
 
 Certify: data is not sold, not used for purposes unrelated to the single purpose, and not used for creditworthiness or lending. No analytics, telemetry or advertising.
@@ -61,7 +61,7 @@ Description:
 >
 > Search: limited to the open label and the ones nested under it, with matches elsewhere listed below, and simple operators written as in Gmail (from:, to:, subject:, has:attachment, is:starred, dates) to narrow it down.
 >
-> Writing: new messages, replies that keep their thread, and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own Inbox and Sent, with automated senders left out.
+> Writing: new messages, replies that keep their thread, and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own mail, with automated senders left out.
 >
 > Attachments open in place: documents, spreadsheets, images and media are previewed without downloading; documents are read inside an isolated sandbox with no access to your session.
 >

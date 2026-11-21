@@ -171,7 +171,7 @@ scenario("a previewed file's type comes from its name, not the sender", async ({
 scenario("the address book survives a repeated full build and a second tab", async (h, expect) => {
   const { page } = h;
   const counts = () => page.evaluate(async () => { const c = await import("./contacts.js"); return JSON.stringify((await c.all()).sort((a, b) => a.email.localeCompare(b.email))); });
-  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
   const first = await counts();
   // a full build again (as after an interrupted first build) leaves the same entries
   await page.evaluate(async () => { const c = await import("./contacts.js"); await c.sync({ inbox: "1", sent: "2", full: true }); });
@@ -187,11 +187,83 @@ scenario("the address book survives a repeated full build and a second tab", asy
   await other.close();
 }, { settings: { pollSec: 600 } });
 
+scenario("the address book's build reads the mail filed in other folders, and passes over what Sent, Inbox and Drafts hold", async (h, expect) => {
+  const { page } = h;
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the app's own build has finished
+  // all mail, as the build asks for it (no folder, no search term): a row of Inbox and one of Sent,
+  // a draft to s9, and a message filed in Projects, from someone nothing else names
+  const asked = [];
+  h.mock.handler = ({ top, uri }) => {
+    const q = decodeURIComponent(uri.split("q=")[1] || "");
+    if (!uri.includes("@.select==q") || /(^|[^-])folderId:|from:|keyword:|subject:|is:|has:|(^|\s)id:/.test(q)) return null;
+    asked.push(q);
+    const filed = { ...msg(1, "31"), id: "MSG31_filed", folder: { id: "31", name: "Projects", types: ["USER"] },
+      headers: { ...msg(1, "31").headers, from: [{ name: "Filed Away", email: "filed@y.example" }], cc: [{ name: "", email: "copied@email.y.example" }] } };
+    const messages = / offset:0 /.test(q) ? [msg(1, "1"), msg(1, "2"), fromMe(9, "3", "Draft", ["DRAFT"]), filed] : [];
+    return { responses: [{ id: top.id, httpCode: 200, response: { result: { messages, query: {} } } }] };
+  };
+  const r = await page.evaluate(async () => {
+    const c = await import("./contacts.js");
+    const n = await c.sync({ inbox: "1", sent: "2", drafts: "3", full: true });
+    const copied = await c.lookup("copied@email.y.example");
+    return { n, filed: await c.lookup("filed@y.example"), copied, pile: copied && c.pileOf(copied), draft: await c.lookup("s9@x.com") };
+  });
+  expect(asked.length === 1 && asked[0] === "-folderType:(TRASH)-folderType:(BULK) -folderType:(SYNC)-folderType:(INVISIBLE) -folderId:2 -folderId:1 -folderId:3 count:100 offset:0 -sort:date", "after Sent and Inbox the build asks for the mail of every other folder but Drafts, once while a page comes back short: " + JSON.stringify(asked));
+  expect(r.n === 17 && r.filed?.name === "Filed Away" && !r.filed.lastSent && r.copied?.copied && r.pile === "others" && r.draft === null,
+    "it learns from the filed message alone: the rows of Sent and Inbox were read there, and a draft is no writing to anyone: " + JSON.stringify(r));
+}, { settings: { pollSec: 600 } });
+
+scenario("an address book of another database version is invalidated once: a lower one is built anew keeping what the user chose, a higher one is dropped", async (h, expect) => {
+  const { page } = h;
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the app's own build has finished
+  // From a page of the extension that does not open the book: a book kept under the given version,
+  // marked as built and with its scans' bookmarks, holding an address no mail names, one the user
+  // hid, one the user pinned, and a sender under an old name and a writing to them that the mail does not show.
+  const seed = async version => { await page.goto(`chrome-extension://${h.extId}/mail.css`); await page.evaluate(version => new Promise((ok, no) => {
+    const del = indexedDB.deleteDatabase("baltazar-mail");
+    del.onerror = () => no(del.error);
+    del.onsuccess = () => {
+      const req = indexedDB.open("baltazar-mail", version);
+      req.onupgradeneeded = () => { req.result.createObjectStore("contacts", { keyPath: "email" }); req.result.createObjectStore("meta", { keyPath: "key" }); };
+      req.onerror = () => no(req.error);
+      req.onsuccess = () => {
+        const d = req.result, t = d.transaction(["contacts", "meta"], "readwrite");
+        for (const row of [{ email: "gone@old.example", name: "Long Gone", nameBy: { self: { "Long Gone": 1 } }, last: 1500000000, lastSent: 0 },
+          { email: "hid@old.example", name: "Hid Den", nameBy: { self: { "Hid Den": 1 } }, last: 1500000000, lastSent: 0, hidden: true },
+          { email: "pin@old.example", name: "Pin Ned", nameBy: { self: { "Pin Ned": 1 } }, last: 1500000000, lastSent: 0, pinned: 1600000000 },
+          { email: "s1@x.com", name: "Old Name", nameBy: { self: { "Old Name": 9 } }, last: 1500000000, lastSent: 1500000000 }]) t.objectStore("contacts").put(row);
+        for (const m of [{ key: "built", value: 1600000000000 }, { key: "scan:1", value: { newest: 9999999999, at: 1 } }, { key: "scan:2", value: { newest: 9999999999, at: 1 } }]) t.objectStore("meta").put(m);
+        t.oncomplete = () => { d.close(); ok(); }; t.onerror = () => no(t.error);
+      };
+    };
+  }), version); };
+  // the book as the app has it, with the version the database is kept under and when it was built
+  const read = () => page.evaluate(async () => {
+    const c = await import("./contacts.js");
+    const kept = await new Promise(ok => { const req = indexedDB.open("baltazar-mail"); req.onsuccess = () => { const d = req.result, g = d.transaction("meta").objectStore("meta").get("built"); g.onsuccess = () => { d.close(); ok({ version: d.version, builtAt: g.result?.value || 0 }); }; }; });
+    return { gone: await c.lookup("gone@old.example"), hid: await c.lookup("hid@old.example"), pin: await c.lookup("pin@old.example"), s1: await c.lookup("s1@x.com"), ...kept, now: c.DB_VERSION };
+  });
+  const built = async () => { await page.waitForSelector("#rows .row", { timeout: 15000 }); await page.waitForFunction(() => /^Contacts: [\d,.\s]+ addresses/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {}); };
+  await seed(1); await h.open(); await built();
+  const first = await read();
+  // opened again: the book is as it was, and nothing is built again
+  await page.reload(); await page.waitForSelector("#rows .row", { timeout: 15000 }); await page.waitForTimeout(1500);
+  const again = await read();
+  // a book of a version this copy does not know yet
+  await seed(first.now + 7); await h.open(); await built();
+  const newer = await read();
+  expect(first.now >= 2 && first.version === first.now && first.gone === null && first.hid?.hidden && first.hid.name === "" && first.pin?.pinned === 1600000000 && first.s1?.name === "Sender 1" && first.s1.lastSent === 0 && first.builtAt > 1600000000000,
+    "a book of a lower version is built anew from the mail: what no mail names is gone, what the user hid and pinned stays, and the rest is as the mail has it: " + JSON.stringify(first));
+  expect(again.builtAt === first.builtAt && JSON.stringify(again) === JSON.stringify(first), "once: opened again, the book is kept as built: " + JSON.stringify([first.builtAt, again.builtAt]));
+  expect(newer.version === newer.now && newer.gone === null && newer.hid === null && newer.pin === null && newer.s1?.name === "Sender 1" && newer.builtAt > 1600000000000,
+    "a book of a higher version is dropped whole and a new one built under this version: " + JSON.stringify(newer));
+}, { settings: { pollSec: 600 } });
+
 // ---------- Contacts ----------
 // In the mocked mailbox o@x.com is the one person written to (it is copied on the mail in Sent);
 // s1 to s8 only wrote, so they are among the others.
 const contactsOpen = async page => {
-  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
   await page.locator("#list").focus(); await page.keyboard.press("g"); await page.keyboard.press("c");
   await page.waitForSelector("#app.contacts-view #p-rows .prow", { timeout: 5000 }).catch(() => {});
 };
@@ -257,13 +329,19 @@ scenario("Contacts shows a person's mail and comes back, keeps a pin across tabs
   expect(r.unmarked === 0 && r.left === "Projects", "Esc clears the selection, then leaves for the folder Contacts was opened from: " + JSON.stringify([r.unmarked, r.left]));
 }, { settings: { pollSec: 600 } });
 
-// A person's search answered as the test says: empty for s7 and s3 (no mail with them is left),
-// and for s5 the one message they sent.
+// A person's search answered as the test says: empty for s7, s3 and the copied address (no mail
+// from or to them is found), for s5 the one message they sent, and for s6 a reply of the user's
+// kept in Projects, with a draft to s8 that was never sent. h.asked lists whose mail was asked for.
+const COPIED = "kim@email.isp.example";
+const fromMe = (i, folderId, name, types) => { const m = msg(i, folderId); return { ...m, id: `${m.id}_mine`, folder: { id: folderId, name, types }, headers: { ...m.headers, from: [{ name: "Me Myself", email: "me@yahoo.com" }], to: [{ name: `Sender ${i}`, email: `s${i}@x.com` }], cc: [] } }; };
 const mailWith = h => {
+  h.asked = [];
   h.mock.handler = ({ top, uri }) => {
     const q = decodeURIComponent(uri.split("q=")[1] || "");
     const who = (q.match(/from:\("([^"]+)"\) OR to:/) || [])[1];
-    const messages = who === "s7@x.com" || who === "s3@x.com" ? [] : who === "s5@x.com" ? [msg(5, "1")] : null;
+    if (who) h.asked.push(who);
+    const messages = who === "s7@x.com" || who === "s3@x.com" || who === COPIED ? [] : who === "s5@x.com" ? [msg(5, "1")]
+      : who === "s6@x.com" ? [fromMe(6, "31", "Projects", ["USER"]), msg(6, "1")] : who === "s8@x.com" ? [fromMe(8, "3", "Draft", ["DRAFT"]), msg(8, "1")] : null;
     return messages ? { responses: [{ id: top.id, httpCode: 200, response: { result: { messages, query: {} } } }] } : null;
   };
 };
@@ -303,11 +381,51 @@ scenario("Contacts forgets an address with no mail left, on its page and when it
   await page.locator("#list").focus(); await page.keyboard.press("z");
   for (let i = 0; i < 30 && !(await inBook(page, "s3@x.com")); i++) await page.waitForTimeout(250);
   r.undone = await inBook(page, "s3@x.com");
+  // o@x.com is copied on that message: it is kept without a search being asked about it
+  r.asked = { s3: h.asked.includes("s3@x.com"), o: h.asked.includes("o@x.com") };
+  expect(r.asked.s3 && !r.asked.o, "the delete asks about the sender's mail, and not about the address the message was copied to: " + JSON.stringify(r.asked));
   expect(!r.grey.mail.off && !r.grey.from.off && r.grey.to.off && r.grey.to.why === "No mail to this address", "Mail to is greyed out for someone who only ever wrote, and nothing else is: " + JSON.stringify(r.grey));
   expect(r.forgot.listed === 0 && !r.forgot.inBook && /^Sender 7 was forgotten: no mail with s7@x\.com is left/.test(r.forgot.said) && r.forgot.undo === "Undo: forget Sender 7 (z)" && r.forgot.sel === 0 && r.next === "s8@x.com",
     "a person whose page finds no mail is forgotten, and the arrows carry on from their place: " + JSON.stringify([r.forgot, r.next]));
   expect(r.spared.listed === 1 && r.spared.inBook && /No mail with this address is left outside Spam and Trash\. It was brought back/.test(r.spared.said) && r.spared.mailOff, "z brings the person back, and they are left alone after that: " + JSON.stringify(r.spared));
   expect(r.before && !r.deleted.s3 && r.deleted.o && r.undone, "deleting the last mail with an address forgets it, and undoing the delete brings it back: " + JSON.stringify([r.before, r.deleted, r.undone]));
+}, { settings: { pollSec: 600 } });
+
+scenario("Contacts keeps an address mail was copied to, and lists under People whoever a message of the user's own is found for", async (h, expect) => {
+  const { page } = h, r = {};
+  const text = sel => page.locator(sel).first().textContent().catch(() => "");
+  const on = () => page.locator("#p-show button.on").getAttribute("data-pile");
+  mailWith(h);
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
+  // an address known only from the Cc of a message two days old, at a bulk-mail subdomain
+  await page.evaluate(async ([email, when]) => { const c = await import("./contacts.js"); await c.learn([{ headers: { date: String(when), from: [{ name: "Sender 1", email: "s1@x.com" }], to: [{ name: "Me", email: "me@yahoo.com" }], cc: [{ name: "Kim Novak", email }] } }]); },
+    [COPIED, Math.floor(Date.now() / 1000) - 2 * 86400]);
+  await contactsOpen(page);
+  await contactsTab(page, "others");
+  r.listed = await contactRow(page, COPIED).count();
+  // its page finds no mail from or to it: it stays, and the page says why
+  await contactRow(page, COPIED).click();
+  await page.waitForFunction(() => /No mail with this address was found/.test(document.querySelector("#person .p-recent")?.textContent || ""), null, { timeout: 5000 }).catch(() => {});
+  r.kept = { asked: h.asked.includes(COPIED), said: await text("#person .p-recent"), row: await contactRow(page, COPIED).count(), inBook: await inBook(page, COPIED), undo: await text("#st-undo"),
+    forgot: await page.evaluate(async e => (await (await import("./contacts.js")).forget([e])).length, COPIED) };
+  // s8's page finds a draft to them, which is no writing to them: s8 stays among the others
+  await contactRow(page, "s8@x.com").click();
+  await page.waitForSelector("#person .p-msg", { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  r.draft = { on: await on(), stats: await text("#person .p-stats"), msgs: await page.locator("#person .p-msg").count() };
+  // s6's page finds a reply of the user's kept in Projects: s6 is shown under People, still selected
+  await contactRow(page, "s6@x.com").click();
+  await page.waitForFunction(() => document.querySelector("#p-show button.on")?.dataset.pile === "people", null, { timeout: 5000 }).catch(() => {});
+  await page.waitForSelector("#person .p-msg", { timeout: 5000 }).catch(() => {});
+  r.wrote = { on: await on(), sel: await page.locator("#p-rows .prow.sel").getAttribute("data-email").catch(() => ""), stats: await text("#person .p-stats"), status: await text("#st-msg"), msgs: await page.locator("#person .p-msg").count(),
+    off: await page.locator('#person button[data-p="to"]').isDisabled() };
+  await contactsTab(page, "others");
+  r.left = await contactRow(page, "s6@x.com").count();
+  expect(r.listed === 1 && r.kept.asked && r.kept.said === "No mail with this address was found. It stays in Contacts because mail was copied to it (Cc or Bcc)." && r.kept.row === 1 && r.kept.inBook && !/forget/.test(r.kept.undo) && r.kept.forgot === 0,
+    "an address mail was copied to is one of the others, and stays when no mail from or to it is found: " + JSON.stringify([r.listed, r.kept]));
+  expect(r.draft.on === "others" && /you have not written to this address/.test(r.draft.stats) && r.draft.msgs === 2, "a draft to someone is no writing to them: " + JSON.stringify(r.draft));
+  expect(r.wrote.on === "people" && r.wrote.sel === "s6@x.com" && /you last wrote/.test(r.wrote.stats) && r.wrote.status === "s6@x.com is under People: you wrote to it" && r.wrote.msgs === 2 && !r.wrote.off && r.left === 0,
+    "a person whose page shows a message the user wrote is listed under People, still selected: " + JSON.stringify([r.wrote, r.left]));
 }, { settings: { pollSec: 600 } });
 
 scenario("a pinned address cannot be hidden, nor a hidden one pinned", async (h, expect) => {
@@ -699,7 +817,7 @@ scenario("selected rows look different from the cursor row", async ({ page }, ex
 });
 
 scenario("t says when it turns off Follow system", async ({ page }, expect) => {
-  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
   await page.locator("#list").focus(); await page.keyboard.press("t"); await page.waitForTimeout(300);
   expect(/Follow system/.test(await page.locator("#st-msg").textContent()), "the status says so: " + await page.locator("#st-msg").textContent());
 }, { settings: { theme: "system" } });
@@ -850,7 +968,7 @@ scenario("an action during a refresh does not lose new mail", async ({ page, cal
   };
   // the address book's first build also lists Inbox; once it is done, the next Inbox list after a
   // folder change is the poll's refresh
-  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
   slow = true; folders[0].highestModSeq++;
   const inbox = () => seenUris.filter(u => /slow=true/.test(u)).length;
   for (let i = 0; i < 80 && !inbox(); i++) await sleep(100);   // the poll's refresh is in flight
@@ -1007,7 +1125,7 @@ scenario("a discarded draft leaves the Drafts list", async ({ page, calls }, exp
 });
 
 scenario("opening a message that no longer exists drops its row quietly", async ({ page, goneElsewhere }, expect) => {
-  await page.waitForFunction(() => /^address book:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // its status would cover ours
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // its status would cover ours
   goneElsewhere.add("MSG1_2");     // removed elsewhere after the list loaded
   await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(1000);
   const rows = await subjects(page), n = await notice(page), st = await page.locator("#st-msg").textContent();

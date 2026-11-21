@@ -11,17 +11,17 @@ Baltazar Mail for Gmail™, and either edition in other Chromium browsers or bef
 1. Download `baltazar-mail-yahoo-<version>.zip` (Yahoo™) or `baltazar-mail-gmail-<version>.zip` (Gmail) from the [latest release](https://github.com/gdevic/baltazar-mail/releases/latest) and unzip it into a folder you will keep; it contains one folder, `baltazar-mail-yahoo` or `baltazar-mail-gmail`.
 2. Open `chrome://extensions` (or `edge://extensions`) and turn on Developer mode.
 3. Click Load unpacked and select that folder.
-4. Yahoo: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail: the extension opens its tab by itself when first loaded (later, click the Baltazar Mail for Gmail toolbar icon). Its sign-in page guides you through making a free Google™ client of your own ([each step, with pictures](gmail-sign-in.md)), then you press Sign in with Google; Google asks for the account and the permission once, and the extension renews the sign-in silently afterwards, for that account only (Sign out, at the top of Settings, asks first, then withdraws the permission and clears the address book; the client stays, so signing in again is one press).
+4. Yahoo: be signed in to mail.yahoo.com in the same browser profile, then click the Baltazar Mail toolbar icon. Gmail: the extension opens its tab by itself when first loaded (later, click the Baltazar Mail for Gmail toolbar icon). Its sign-in page guides you through making a free Google™ client of your own ([each step, with pictures](gmail-sign-in.md)), then you press Sign in with Google; Google asks for the account and the permission once, and the extension renews the sign-in silently afterwards, for that account only (Sign out, at the top of Settings, asks first, then withdraws the permission and clears Contacts; the client stays, so signing in again is one press).
 
 ## Updating a ZIP copy
 
-A copy installed this way says in Settings when a newer release is out. To update, put the new release's files into the same folder, replacing the old ones, and click Reload on the extensions page. Windows' Extract All offers a new folder by default, so point it at the folder that contains `baltazar-mail-yahoo` (or `baltazar-mail-gmail`) and confirm replacing the files; macOS's Archive Utility never replaces files, so use `unzip -o baltazar-mail-yahoo-<version>.zip -d <that folder>` in Terminal. Loading the new release from a different folder, or removing the extension, would start over without its settings and address book.
+A copy installed this way says in Settings when a newer release is out. To update, put the new release's files into the same folder, replacing the old ones, and click Reload on the extensions page. Windows' Extract All offers a new folder by default, so point it at the folder that contains `baltazar-mail-yahoo` (or `baltazar-mail-gmail`) and confirm replacing the files; macOS's Archive Utility never replaces files, so use `unzip -o baltazar-mail-yahoo-<version>.zip -d <that folder>` in Terminal. Loading the new release from a different folder, or removing the extension, would start over without its settings and Contacts.
 
 ## Moving from one copy to another
 
-A ZIP copy in a folder named `baltazar-mail`, from an earlier release or the original Baltazar Mail, is a different extension from one in `baltazar-mail-yahoo`: load `baltazar-mail-yahoo` with Load unpacked, set your preferences again once (its address book rebuilds itself from your mail), then remove the old copy.
+A ZIP copy in a folder named `baltazar-mail`, from an earlier release or the original Baltazar Mail, is a different extension from one in `baltazar-mail-yahoo`: load `baltazar-mail-yahoo` with Load unpacked, set your preferences again once (its Contacts list rebuilds itself from your message headers), then remove the old copy.
 
-Moving from a ZIP install to a store copy: the store copy is a separate extension, so set your preferences again once; its address book rebuilds itself from your mail. Then remove the ZIP copy so only one toolbar button remains.
+Moving from a ZIP install to a store copy: the store copy is a separate extension, so set your preferences again once; its Contacts list rebuilds itself from your message headers. Then remove the ZIP copy so only one toolbar button remains.
 
 ## The Gmail sign-in
 

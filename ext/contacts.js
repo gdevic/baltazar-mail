@@ -1,29 +1,55 @@
 import * as api from "./api.js";
 import { noBidi } from "./text.js";
 
-// Address book built from the user's own Inbox and Sent headers, kept in IndexedDB. It feeds the
-// address suggestions (while writing, and in the search box) and the Contacts view (people.js).
+// Address book built from the headers of the user's own mail (every folder but Spam, Trash and
+// Drafts when the book is first built, Inbox and Sent from then on), kept in IndexedDB. It feeds
+// the address suggestions (while writing, and in the search box) and the Contacts view (people.js).
 // One entry per lowercase address: the display names seen, when mail last went either way, when
-// the user last wrote to it, and the user's own choices about it (hidden, pinned).
+// the user last wrote to it, whether mail was copied to it (Cc or Bcc), and the user's own choices
+// about it (hidden, pinned).
 // Nothing is counted; recency is all the ranking needs.
 // The book mirrors the mail that is kept: an entry with no mail left outside Spam and Trash is
-// forgotten when that is found out (forget), unless the user pinned it or hid it; a hidden sender
-// that writes again is then still hidden.
+// forgotten when that is found out (forget), unless the user pinned it or hid it, or mail was
+// copied to it; a hidden sender that writes again is then still hidden.
 
+// The address book has a version, DB_VERSION, kept with the database itself (it is the IndexedDB
+// version). It stands for what a build records about an address and which mail it reads: raise it
+// by one with any change that makes a book built before no longer what a build would now give,
+// and every such book is invalidated, once, the first time the new version opens it:
+//  - a book of a lower version has its build unmarked (the meta store, with the scan's bookmarks,
+//    is emptied), so it is built anew as a first build is, keeping only what the user chose for an
+//    address (hidden, pinned), as every full build does (resetRows);
+//  - a book of a higher version, which a newer copy of the extension made, cannot be opened as
+//    this one at all: it is dropped whole, the user's choices with it, and a new one begun.
+// A book of this version is kept as built, however often it is opened.
+export const DB_VERSION = 2;
 const DB = "baltazar-mail", STORE = "contacts", META = "meta";
-let db = null;
+let db = null, opening = null;
 let own = new Set();
 let cache = null;          // Map email -> entry, loaded once; writes go through to IndexedDB
 const SCAN_PAGE = 100;
+const EVERYWHERE = "*";    // in place of a folder id: all mail, whatever folder it is in (api.listAll)
 
+// The one connection, opened once however many ask at the same time, with the book brought to
+// DB_VERSION as said there. It is given up when another tab needs the database to itself (to bring
+// it to another version, or to drop it), and opened again when next needed.
 function openDb() {
   if (db) return Promise.resolve(db);
-  return new Promise((ok, no) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => { const d = req.result; d.createObjectStore(STORE, { keyPath: "email" }); d.createObjectStore(META, { keyPath: "key" }); };
-    req.onsuccess = () => ok(db = req.result);
+  const open = () => new Promise((ok, no) => {
+    const req = indexedDB.open(DB, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const d = req.result;
+      if (e.oldVersion) req.transaction.objectStore(META).clear();
+      else { d.createObjectStore(STORE, { keyPath: "email" }); d.createObjectStore(META, { keyPath: "key" }); }
+    };
+    req.onsuccess = () => ok(req.result);
     req.onerror = () => no(req.error);
   });
+  const drop = () => new Promise((ok, no) => { const req = indexedDB.deleteDatabase(DB); req.onsuccess = () => ok(); req.onerror = () => no(req.error); });
+  return opening ||= open().catch(e => e?.name === "VersionError" ? drop().then(open) : Promise.reject(e)).then(d => {
+    d.onversionchange = () => { d.close(); if (db === d) { db = null; opening = null; cache = null; } };
+    return (db = d);
+  }, e => { opening = null; throw e; });
 }
 
 const tx = (store, mode, fn) => openDb().then(d => new Promise((ok, no) => {
@@ -69,7 +95,8 @@ export function setOwnAddresses(list) { own = new Set(list.map(e => e.toLowerCas
 //  2. the local part is a generated token: 20+ characters with 6+ digits (bounce/VERP ids)
 //  3. the domain is a bulk-mail subdomain (email.x.com, t.x.com, appmail.x.com), a sending
 //     domain (x-mail.com, infos-x.com, xemail.com) or under the .email TLD
-// Only applied to addresses never written to, so a wrong guess costs one unsuggested stranger.
+// Only applied to addresses never written to and never copied on mail (see guessed), so a wrong
+// guess costs one unsuggested stranger.
 const NO_REPLY = /no-?reply|do-?not-?reply|dont-?reply/;
 const MACHINE_WORD = /-(auto-?reply|auto-?responder|automated|newsletters?|mailer-?daemon|notifications?|bounces?|info)\d*(?=-)/;
 const ROLE_WORD = /^(bounces?|notifications?|notify|notices?|alerts?|automated|newsletters?|news|marketing|updates?|mailer|mail|sendmail|reply|postmaster|promo(tions?)?|offers?|deals|messages?|messenger|receipts?|transactions?|orders?|invoices?|billing|statements?|accounts?|edelivery|surveys?|websurvey|membership|rewards|tickets?|info|information|sales|support|service|services|hello|team)\d*$/;
@@ -92,8 +119,12 @@ export function machineAddress(email) {
 const machineMemo = new Map();
 const isMachine = email => { let m = machineMemo.get(email); if (m === undefined) machineMemo.set(email, m = machineAddress(email)); return m; };
 
+// The guess is not made for an address mail was copied to: whoever wrote that mail named it as one
+// of its readers, which a machine sender is not.
+const guessed = e => !e.copied && isMachine(e.email);
+
 // hidden: true or false once the user decides; unset, a machine sender never written to is hidden.
-export const isHidden = e => e.hidden ?? (!e.lastSent && isMachine(e.email));
+export const isHidden = e => e.hidden ?? (!e.lastSent && guessed(e));
 
 // A display name is only as good as whoever wrote it. Names are kept by source, best first: the
 // user's own (recipients of mail they sent), the person's own (the From of mail they sent), and
@@ -119,16 +150,23 @@ export function bestName(e) {
   return "";
 }
 
-// Record one message's addresses. direction: "sent" (we wrote it) or "received".
-async function record(m, direction, pending) {
-  const h = m.headers || {}; const when = Number(h.date) || 0;
-  const lists = direction === "sent" ? [h.to, h.cc, h.bcc] : [h.from, h.to, h.cc];
+// Whether the user wrote a message: its From is one of the user's own addresses, wherever the
+// message is kept (a copy to oneself, or a reply filed beside its original, is in no Sent folder).
+const isOwn = m => own.has((m.headers?.from?.[0]?.email || "").trim().toLowerCase());
+
+// Record one message's addresses into pending (address -> what this scan adds). A message the user
+// wrote (inSent: it was read from Sent; otherwise its From says so) tells whom the user wrote to;
+// any other tells who wrote, and who else was named. An address in a Cc or Bcc is marked copied.
+export function record(m, pending, inSent = false) {
+  const h = m.headers || {}, when = Number(h.date) || 0, mine = inSent || isOwn(m);
+  const lists = mine ? [h.to, h.cc, h.bcc] : [h.from, h.to, h.cc];
   for (const list of lists) for (const a of list || []) {
     const email = (a.email || "").trim().toLowerCase();
     if (!email || !email.includes("@") || own.has(email)) continue;
-    const e = pending.get(email) || { email, nameBy: {}, last: 0, lastSent: 0 };   // what this scan adds
-    noteName(e, a.name, direction === "sent" ? "mine" : list === h.from ? "self" : "others");
-    if (direction === "sent") e.lastSent = Math.max(e.lastSent, when);
+    const e = pending.get(email) || { email, nameBy: {}, last: 0, lastSent: 0, copied: false };
+    noteName(e, a.name, mine ? "mine" : list === h.from ? "self" : "others");
+    if (mine) e.lastSent = Math.max(e.lastSent, when);
+    if (list === h.cc || list === h.bcc) e.copied = true;
     e.last = Math.max(e.last, when);
     pending.set(email, e);
   }
@@ -143,20 +181,29 @@ async function flush(pending) {
     const e = stored || { email, name: "", nameBy: {}, last: 0, lastSent: 0 };
     delete e.sent; delete e.received;            // no message counts are kept
     e.last = Math.max(e.last || 0, d.last); e.lastSent = Math.max(e.lastSent || 0, d.lastSent);
+    if (d.copied) e.copied = true;
     for (const [src, names] of Object.entries(d.nameBy)) for (const [n, c] of Object.entries(names)) for (let i = 0; i < c; i++) noteName(e, n, src);
     e.name = bestName(e);
     return e;
   });
 }
 
-// A full build reads every message again, so it starts from nothing; the user's hide choices stay.
-async function resetRows() {
-  const emails = [...(await loadAll()).keys()];
-  await updateRows(emails, stored => {
-    if (!stored) return stored;
-    for (const k of ["sent", "received", "names"]) delete stored[k];
-    return Object.assign(stored, { last: 0, lastSent: 0, nameBy: {}, name: "" });
-  });
+// A full build reads every message again, so it starts from nothing: every entry goes, but for the
+// ones the user hid, unhid or pinned, which stay as that choice alone until the build names them.
+function resetRows() {
+  return openDb().then(d => new Promise((ok, no) => {
+    const t = d.transaction(STORE, "readwrite");
+    t.objectStore(STORE).openCursor().onsuccess = e => {
+      const c = e.target.result; if (!c) return;
+      const r = c.value, kept = { email: r.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false };
+      if (r.hidden !== undefined) kept.hidden = r.hidden;
+      if (r.pinned) kept.pinned = r.pinned;
+      if ("hidden" in kept || kept.pinned) c.update(kept); else c.delete();
+      c.continue();
+    };
+    t.oncomplete = () => { cache = null; changed(); ok(); };
+    t.onerror = () => no(t.error);
+  }));
 }
 
 async function getMeta(key) { const r = await tx(META, "readonly", s => s.get(key)); return r ? r.value : null; }
@@ -176,15 +223,20 @@ export function scanStep(when, newest, { full, newestSeen, now }) {
 // Walk a folder newest-first, api.LIMITS.scanPage rows a step (SCAN_PAGE where the provider names
 // none). full: everything the provider lets a full scan read (api.LIMITS.scanMax rows); a full
 // scan keeps its place after every step, so one cut short (the tab closed) carries on from there.
-// Otherwise stop at messages older than the last scan. pace: awaited before each step (see sync).
-async function scanFolder(folderId, direction, full, progress, pace) {
+// Otherwise stop at messages older than the last scan. folderId: a folder's id, or EVERYWHERE.
+// inSent: the folder is Sent, so every message in it is the user's (see record). skip: ids of
+// folders whose mail is left out: the provider is asked not to list it, and a row of theirs that
+// comes all the same is passed over (see sync). progress(recorded, read): messages recorded and
+// rows read so far. pace: awaited before each step (see sync). Gives { recorded, read }: the
+// messages this call recorded, and the rows of the folder read in all.
+async function scanFolder(folderId, inSent, full, progress, pace, skip = null) {
   await loadAll();
   const metaKey = `scan:${folderId}`, fillKey = `fill:${folderId}`, page = api.LIMITS.scanPage || SCAN_PAGE;
   const prev = full ? null : await getMeta(metaKey);
   const resume = full ? await getMeta(fillKey) : null;
   if (resume?.done) {
     if (!(await getMeta(metaKey))) await setMeta(metaKey, { newest: resume.newest, at: Date.now() });
-    return 0;
+    return { recorded: 0, read: resume.offset || 0 };
   }
   const newestSeen = prev?.newest || 0;
   let offset = resume?.offset || 0, newest = resume?.newest || newestSeen, seen = resume?.seen || 0, done = false;
@@ -192,41 +244,54 @@ async function scanFolder(folderId, direction, full, progress, pace) {
   while (!done) {
     await pace?.();
     // background: a provider with a request quota (Gmail) paces the scan to leave room for browsing
-    const r = await api.list(folderId, page, offset, { background: true });
+    const r = await (folderId === EVERYWHERE ? api.listAll(page, offset, { background: true, exclude: [...(skip || [])] }) : api.list(folderId, page, offset, { background: true }));
     for (const m of r.messages) {
       const step = scanStep(Number(m.headers?.date) || 0, newest, { full, newestSeen, now });
       if (step.stop) { done = true; break; }
-      if (step.record) { await record(m, direction, pending); seen++; }
+      if (step.record && !skip?.has(String(m.folder?.id))) { record(m, pending, inSent); seen++; }
       newest = step.newest;
     }
     offset += r.messages.length;
     if (r.messages.length < page || (full && offset >= api.LIMITS.scanMax)) done = true;
     if (full) { await flush(pending); await setMeta(fillKey, { offset, newest, seen, done }); }
     else if (pending.size >= 300) await flush(pending);
-    progress?.(folderId, seen);
+    progress?.(seen, offset);
+    // a provider that names a pause between steps (api.LIMITS.scanGap) is not asked back to back
+    if (!done && api.LIMITS.scanGap) await new Promise(ok => setTimeout(ok, api.LIMITS.scanGap));
   }
   await flush(pending);
   await setMeta(metaKey, { newest, at: Date.now() });
-  return seen - (resume?.seen || 0);
+  return { recorded: seen - (resume?.seen || 0), read: offset };
 }
 
-// Initial build (first run) or incremental refresh. inbox/sent are folder ids. A first build cut
-// short carries on where it stopped the next time; full starts one afresh. pace: awaited before
-// each step of the scan, by a provider whose first build goes only as the user allows (see
-// paceWait).
-export async function sync({ inbox, sent, full = false, progress, pace } = {}) {
+// Initial build (first run) or incremental refresh. inbox, sent and drafts are folder ids. The
+// build reads Sent, then Inbox, then all the mail there is outside Spam and Trash, whatever folder
+// it was filed in; that last pass leaves out Sent and Inbox, which were read, and Drafts, whose
+// recipients were not written to. The refresh reads Sent and Inbox only: mail gets to the other
+// folders from the Inbox, where it was learned. A first build cut short carries on where it
+// stopped the next time; full starts one afresh. pace: awaited before each step of the scan, by a
+// provider whose first build goes only as the user allows (see paceWait). totals: how many
+// messages { sent, inbox, rest } hold, rest being what the last pass has to read. progress({ read,
+// total }): rows read so far of those the passes have to read, as far as totals says.
+export async function sync({ inbox, sent, drafts, totals = {}, full = false, progress, pace } = {}) {
   await loadAll();
   const built = await getMeta("built");
   const doFull = full || !built;
-  const fills = [sent, inbox].filter(Boolean).map(id => `fill:${id}`);
+  const folders = [...new Set([sent, inbox].filter(Boolean)), ...(doFull ? [EVERYWHERE] : [])];
+  const elsewhere = new Set([sent, inbox, drafts].filter(Boolean).map(String));
+  const fills = folders.map(id => `fill:${id}`);
   if (doFull && (full || !(await getMeta("filling")))) {
     await resetRows();
     await dropMeta(...fills);
     await setMeta("filling", Date.now());
   }
-  let n = 0;
-  if (sent) n += await scanFolder(sent, "sent", doFull, progress, pace);
-  if (inbox) n += await scanFolder(inbox, "received", doFull, progress, pace);
+  const holds = id => Math.min(api.LIMITS.scanMax, (id === EVERYWHERE ? totals.rest : id === sent ? totals.sent : totals.inbox) || 0);
+  const total = folders.reduce((sum, id) => sum + holds(id), 0);
+  let n = 0, before = 0;
+  for (const id of folders) {
+    const r = await scanFolder(id, id === sent, doFull, progress && ((seen, read) => progress({ read: total ? Math.min(total, before + read) : before + read, total })), pace, id === EVERYWHERE ? elsewhere : null);
+    n += r.recorded; before += r.read;
+  }
   if (doFull) { await setMeta("built", Date.now()); await dropMeta("filling", ...fills); }
   return n;
 }
@@ -265,7 +330,7 @@ export async function useAccount(email) {
 export async function noteSent(recipients) {
   await loadAll();
   const pending = new Map();
-  await record({ headers: { to: recipients, date: String(Math.floor(Date.now() / 1000)) } }, "sent", pending);
+  record({ headers: { to: recipients, date: String(Math.floor(Date.now() / 1000)) } }, pending, true);
   await flush(pending);
 }
 
@@ -273,11 +338,12 @@ export async function noteSent(recipients) {
 // person, so people the user writes to stay above senders of similar age.
 function score(e, now) {
   const fade = t => t ? Math.exp(-Math.max(0, (now - t) / 86400) / 120) : 0;
-  return fade(e.last) + (e.lastSent ? 0.5 + 2 * fade(e.lastSent) : 0) - (e.hidden === undefined && isMachine(e.email) ? 1e6 : 0);
+  return fade(e.last) + (e.lastSent ? 0.5 + 2 * fade(e.lastSent) : 0) - (e.hidden === undefined && guessed(e) ? 1e6 : 0);
 }
 
-// An entry as the Contacts view lists it: pinned is when the user pinned it (0: not pinned).
-const row = e => ({ name: e.name || "", email: e.email, last: e.last || 0, lastSent: e.lastSent || 0, hidden: isHidden(e), pinned: e.pinned || 0 });
+// An entry as the Contacts view lists it: pinned is when the user pinned it (0: not pinned), and
+// copied whether mail was copied to it.
+const row = e => ({ name: e.name || "", email: e.email, last: e.last || 0, lastSent: e.lastSent || 0, hidden: isHidden(e), pinned: e.pinned || 0, copied: !!e.copied });
 
 // Every entry, for the Contacts view.
 export async function all() {
@@ -330,15 +396,17 @@ export async function restoreChoices(list) {
   await setFlags([...was.keys()], e => { for (const k of ["hidden", "pinned"]) if (was.get(e.email)[k] === undefined) delete e[k]; else e[k] = was.get(e.email)[k]; });
 }
 
-// Entries with no mail left are forgotten: all of emails but the ones the user pinned or hid.
-// Gives the rows taken out, as they were stored.
+// Entries with no mail left are forgotten: all of emails but the ones the user pinned or hid, and
+// the ones mail was copied to. That no mail is left is a search's word, and a search cannot be
+// relied on for every message an address was copied on (Yahoo's finds none it was a Bcc of), so
+// for such an address it proves nothing. Gives the rows taken out, as they were stored.
 export function forget(emails) {
   const keys = emails.map(x => String(x).toLowerCase());
   return openDb().then(d => new Promise((ok, no) => {
     const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE), out = [];
     for (const k of keys) {
       const r = s.get(k);
-      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && e.hidden !== true) { s.delete(k); out.push(e); } };
+      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && !e.copied && e.hidden !== true) { s.delete(k); out.push(e); } };
     }
     t.oncomplete = () => { for (const row of out) cache?.delete(row.email); changed(); ok(out); };
     t.onerror = () => no(t.error);
@@ -353,8 +421,20 @@ export const putBack = rows => updateRows(rows.map(r => r.email), (stored, email
 export async function learn(messages) {
   await loadAll();
   const pending = new Map();
-  for (const m of messages) await record(m, own.has((m.headers?.from?.[0]?.email || "").toLowerCase()) ? "sent" : "received", pending);
+  for (const m of messages) record(m, pending);
   await flush(pending);
+}
+
+// A person's page found mail with them (people.js), in whatever folder it is kept. When the user
+// wrote one of those messages later than the book knows them to have written to the person (a
+// reply kept where no scan reads), the book takes its date. Nothing is asked of the provider.
+// True when the book changed.
+export async function wrote(email, messages) {
+  const key = String(email).toLowerCase(), e = (await loadAll()).get(key);
+  const when = Math.max(0, ...messages.filter(isOwn).map(m => Number(m.headers?.date) || 0));
+  if (!e || when <= (e.lastSent || 0)) return false;
+  await updateRows([key], stored => stored ? Object.assign(stored, { lastSent: Math.max(stored.lastSent || 0, when), last: Math.max(stored.last || 0, when) }) : null);
+  return true;
 }
 
 export async function suggest(query, limit = 8, exclude = new Set()) {

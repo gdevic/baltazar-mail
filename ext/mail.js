@@ -102,7 +102,12 @@ const state = {
 };
 
 // ---------- helpers ----------
-const status = (msg, ms) => { $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
+let saidAt = 0;                  // when the status line last said something (ms)
+const status = (msg, ms) => { saidAt = Date.now(); $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
+// A running count (the Contacts build, a step a second for minutes) takes the status line only
+// once what it last said has been there long enough to read, and does not count as said itself.
+const SAID_FOR = 4000;
+const statusQuietly = msg => { if (Date.now() - saidAt >= SAID_FOR) $("st-msg").textContent = msg; };
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || null) : null;
 // System folders of the primary account (the one holding the mailbox's own Inbox, folder 1 at
@@ -1749,10 +1754,10 @@ async function doMove(ids, folderId, verb = "move") {
 // ---------- contacts mirror the mail that is kept ----------
 // Mail in Trash and Spam is not mail with a person (a person's search leaves both out). When
 // messages go there, each address in them that the book knows is looked up, a little after and one
-// at a time, and forgotten if no mail with it is left (the ones the user pinned or hid stay:
-// contacts.forget). When messages come back out, their addresses are learned again as a scan would
-// have learned them. Undo and redo of such a move do the same, so a delete undone leaves the book
-// as it was.
+// at a time, and forgotten if no mail with it is left (the ones the user pinned or hid, and the
+// ones mail was copied to, stay: contacts.forget). When messages come back out, their addresses
+// are learned again as a scan would have learned them. Undo and redo of such a move do the same,
+// so a delete undone leaves the book as it was.
 const outOfMail = f => ["TRASH", "BULK"].includes(folderType(f));
 const CHECK_MAX = 200, CHECK_GAP = 300, CHECK_AFTER = 1500;
 const toCheck = new Set();
@@ -1776,7 +1781,8 @@ async function checkContacts() {
     while (toCheck.size) {
       const email = toCheck.values().next().value;
       toCheck.delete(email);
-      if (!(await contacts.lookup(email))) continue;        // not in the book: nothing to forget
+      const known = await contacts.lookup(email);
+      if (!known || known.copied) continue;                 // not in the book, or kept whatever a search says: nothing to ask
       let left;
       try { left = (await api.search(api.queries.person(email), null, 1, 0, true)).messages?.length > 0; } catch { continue; }   // not known: it stays
       if (!left && !toCheck.has(email)) forgot += (await contacts.forget([email])).length;
@@ -2087,6 +2093,7 @@ const peopleHooks = {
   mailWith: (email, openId) => searchPerson(email, openId),
   find: (emails, field) => findFrom(emails, field),
   recent: (email, count) => api.search(api.queries.person(email), null, count, 0, true),
+  draft: m => folderType(state.byId.get(String(m.folder?.id))) === "DRAFT",
   subject: m => plainSubject(m.headers?.subject),
   date: fmtDate,
   menu: openMenu,
@@ -2099,7 +2106,22 @@ const peopleHooks = {
 // A provider that paces the build (api.LIMITS.scanAfter) takes a long while over it.
 async function contactsNote() {
   if (await contacts.isBuilt()) return "";
-  return `Contacts is still being built from your Inbox and Sent mail${api.LIMITS.scanAfter ? ", a little at a time while you are not using the app" : ""}. The addresses learned so far are listed and can be used; come back later for the complete list.`;
+  const sofar = buildProgress("");
+  return `Contacts is still being built from your message headers${api.LIMITS.scanAfter ? ", a little at a time while you are not using the app" : ""}.${sofar ? ` ${sofar[0].toUpperCase()}${sofar.slice(1)}.` : ""} The addresses learned so far are listed and can be used; come back later for the complete list.`;
+}
+// How far the first build has come, for the status line and Contacts' notice: the message headers
+// read of those there are to read (only headers are read, and the count says so: what, unless the
+// sentence before it has said it) and, for a build that runs on without waiting for the user to be
+// away, how long is left at the pace it has kept since it started here. "" before its first step.
+let building = null;             // { read, total, from: read when the build started here, at: when that was (ms) }
+function buildProgress(what = " message headers") {
+  if (!building) return "";
+  const { read, total, from, at } = building, secs = (Date.now() - at) / 1000;
+  if (!total) return `${read.toLocaleString()}${what} read`;
+  const counts = `${read.toLocaleString()} of ${total.toLocaleString()}${what} read`;
+  if (api.LIMITS.scanAfter || secs < 5 || read <= from || read >= total) return counts;
+  const left = (total - read) / ((read - from) / secs);
+  return `${counts}, ${left < 50 ? "less than a minute" : `about ${Math.max(1, Math.round(left / 60))} min`} left`;
 }
 
 const STARRED = "starred";
@@ -2367,7 +2389,7 @@ function wireSettings() {
     $("signout").classList.remove("hidden");
     $("signout").onclick = async () => {
       if (pendingSends.length) { openSettings(false); status("not signed out: a message is still waiting to be sent"); return; }
-      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google and its address book is cleared.`)) return;
+      if (!confirm(`Sign out of ${$("account").textContent || "this account"}? The extension's access to the account is withdrawn at Google and its Contacts are cleared.`)) return;
       openSettings(false);
       if (!(await compose.close(true))) return;
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
@@ -2642,7 +2664,8 @@ async function startUp() {
   checkUpdate().catch(() => {});
 }
 
-// Address book: full build on first run, then incremental on each poll that sees Inbox or Sent change.
+// Address book: built on first run from all the mail outside Spam and Trash, then refreshed on
+// each poll that sees Inbox or Sent change.
 // A provider whose requests cost quota (Gmail: api.LIMITS.scanAfter) builds it out of the way:
 // not before scanAfter has passed since the mailbox was first opened, when the user is likely
 // trying the app, and then a step at a time, each once the user has left the app alone for
@@ -2673,18 +2696,23 @@ async function syncContacts(full = false) {
     const slow = first && !!api.LIMITS.scanAfter;
     if (slow && !(await chrome.storage.local.get(CONTACTS_AFTER))[CONTACTS_AFTER]) await chrome.storage.local.set({ [CONTACTS_AFTER]: Date.now() + api.LIMITS.scanAfter });
     let shownAt = 0;
-    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, full, pace: slow ? untilIdle : null,
-      progress: first ? (fid, seen) => {
-        status(`building address book: ${seen} messages in ${folderName(state.byId.get(fid))}...`);
+    const sent = folderByType("SENT"), inbox = state.byId.get(inboxId()), drafts = folderByType("DRAFT");
+    // what the build has to read, for its progress: Sent, Inbox, and the mail in neither (nor in Drafts)
+    const totals = { sent: sent?.total, inbox: inbox?.total, rest: api.countAll(state.folders, [sent?.id, inbox?.id, drafts?.id].filter(Boolean)) };
+    const n = await contacts.sync({ inbox: inboxId(), sent: sent?.id, drafts: drafts?.id, totals, full, pace: slow ? untilIdle : null,
+      progress: first ? ({ read, total }) => {
+        building = { read, total, from: building?.from ?? read, at: building?.at ?? Date.now() };
+        statusQuietly(`building Contacts: ${buildProgress()}`);
         // Contacts, when it is open, lists what has been learned so far, every few seconds
         if (people.isShown() && Date.now() - shownAt > 3000) { shownAt = Date.now(); people.refresh(); }
       } : null });
+    building = null;
     // The routine learn after a poll says nothing: a status would cover one the user is reading,
     // such as the confirmation of a send.
-    if (first) status(`address book: ${await contacts.count()} addresses${n ? ` (${n} messages scanned)` : ""}`);
+    if (first) status(`Contacts: ${(await contacts.count()).toLocaleString()} addresses${n ? ` (${n.toLocaleString()} message headers read)` : ""}`);
     if ((n || first) && people.isShown()) people.reload();
-  } catch (e) { status(`address book: ${e.message}`); }
-  finally { contactsBusy = false; }
+  } catch (e) { status(`Contacts: ${e.message}`); }
+  finally { contactsBusy = false; building = null; }
 }
 
 document.addEventListener("keydown", onKey);

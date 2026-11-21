@@ -1,6 +1,6 @@
 # Baltazar Mail: store submission kit
 
-Everything to paste into the Chrome Web Store Developer Dashboard and Microsoft Partner Center for Baltazar Mail, the Yahoo Mail™ edition. It is published as [Baltazar Mail on the Chrome Web Store](https://chromewebstore.google.com/detail/baltazar-mail/kkphbfhheikioedcgnjmeldabekdcnib) (`kkphbfhheikioedcgnjmeldabekdcnib`) and [Baltazar Mail on Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/baltazar-mail/fmfafokapbejponlbknighiecagfcnai) (`fmfafokapbejponlbknighiecagfcnai`). An update uploads the new package to those items, which keeps their ids, so installed copies keep their settings and address book. The package is `baltazar-mail-yahoo-<version>-store.zip` from GitHub Releases: the same files as the release ZIP, with `manifest.json` at the top level as the stores require; its version must be higher than the one published. The extension's name and short description come from the manifest. Images are in this folder; `node tools/screenshots.js --store` regenerates them.
+Everything to paste into the Chrome Web Store Developer Dashboard and Microsoft Partner Center for Baltazar Mail, the Yahoo Mail™ edition. It is published as [Baltazar Mail on the Chrome Web Store](https://chromewebstore.google.com/detail/baltazar-mail/kkphbfhheikioedcgnjmeldabekdcnib) (`kkphbfhheikioedcgnjmeldabekdcnib`) and [Baltazar Mail on Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/baltazar-mail/fmfafokapbejponlbknighiecagfcnai) (`fmfafokapbejponlbknighiecagfcnai`). An update uploads the new package to those items, which keeps their ids, so installed copies keep their settings and Contacts. The package is `baltazar-mail-yahoo-<version>-store.zip` from GitHub Releases: the same files as the release ZIP, with `manifest.json` at the top level as the stores require; its version must be higher than the one published. The extension's name and short description come from the manifest. Images are in this folder; `node tools/screenshots.js --store` regenerates them.
 
 ## Account
 
@@ -35,7 +35,7 @@ Remote code: No, I am not using remote code. All code ships in the package; the 
 Data usage, what the extension handles (recommended declarations; all of it stays on the user's computer or goes only to Yahoo™):
 
 - Personal communications: email messages and attachments, fetched from Yahoo when the user opens them and shown on screen; not stored.
-- Personally identifiable information: names and email addresses from the user's own Inbox and Sent headers, kept in a local address book for the Contacts list and for suggestions while writing and searching.
+- Personally identifiable information: names and email addresses from the headers of the user's own mail, kept locally for the Contacts list and for suggestions while writing and searching.
 - Authentication information: the Yahoo session values Yahoo's own web page uses, kept in the browser's session storage and cleared when the browser closes.
 
 Certify: data is not sold, not used for purposes unrelated to the single purpose, and not used for creditworthiness or lending. No analytics, telemetry or advertising.
@@ -60,7 +60,7 @@ Description:
 >
 > Search: limited to the open folder and its subfolders, with matches elsewhere listed below, and simple operators to narrow it down.
 >
-> Writing: new messages, replies, and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own Inbox and Sent, with automated senders left out.
+> Writing: new messages, replies, and forwards that keep the original's attachments, rich or plain text, inline images, automatic drafts and undo-send. Address suggestions come from your own mail, with automated senders left out.
 >
 > Attachments open in place: documents, spreadsheets, presentations, images and media are previewed without downloading; documents are read inside an isolated sandbox with no access to your session.
 >
