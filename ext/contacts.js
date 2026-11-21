@@ -150,8 +150,7 @@ export const isHidden = e => e.hidden ?? (!e.lastSent && guessed(e));
 // user's own (recipients of mail they sent), the person's own (the From of mail they sent), and
 // anyone else's (other recipients of received mail, which any sender can label as they like).
 // The shown name is the most frequent of the best source that has one, unless the user gave the
-// entry a name of their own (given), which is shown before any of them. names holds names recorded
-// before sources were kept, and counts as anyone else's.
+// entry a name of their own (given), which is shown before any of them.
 const SOURCES = ["mine", "self", "others"];
 const NAMES_KEPT = 8;
 export function noteName(e, raw, source) {
@@ -165,8 +164,7 @@ export function noteName(e, raw, source) {
 export function bestName(e) {
   if (e.given) return e.given;
   for (const s of SOURCES) {
-    const m = { ...(s === "others" ? e.names : null), ...e.nameBy?.[s] };
-    const top = Object.entries(m).sort((a, b) => b[1] - a[1])[0];
+    const top = Object.entries(e.nameBy?.[s] || {}).sort((a, b) => b[1] - a[1])[0];
     if (top) return top[0];
   }
   return "";
@@ -203,7 +201,6 @@ async function flush(pending) {
   await updateRows([...adds.keys()], (stored, email) => {
     const d = adds.get(email);
     const e = stored || { email, name: "", nameBy: {}, last: 0, lastSent: 0 };
-    delete e.sent; delete e.received;            // no message counts are kept
     e.last = Math.max(e.last || 0, d.last); e.lastSent = Math.max(e.lastSent || 0, d.lastSent);
     if (d.copied) e.copied = true;
     for (const [src, names] of Object.entries(d.nameBy)) for (const [n, c] of Object.entries(names)) for (let i = 0; i < c; i++) noteName(e, n, src);

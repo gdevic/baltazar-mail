@@ -1,5 +1,5 @@
 import * as api from "./api.js";
-import { sniffImage } from "./bytes.js";
+import { sniffImage, dataUrl } from "./bytes.js";
 import * as contacts from "./contacts.js";
 import { esc, noBidi } from "./text.js";
 
@@ -357,12 +357,16 @@ export async function close(save = true) {
     if (why) { warn(`The message was kept open because it could not be saved: ${why}. Discard closes it without saving.`, saveError); return false; }
     hooks.status("message saved to Drafts");
   }
+  shut();
+  return true;
+}
+// The composer hidden and emptied, its message let go.
+function shut() {
   clearInterval(autosaveTimer);
   hideSuggest(); unpick();
-  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null;
+  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; dirty = false;
   hooks.clearNotice("compose");
   hooks.onClose();
-  return true;
 }
 
 // ---------- editor ----------
@@ -654,9 +658,8 @@ async function insertImages(files) {
     if (f.size > 10 * 1024 * 1024) { warn(`${f.name} is larger than 10 MB to place in the text; attach it instead.`); continue; }
     if (carried() + f.size > api.LIMITS.messageBytes) { warn(`Not placed: ${f.name}. A message carries at most ${MB()} MB of attachments and pictures.`); continue; }
     if (!sniffImage(new Uint8Array(await f.slice(0, 12).arrayBuffer()))) { other.push(f); continue; }
-    const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(f); });
     const img = document.createElement("img");
-    img.src = dataUrl; img.alt = f.name; img.dataset.name = f.name || `pasted-${Date.now()}.png`;
+    img.src = await dataUrl(f); img.alt = f.name; img.dataset.name = f.name || `pasted-${Date.now()}.png`;
     const sel = getSelection();
     if (sel.rangeCount && ed.contains(sel.anchorNode)) { const r = sel.getRangeAt(0); r.deleteContents(); r.insertNode(img); r.setStartAfter(img); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); }
     else ed.appendChild(img);
@@ -1149,10 +1152,7 @@ async function send() {
   // A save still in flight may give the message its lasting csid and saved id (Gmail's first save
   // creates the draft); the send and a composer reopened after a cancel take them once it settles.
   const settle = async () => { await saved(); d.csid = snapshot.csid = mine.csid; snapshot.savedId = mine.savedId; };
-  clearInterval(autosaveTimer); unpick();
-  $("compose").classList.add("hidden"); $("c-editor").innerHTML = ""; $("c-text").value = ""; draft = null; dirty = false;
-  hooks.clearNotice("compose");
-  hooks.onClose();
+  shut();
   hooks.scheduleSend({
     label: `send "${d.subject || "(no subject)"}" to ${[...d.to, ...d.cc, ...d.bcc].map(a => a.email).join(", ")}`,
     run: async () => { await settle(); const r = await api.send(d, sentId).catch(e => { if (e.savedId) mine.savedId = snapshot.savedId = e.savedId; throw e; }); forgetFormat(d.csid); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },

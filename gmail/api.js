@@ -11,12 +11,13 @@
 import { getToken, forget, signOut as revoke, NotSignedIn, client, setClient, redirectAddress, refusal, account } from "./auth.js";
 import { build, parseAddresses, messageIdOf, replyHeaders } from "./rfc822.js";
 import { read, guide, help, explain, notes, projectOf, INTRO, ROUTES } from "./setup.js";
-import { sniffImage } from "./bytes.js";
+import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, rememberUntil } from "./cache.js";
-import { clean, isoDate } from "./query.js";
+import { clean, fieldAtom } from "./query.js";
 import { esc } from "./text.js";
+import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds } from "./adapter.js";
 
-export { NotSignedIn };
+export { NotSignedIn, ApiError, TIMEOUTS, Timeout, normalizeFolders, isMessageId };
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
@@ -25,14 +26,6 @@ const ALL = "ALL";                       // the All Mail pseudo folder: every me
 const SYSTEM = { INBOX: ["INBOX", "Inbox"], DRAFT: ["DRAFT", "Drafts"], SENT: ["SENT", "Sent"], SPAM: ["BULK", "Spam"], TRASH: ["TRASH", "Trash"] };
 const FOLDER_LABELS = new Set(["INBOX", "SPAM", "TRASH"]);   // system labels that act as a message's folder
 const PAGE_MAX = 500;
-
-export class ApiError extends Error {
-  constructor(msg, detail) { super(msg); this.name = "ApiError"; this.detail = detail; }
-}
-export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000 };
-export class Timeout extends Error {
-  constructor(what, ms) { super(`Gmail did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
-}
 
 // The button keeps the exact text Google's sign-in branding prescribes, without a trademark sign.
 // waiting: what the page says while Google's window is open.
@@ -53,20 +46,7 @@ export const LIMITS = { messageBytes: 25 * 1048576, scanMax: 2000, scanPage: 20,
 // An image still addressed as cid: (a part that could not be inlined) could not load for anyone.
 export const isStrayImage = src => /^cid:/i.test(String(src || "").trim());
 
-export const isMessageId = id => (typeof id === "string" || typeof id === "number") && /^[A-Za-z0-9_-]{1,64}$/.test(String(id));
-function checkIds(ids) {
-  const bad = ids.find(id => !isMessageId(id));
-  if (bad !== undefined) throw new ApiError(`refusing malformed id ${JSON.stringify(String(bad).slice(0, 40))}`);
-}
 export const isGone = e => e instanceof ApiError && e.detail?.status === 404;
-
-// Every folder with a string id, a name and a types list, whatever shape was given.
-export function normalizeFolders(list) {
-  return (Array.isArray(list) ? list : []).filter(f => f && f.id != null).map(f => ({
-    ...f, id: String(f.id), name: typeof f.name === "string" && f.name ? f.name : `Folder ${f.id}`,
-    types: Array.isArray(f.types) ? f.types.filter(t => typeof t === "string") : [],
-  }));
-}
 
 // ---------- queries ----------
 // An address as a search value: only the characters addresses are written with reach the query,
@@ -80,7 +60,7 @@ export const queries = {
   starred: (unreadOnly = false) => `is:starred${unreadOnly ? " is:unread" : ""}`,
   unreadIn: folderId => opaque({ labelIds: folderId === ALL ? [] : [String(folderId)], q: "is:unread" }),
   person: email => { const e = bareAddress(email); return `(from:${e} OR to:${e} OR cc:${e})`; },
-  // mail with attachments, for a folder's list of attachments (searchScoped raw)
+  // mail with attachments, for a folder's list of attachments (searchScoped)
   files: () => "has:attachment",
 };
 
@@ -90,30 +70,16 @@ export const queries = {
 // A value is quoted where Gmail would read it as more than a word: with white space, a colon or a
 // bracket in it, a leading - or +, braces, or the operators OR and AND.
 const quoted = v => /[\s:(){}]|^[-+]|^(OR|AND)$/.test(v) ? `"${v}"` : v;
+// Gmail reads a written date as midnight Pacific time, so a day goes as the seconds of the user's
+// own midnight.
+const WORDS = { starred: "is:starred", day: (op, d) => { const [y, mo, day] = d.split("-").map(Number); return `${op}:${Math.floor(new Date(y, mo - 1, day).getTime() / 1000)}`; } };
 function atom(term, neg = false) {
-  const v = clean(term.value), lv = v.toLowerCase(), n = neg ? "-" : "";
+  const v = clean(term.value), n = neg ? "-" : "";
   switch (term.field) {
     case null: return `${n}${quoted(v)}`;
     case "from": case "to": case "subject": return `${n}${term.field}:${quoted(v)}`;
-    case "has":
-      if (/^attachments?$/.test(lv)) return `${n}has:attachment`;
-      throw new Error(`has:${v} is not a search term; has:attachment is`);
-    case "is":
-      if (lv === "starred" || lv === "flagged") return `${n}is:starred`;
-      if (lv === "unread") return neg ? "is:read" : "is:unread";
-      if (lv === "read") return neg ? "is:unread" : "is:read";
-      throw new Error(`is:${v} is not a search term; is:starred, is:unread and is:read are`);
-    // Gmail reads a written date as midnight Pacific time, so the day goes as the seconds of the
-    // user's own midnight
-    case "after": case "before": {
-      const d = isoDate(v);
-      if (!d) throw new Error(`${term.field}:${v} is not a date; write it as YYYY-MM-DD`);
-      const f = (term.field === "after") !== neg ? "after" : "before";
-      const [y, mo, day] = d.split("-").map(Number);
-      return `${f}:${Math.floor(new Date(y, mo - 1, day).getTime() / 1000)}`;
-    }
   }
-  return null;
+  return fieldAtom(term, neg, WORDS);
 }
 // within: the operator of the group around this node ("and", "or" or null at the top); a group
 // is bracketed only where its own operator differs from that.
@@ -193,13 +159,12 @@ export async function signOut() {
 // ---------- transport ----------
 // cap: the pace the request keeps; the user's own requests are counted while they run, so
 // background work can stand aside (see quota).
+// Every request has a deadline (TIMEOUTS), past which it fails as a Timeout.
+const fetchTimed = deadlined("Gmail");
 async function timed(what, url, init, ms, read, cap = FOREGROUND) {
-  const signal = AbortSignal.timeout(ms), mine = cap !== BACKGROUND;
+  const mine = cap !== BACKGROUND;
   if (mine) { foregroundBusy++; lastForeground = Date.now(); }
-  try {
-    const resp = await fetch(url, { ...init, signal });
-    return { resp, body: await read(resp) };
-  } catch (e) { throw signal.aborted && e.name === "TimeoutError" ? new Timeout(what, ms) : e; }
+  try { return await fetchTimed(what, url, init, ms, read); }
   finally { if (mine) { foregroundBusy--; lastForeground = Date.now(); } }
 }
 
@@ -434,7 +399,7 @@ export async function folders() {
   });
   labelName.set(ALL, "All Mail");
   list.push({ id: ALL, name: "All Mail", types: ["ARCHIVE"], unread: 0, total: p.messagesTotal || 0, highestModSeq: modseq.get(ALL) || 0, acctId: "1" });
-  return { folders: normalizeFolders(list), accounts: [], ms: Math.round(performance.now() - t0) };
+  return { folders: normalizeFolders(list), ms: Math.round(performance.now() - t0) };
 }
 
 // How many messages are starred: the count Gmail keeps for its STARRED label, one unit, where a
@@ -635,7 +600,7 @@ async function listRows(spec, count, offset, listed = null, cap = FOREGROUND) {
   const t0 = performance.now();
   const { ids } = await listIds(listParams(spec), count, offset, cap);
   const messages = await rows(ids, listed, cap);
-  return { messages, query: {}, ms: Math.round(performance.now() - t0) };
+  return { messages, ms: Math.round(performance.now() - t0) };
 }
 
 // background: work the user is not waiting for (the address-book build), paced to leave room.
@@ -650,20 +615,16 @@ export const listAll = (count = 100, offset = 0, opts = {}) => list(ALL, count, 
 // How many messages listAll has to list, told from the folder list.
 export const countAll = folders => folders.find(f => f.id === ALL)?.total || 0;
 
-// raw: term is already in Gmail's search language; otherwise words to find.
-export function search(term, folderId = null, count = 100, offset = 0, raw = false) {
-  const q = raw ? term : String(term || "").trim();
-  return listRows({ labelIds: folderId && folderId !== ALL ? [String(folderId)] : [], q }, count, offset, folderId ? String(folderId) : null);
-}
-
-// Search limited to a scope or to everything outside it. scope: { ids: [folderId...] } for a
-// folder and its subfolders, or { starred: true }. Returns what searchScoped() reads back.
-export function scopeFilter({ include = null, exclude = null } = {}) { return { include, exclude }; }
+// A query in Gmail's search language (queries.*, or one the dialect wrote), over all mail outside
+// Spam and Trash.
+export const search = (qs, count = 100, offset = 0) => listRows({ labelIds: [], q: qs }, count, offset, null);
 
 // A label named in a query, as Gmail's search writes it: in quotes, spaces as hyphens.
 const labelTerm = id => `label:"${(labelName.get(id) || id).replace(/"/g, "").replace(/ /g, "-")}"`;
-export async function searchScoped(term, { raw = null, include = null, exclude = null } = {}, count = 100, offset = 0) {
-  let q = raw || String(term || "").trim();
+// A query as for search(), within a scope or outside it: include or exclude, each { ids:
+// [folderId...] } for a folder and its subfolders, or { starred: true }.
+export async function searchScoped(qs, { include = null, exclude = null } = {}, count = 100, offset = 0) {
+  let q = qs;
   if (include?.starred) return listRows({ q: `is:starred ${q}` }, count, offset);
   if (include?.ids?.length) {
     const ids = include.ids.map(String);
@@ -672,7 +633,7 @@ export async function searchScoped(term, { raw = null, include = null, exclude =
     return listRows({ q: `(${ids.map(labelTerm).join(" OR ")}) ${q}`, includeSpamTrash: ids.some(isSpamOrTrash) }, count, offset);
   }
   // nothing is outside All Mail, so a search there has no matches elsewhere
-  if (exclude?.ids?.map(String).includes(ALL)) return { messages: [], query: {}, ms: 0 };
+  if (exclude?.ids?.map(String).includes(ALL)) return { messages: [], ms: 0 };
   if (exclude?.starred) q = `-is:starred ${q}`;
   const ids = (exclude?.ids || []).map(String);
   if (ids.length) q = `${ids.map(id => `-${labelTerm(id)}`).join(" ")} ${q}`;
@@ -790,7 +751,6 @@ export const originalUrl = () => null;
 // Every attachment Gmail names can be fetched by its attachment id, so the strip lists them all.
 export const isListed = () => true;
 
-const toDataUrl = (bytes, type) => new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(new Blob([bytes], { type })); });
 
 // A thumbnail of an image attachment: the image itself, when it is small enough to fetch for that.
 const THUMB_MAX = 2 * 1048576;
@@ -799,7 +759,7 @@ export async function thumbnail(msgId, a) {
   if (!/^image$/i.test(a.type || "") || (a.size || 0) > THUMB_MAX) return null;
   const key = partKey(msgId, a.partId);
   if (thumbCache.has(key)) return thumbCache.get(key);
-  const p = partBytes(msgId, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? toDataUrl(bytes, t) : null; }).catch(() => null);
+  const p = partBytes(msgId, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? dataUrl(new Blob([bytes], { type: t })) : null; }).catch(() => null);
   return rememberUntil(thumbCache, key, p, { max: 100, maxBytes: PICTURES_KEPT, sizeOf: urlSize });
 }
 
@@ -820,7 +780,7 @@ export async function inlineSource(src, body) {
   if (!message?.id || !a) return null;
   const key = partKey(message.id, a.partId);
   if (inlineCache.has(key)) return inlineCache.get(key);
-  const p = partBytes(message.id, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? toDataUrl(bytes, t) : null; }).catch(() => null);
+  const p = partBytes(message.id, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? dataUrl(new Blob([bytes], { type: t })) : null; }).catch(() => null);
   return rememberUntil(inlineCache, key, p, { max: 200, maxBytes: PICTURES_KEPT, sizeOf: urlSize });
 }
 

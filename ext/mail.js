@@ -9,7 +9,7 @@ import * as contactsFile from "./contactsfile.js";
 import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
-import { esc, noBidi, plural } from "./text.js";
+import { attr, esc, noBidi, plural } from "./text.js";
 import { cleanLink } from "./links.js";
 import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow, copyText } from "./guide.js";
 import * as awake from "./awake.js";
@@ -501,7 +501,7 @@ async function markAllRead(f) {
       if (r.changed === 0) await markEachRead(() => api.query(api.queries.unreadIn(f.id), 100));
     } else {
       // Starred is a search across folders: every starred unread message, not only those loaded
-      await markEachRead(() => api.search(api.queries.starred(true), null, 100, 0, true));
+      await markEachRead(() => api.search(api.queries.starred(true), 100));
     }
   } catch (e) { handleError(e, "mark all read"); return; }
   // the rows shown read are those marked: the folder's, or the starred ones (Starred is no folder)
@@ -714,10 +714,10 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
     } else if (v.kind === "search" && v.scope) {
       const scoped = mode === "more" ? state.messages.filter(x => !x.elsewhere).length : 0;
       [r, other] = await Promise.all([
-        api.searchScoped(v.term, { raw: nq, include: v.scope }, count, scoped),
-        mode === "more" ? null : api.searchScoped(v.term, { raw: nq, exclude: v.scope }, ELSEWHERE_MAX, 0).catch(() => ({ messages: [] })),
+        api.searchScoped(nq, { include: v.scope }, count, scoped),
+        mode === "more" ? null : api.searchScoped(nq, { exclude: v.scope }, ELSEWHERE_MAX, 0).catch(() => ({ messages: [] })),
       ]);
-    } else r = v.kind === "search" ? await api.search(nq, null, count, offset, true) : await api.list(v.folderId, count, offset);
+    } else r = v.kind === "search" ? await api.search(nq, count, offset) : await api.list(v.folderId, count, offset);
   } catch (e) {
     if (token !== state.listToken) { stillDirty(); return; }
     if (state.refreshing === token) state.refreshing = null;
@@ -832,7 +832,7 @@ function renderList() {
     el.setAttribute("role", "option");
     el.draggable = true;
     const who = outgoing ? h.to?.[0] : h.from?.[0];
-    el.innerHTML = `<span class="st" title="Star / unstar (s)"></span><span class="fl"></span><span class="fr" data-email="${esc(who?.email || "")}" data-name="${esc(who?.name || "")}">${esc(who?.name || who?.email || "")}</span>` +
+    el.innerHTML = `<span class="st" title="Star / unstar (s)"></span><span class="fl"></span><span class="fr" data-email="${attr(who?.email || "")}">${esc(who?.name || who?.email || "")}</span>` +
       `<span class="sb">${subjectHtml(h.subject)}${showFolder ? `<em>${esc(m.folder?.name || "")}</em>` : ""}</span>` +
       `<span class="dt"><span class="tr" title="Delete (Del)">${TRASH_ICON}</span>${fmtDate(h.date)}</span>`;
     paintFlags(el, m);
@@ -1073,7 +1073,7 @@ function imagesLeft(html, body) {
 // ---------- contact cards ----------
 // Hover an address in the reader header or a sender in the list to see what the address book
 // knows about the person and the last messages exchanged with them.
-const addrHtml = l => (l || []).map(a => `<span class="who" data-email="${esc(a.email || "")}" data-name="${esc(a.name || "")}">${esc(a.name ? `${a.name} <${a.email}>` : a.email || "")}</span>`).join(", ");
+const addrHtml = l => (l || []).map(a => `<span class="who" data-email="${attr(a.email || "")}" data-name="${attr(a.name || "")}">${esc(a.name ? `${a.name} <${a.email}>` : a.email || "")}</span>`).join(", ");
 
 let cardTimer = null, cardHideTimer = null, cardFor = null;
 function wireContactCards() {
@@ -1116,12 +1116,12 @@ async function openCard(anchor, email, name) {
   };
   const q = api.queries.person(email);
   let res;
-  try { res = await api.search(q, null, 5, 0, true); } catch { res = { messages: [] }; }
+  try { res = await api.search(q, 5); } catch { res = { messages: [] }; }
   if (cardFor !== email || seq !== cardSeq) return;
   const recent = card.querySelector(".card-recent");
   recent.innerHTML = res.messages.length ? res.messages.map(m => {
     const out = (m.headers.from?.[0]?.email || "").toLowerCase() !== email.toLowerCase();
-    return `<div data-id="${esc(m.id)}" title="${esc(plainSubject(m.headers.subject))}">${people.dirIcon(out)}<span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
+    return `<div data-id="${attr(m.id)}" title="${esc(plainSubject(m.headers.subject))}">${people.dirIcon(out)}<span class="subj">${esc(plainSubject(m.headers.subject))}</span><span class="dt">${fmtDate(m.headers.date)}</span></div>`;
   }).join("") : "<i>No messages found.</i>";
   recent.onclick = e => {
     const row = e.target.closest("[data-id]"), m = row && res.messages.find(x => x.id === row.dataset.id);
@@ -1838,7 +1838,7 @@ async function checkContacts() {
       const known = await contacts.lookup(email);
       if (!known || known.copied || known.given || known.added) continue;     // not in the book, or kept whatever a search says: nothing to ask
       let left;
-      try { left = (await api.search(api.queries.person(email), null, 1, 0, true)).messages?.length > 0; } catch { continue; }   // not known: it stays
+      try { left = (await api.search(api.queries.person(email), 1)).messages?.length > 0; } catch { continue; }   // not known: it stays
       if (!left && !toCheck.has(email)) forgot += (await contacts.forget([email])).length;
       await pause(CHECK_GAP);
     }
@@ -2091,7 +2091,7 @@ function filesWhere(m, id) {
 const outgoingRow = m => ["SENT", "DRAFT"].includes(folderType(state.byId.get(m.folder?.id)));
 const filesHooks = {
   storage: chrome.storage.local,
-  search: (ids, count, offset) => api.searchScoped("", { raw: api.queries.files(), include: { ids } }, count, offset),
+  search: (ids, count, offset) => api.searchScoped(api.queries.files(), { include: { ids } }, count, offset),
   scope: filesScope, listed: api.isListed,
   who: m => (outgoingRow(m) ? m.headers?.to?.[0] : m.headers?.from?.[0]) || {},
   where: filesWhere,
@@ -2146,7 +2146,7 @@ const peopleHooks = {
   write: list => writeTo(list),
   mailWith: (email, openId) => searchPerson(email, openId),
   find: (emails, field) => findFrom(emails, field),
-  recent: (email, count) => api.search(api.queries.person(email), null, count, 0, true),
+  recent: (email, count) => api.search(api.queries.person(email), count),
   draft: m => folderType(state.byId.get(String(m.folder?.id))) === "DRAFT",
   trash: TRASH_ICON,
   subject: m => plainSubject(m.headers?.subject),
@@ -2189,7 +2189,7 @@ function refreshStarredCount() {
   if (starredCounting) { starredCounting.again = true; return; }
   starredCounting = { again: false };
   // a provider that keeps the count itself (Gmail) answers it exactly; otherwise it is a search, capped
-  const counted = api.starredCount ? api.starredCount().then(n => ({ n, exact: true })) : api.search(STARRED_Q, null, STARRED_MAX, 0, true).then(r => ({ n: r.messages.length, exact: false }));
+  const counted = api.starredCount ? api.starredCount().then(n => ({ n, exact: true })) : api.search(STARRED_Q, STARRED_MAX).then(r => ({ n: r.messages.length, exact: false }));
   counted
     .then(r => { state.starredCount = r.n; state.starredExact = r.exact; updateFolderCounts(); })
     .catch(() => {})

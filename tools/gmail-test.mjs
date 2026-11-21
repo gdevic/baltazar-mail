@@ -298,7 +298,7 @@ const lastMod = () => modsOf().at(-1);
   ok(placed.m2 === "INBOX" && placed.f1 === "Label_2" && placed.s1 === "SENT", "a row listed in All Mail is placed by its labels, so archiving it there takes it out of Inbox: " + JSON.stringify(placed));
   const un = await api.query(api.queries.unreadIn("Label_1"), 100, 0);
   ok(lastCall("GET", /^\/messages$/).q.labelIds === "Label_1" && lastCall("GET", /^\/messages$/).q.q === "is:unread" && un.messages.map(x => x.id).join() === "p1,p3,p5", "unreadIn names the label outside the search: " + JSON.stringify([lastCall("GET", /^\/messages$/).q, un.messages.map(x => x.id)]));
-  const st = await api.search(api.queries.starred(), null, 100, 0, true);
+  const st = await api.search(api.queries.starred(), 100);
   ok(st.messages.map(x => x.id).join() === "f1,m2" && st.messages[0].folder.id === "Label_2" && st.messages[0].folder.name === "Projects/FPGA", "a search result's folder is its user label: " + JSON.stringify(st.messages.map(x => [x.id, x.folder])));
   const sc = await api.searchScoped("Subject", { include: { ids: ["Label_1", "Label_2"] } }, 50, 0);
   ok(lastCall("GET", /^\/messages$/).q.q === '(label:"Projects" OR label:"Projects/FPGA") Subject' && sc.messages.map(x => x.id).join() === "p1,p2,p3,p4,p5", "a folder with subfolders is searched by label names: " + JSON.stringify([lastCall("GET", /^\/messages$/).q.q, sc.messages.map(x => x.id)]));
@@ -356,7 +356,7 @@ const lastMod = () => modsOf().at(-1);
   ] } });
   const ap = await api.body("apple1");
   ok(ap.text === "Before\nAfter" && ap.html.startsWith("<p>Before</p>") && ap.html.includes(">After</div>") && ap.attachments.length === 1 && ap.attachments[0].filename === "scan.pdf" && ap.attachments[0].disposition === "attachment" && ap.message.attachments[0].disposition === "attachment", "an inline-marked file the text does not show is an attachment, and text after it is shown: " + JSON.stringify([ap.text, ap.html, ap.attachments]));
-  const [arow] = (await api.search("apple1", null, 10, 0, true)).messages;
+  const [arow] = (await api.search("apple1", 10)).messages;
   ok(arow?.attachmentCount === 1, "the row counts it: " + JSON.stringify(arow?.attachments));
   mock.messages.delete("apple1");
 }
@@ -409,12 +409,12 @@ const lastMod = () => modsOf().at(-1);
   ok(bulk.ok.length === 11 && mock.calls.filter(c => c.path === "/messages/batchModify").length === 1 && !modsOf().some(b => b.single), "more than ten change in bulk: " + JSON.stringify(modsOf().length));
   // a label changed elsewhere reaches a kept row through the history
   await api.folders();
-  const before = (await api.search("m1", null, 10, 0, true)).messages[0];
+  const before = (await api.search("m1", 10)).messages[0];
   mock.messages.get(before.id).labelIds = mock.messages.get(before.id).labelIds.filter(l => l !== "UNREAD");
   mock.history.push({ id: String(mock.nextHistory), labelsRemoved: [{ message: { id: before.id, labelIds: mock.messages.get(before.id).labelIds }, labelIds: ["UNREAD"] }] });
   mock.profile.historyId = String(mock.nextHistory++);
   await api.folders();
-  const after = (await api.search("m1", null, 10, 0, true)).messages[0];
+  const after = (await api.search("m1", 10)).messages[0];
   ok(before.id === after.id && !before.flags.read && after.flags.read, "a kept row follows a change made elsewhere: " + JSON.stringify([before.flags, after.flags]));
 }
 // folder operations, with the rename cascading to nested labels
@@ -647,7 +647,7 @@ const lastMod = () => modsOf().at(-1);
   const pages = [await page(0), await page(2), await page(4)];
   ok(pages[0].split(",").length === 2 && pages[1].split(",").length === 2 && pages[2] === "", "a page past the exact end of a list is empty: " + JSON.stringify(pages));
   for (const id of ["pg1", "pg2", "pg3", "pg4"]) mock.messages.delete(id);
-  const elsewhere = await api.searchScoped("Subject", { raw: "Subject", exclude: { ids: ["ALL"] } }, 50, 0);
+  const elsewhere = await api.searchScoped("Subject", { exclude: { ids: ["ALL"] } }, 50, 0);
   ok(elsewhere.messages.length === 0, "nothing is outside All Mail: " + elsewhere.messages.length);
   const sentCopies = subject => [...mock.messages.values()].filter(m => m.labelIds.includes("SENT") && JSON.stringify(m).includes(subject)).length;
   for (const via of ["messages", "drafts"]) {

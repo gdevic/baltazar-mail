@@ -2,6 +2,8 @@ Third-party libraries, unmodified except for removed source-map comments.
 
 `vendor.json` records where every file comes from and its SHA-256. `node tools/vendor-check.mjs --upstream --osv` re-downloads each library from its published source, compares the bytes, and looks up known vulnerabilities in the OSV database; GitHub Actions runs it on every change here, weekly, and before each release.
 
+Of PDF.js's images only those its viewer component uses are kept: the annotation icons, which it names by an annotation's type, and every image `pdf_viewer.css` names. The check fails when a new `pdf_viewer.css` names one that vendor.json does not list.
+
 | Library | Version | License | Files |
 |---|---|---|---|
 | PDF.js (pdfjs-dist) | 6.4.299 | Apache-2.0 | pdfjs/ |

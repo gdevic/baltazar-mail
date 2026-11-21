@@ -3,9 +3,10 @@
 // is:starred is:unread is:read after:YYYY-MM-DD before:YYYY-MM-DD.
 //
 // The provider's adapter supplies the dialect that writes terms in its own search language:
-// { atom(term, neg) } gives one term (or its negation), or null when the provider cannot express
-// it, and throws for a value the field does not know; compile(ast), when present, writes a whole
-// query, for a provider whose search takes any boolean query.
+// { atom(term, neg) } gives one term, or its negation, or null for a negation the provider cannot
+// express, and throws for a value the field does not know (fieldAtom writes the fields both
+// providers know alike); compile(ast), when present, writes a whole query, for a provider whose
+// search takes any boolean query.
 //
 // Without compile the query is evaluated the way Yahoo's search needs: it ORs keyword terms, ANDs
 // field filters with one keyword group, rejects negated keywords and senders, and ANDs an
@@ -124,8 +125,32 @@ export function isoDate(v) {
   return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
 }
 
+// The terms both providers write alike, for a dialect's atom: has:attachment, is:starred (or
+// is:flagged), is:unread, is:read, after: and before:, each refused with the reason when the
+// language does not know its value. words: { starred, the provider's term for a starred message;
+// day(op, date), after: or before: (op) a YYYY-MM-DD date in the provider's terms }. Null for any
+// other field.
+export function fieldAtom(term, neg, words) {
+  const v = clean(term.value), lv = v.toLowerCase(), n = neg ? "-" : "";
+  switch (term.field) {
+    case "has":
+      if (/^attachments?$/.test(lv)) return `${n}has:attachment`;
+      throw new Error(`has:${v} is not a search term; has:attachment is`);
+    case "is":
+      if (lv === "starred" || lv === "flagged") return `${n}${words.starred}`;
+      if (lv === "unread") return neg ? "is:read" : "is:unread";
+      if (lv === "read") return neg ? "is:unread" : "is:read";
+      throw new Error(`is:${v} is not a search term; is:starred, is:unread and is:read are`);
+    case "after": case "before": {
+      const d = isoDate(v);
+      if (!d) throw new Error(`${term.field}:${v} is not a date; write it as YYYY-MM-DD`);
+      return words.day((term.field === "after") !== neg ? "after" : "before", d);
+    }
+  }
+  return null;
+}
+
 const isKeyword = t => t.field === null;
-const known = (t, d) => t.field === null || d.atom(t) !== null;
 
 // Throws, with the reason, for a term whose field does not know its value (is:important).
 export function check(node, d) {
@@ -163,7 +188,6 @@ function plan(conj, d) {
   const native = [], seenField = new Set(), verify = [], exclude = [];
   let keyword = null;
   for (const { term, neg } of conj) {
-    if (!known(term, d)) { if (!neg) verify.push(term); else exclude.push(term); continue; }
     const a = d.atom(term, neg);
     if (neg) { if (a) native.push(a); else exclude.push(term); continue; }
     if (isKeyword(term)) { if (!keyword) keyword = term; else verify.push(term); continue; }
@@ -226,14 +250,12 @@ export async function evaluate(ast, run, scope = "", d) {
     const idq = () => `id:(${ids.join(" OR ")})`;
     for (const t of p.verify) {
       if (!ids.length) break;
-      const a = d.atom(t) || `keyword:"${clean(t.value)}"`;
-      const hit = new Set((await run(`${idq()} ${a}`, ids.length)).map(m => m.id));
+      const hit = new Set((await run(`${idq()} ${d.atom(t)}`, ids.length)).map(m => m.id));
       ids = ids.filter(id => hit.has(id));
     }
     for (const t of p.exclude) {
       if (!ids.length) break;
-      const a = d.atom(t) || `keyword:"${clean(t.value)}"`;
-      const hit = new Set((await run(`${idq()} ${a}`, ids.length)).map(m => m.id));
+      const hit = new Set((await run(`${idq()} ${d.atom(t)}`, ids.length)).map(m => m.id));
       ids = ids.filter(id => !hit.has(id));
     }
     const keep = new Set(ids);

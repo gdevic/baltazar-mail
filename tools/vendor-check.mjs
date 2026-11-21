@@ -56,6 +56,11 @@ for (const f of present) {
 for (const f of Object.keys(manifest.files)) if (!present.includes(f)) fail(`${f}: recorded but missing`);
 console.log(`hashes: ${present.length} files checked`);
 
+// Of PDF.js's images only those its viewer component uses are kept: the annotation icons, which it
+// names by an annotation's type, and every image its stylesheet names, which this checks.
+for (const [, f] of readFileSync(join(VENDOR, "pdfjs", "pdf_viewer.css"), "utf8").matchAll(/url\("?images\/([^")]+)"?\)/g))
+  if (!present.includes(`pdfjs/images/${f}`)) fail(`pdfjs/images/${f}: pdf_viewer.css uses it, and vendor.json does not keep it`);
+
 // ---------- upstream sources ----------
 async function download(url) {
   const resp = await fetch(url);

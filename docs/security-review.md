@@ -23,11 +23,11 @@ The bug review done at the same time found two gaps in how the security claims a
 - Links in SVG and in image maps of an attachment preview are handed back like any other link, and checked the same way.
 - A suggestion's hide button names its row rather than an address read back from escaped text, which loses bidi controls; Copy addresses keeps the semicolon out of names.
 - A draft reopened while images are set to never keeps its quote's remote images back.
+- The Contacts view and the reader's contact card write the addresses and ids they read back into `data-` attributes with an escape that keeps bidi controls, so an address holding them is acted on as itself, not as the look-alike shown.
 - PRIVACY.md says that a picture shown through Yahoo's proxy still tells its sender when the message was read.
 
 ## Hardening left
 
-- The Contacts view reads addresses back from escaped `data-` attributes, which lose bidi controls, so an address holding them is acted on as its look-alike.
 - A reply to a Spam message saved as a draft loads its quote's images when it is reopened, unless images are set to never.
 - The Gmail app page may load images from any `https:` host, which its reader frame inherits; an HTML injection into the app page could use that, and none was found.
 - The test workflow compares the bundled libraries with their recorded hashes only; the library workflow and every release compare them with their published originals.

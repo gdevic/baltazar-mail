@@ -496,6 +496,30 @@ const contactsTab = async (page, pile) => { await page.locator(`#p-show button[d
 const contactRow = (page, email) => page.locator(`#p-rows .prow[data-email="${email}"]`);
 const inBook = (page, email) => page.evaluate(async e => !!(await (await import("./contacts.js")).lookup(e)), email);
 
+// An address holding a bidi control is shown without it, and acted on as itself: the reader's
+// card, the Same name link and the selection find that address, not the look-alike shown.
+scenario("an address with a bidi control is acted on as itself", async ({ page, mock }, expect) => {
+  const odd = "eve\u202e@x.com", r = {}, text = sel => page.locator(sel).first().textContent().catch(() => "");
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.evaluate(async odd => (await import("./contacts.js")).learn([odd, "eve2@x.com"].map((email, i) => ({ id: `EVE${i}`, folder: { id: "1" },
+    headers: { from: [{ name: "Eve", email }], to: [{ name: "Me", email: "me@yahoo.com" }], date: String(Math.floor(Date.now() / 1000) - i) } }))), odd);
+  mock.patchBody = (id, m) => { if (id === "MSG1_2") m.headers = { ...m.headers, from: [{ name: "Eve", email: odd }] }; };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.locator("#r-from .who").first().hover(); await page.waitForTimeout(900);
+  r.card = await text("#card .card-stats");
+  await page.mouse.move(0, 0); await page.waitForTimeout(400);
+  await contactsOpen(page); await contactsTab(page, "others");
+  await page.locator("#p-filter").fill("eve"); await page.waitForTimeout(300);
+  await contactRow(page, "eve2@x.com").click(); await page.waitForTimeout(300);
+  await page.locator("#person .p-also a").first().click(); await page.waitForTimeout(300);
+  r.also = await text("#person .p-mail");
+  await contactRow(page, "eve2@x.com").click({ modifiers: ["Control"] }); await page.waitForTimeout(300);
+  r.marked = await page.locator("#p-rows .prow.marked").count();
+  await page.locator('#person .chip[title="Eve <eve@x.com>"] a').click({ timeout: 3000 }).catch(() => {}); await page.waitForTimeout(300);
+  r.after = await text("#person .p-name");
+  expect(/^Last exchange/.test(r.card) && r.also === "eve@x.com" && r.marked === 2 && r.after === "Eve", "the card, the link and the selection find the address: " + JSON.stringify(r));
+});
+
 scenario("Contacts shows a person's mail and comes back, keeps a pin across tabs, and writes to several people", async (h, expect) => {
   const { page } = h, r = {};
   const text = sel => page.locator(sel).first().textContent().catch(() => "");

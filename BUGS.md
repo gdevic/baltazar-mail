@@ -4,7 +4,7 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 ## Summary
 
-No critical, high or medium finding is open. What is left is low: rare cases, small faults, missing tests, hardening, and code that can go.
+No critical, high or medium finding is open. What is left is low: rare cases, small faults and missing tests.
 
 ## Low
 
@@ -34,17 +34,3 @@ Left as it is: catching it would take a pass over all mail after the first build
 
 ### TOOL-6. The Contacts page's own zoom has no test
 `settings.contactZoom` (`ext/mail.js:73`, `1228-1231`): Ctrl+wheel and + - 0 over a contact's recent messages. Confirmed.
-
-## Security hardening
-
-None of these is a vulnerability today.
-
-- The values `people.js` puts in its `data-email`, `data-unmark` and `data-also` attributes are escaped by `esc()`, which strips bidi controls, and read back as addresses (`ext/people.js:132-133`), so an address holding such controls is acted on as its look-alike; the rows could be named by their place in the list instead, as the composer's suggestions now are.
-
-## Code to remove
-
-Left for a pass of its own, as each changes more than one module's terms:
-
-- **Code no caller reaches:** the folder and keyword branches of `search()` in both adapters, since every caller passes no folder and a raw query; the fallbacks of `searchScoped`; Gmail's `scopeFilter`; the false branch of `known()` and the `keyword:` fallbacks in `ext/query.js`; the unread `accounts` and `query` fields of the adapters' answers; the leftovers of the first database version (`e.names`, `delete e.sent`) in contacts.js.
-- **Helpers written more than once:** `normalizeFolders`, `isMessageId` and `checkIds`, `ApiError`, `TIMEOUTS` with `Timeout` and `timed`, and `dataUrl` in both adapters, and the has, is, after and before cases of their `atom()`, which belong in shared code; the composer's teardown in both `close()` and `send()`.
-- **Files every ZIP carries and nothing loads:** 28 PDF.js toolbar images in `vendor/pdfjs/images/`, which means listing the images one by one in vendor.json instead of mapping the folder; the annotation icons there are used.

@@ -33,7 +33,7 @@
 // the list last for the session.
 
 import * as contacts from "./contacts.js";
-import { esc, noBidi, plural } from "./text.js";
+import { attr, esc, noBidi, plural } from "./text.js";
 
 const $ = id => document.getElementById(id);
 const CHUNK = 300;               // rows listed at first, and added by Show more
@@ -241,7 +241,7 @@ const iconTips = (r, many) => ({
 function rowHtml(r, i) {
   const marked = st.marked.has(r.email), when = r[PILES[st.pile].field], tip = iconTips(r, marked ? st.marked.size : 1);
   const label = [r.name, r.email, r.pinned ? "pinned" : "", r.hidden ? "hidden" : "", when ? `${PILES[st.pile].date.toLowerCase()} ${fullDate(when)}` : ""].filter(Boolean).map(noBidi).join(", ");
-  return `<div class="prow${i === st.cursor ? " sel" : ""}${marked ? " marked" : ""}${r.hidden ? " off" : ""}" id="prow-${i}" data-i="${i}" data-email="${esc(r.email)}" role="option" aria-selected="${st.marked.size ? marked : i === st.cursor}" aria-label="${esc(label)}">` +
+  return `<div class="prow${i === st.cursor ? " sel" : ""}${marked ? " marked" : ""}${r.hidden ? " off" : ""}" id="prow-${i}" data-i="${i}" data-email="${attr(r.email)}" role="option" aria-selected="${st.marked.size ? marked : i === st.cursor}" aria-label="${esc(label)}">` +
     (r.hidden ? `<span class="pk none"></span>` : `<span class="pk${r.pinned ? " on" : ""}" role="button" title="${tip.pin}" aria-label="${r.pinned ? "Unpin" : "Pin"}">${PIN}</span>`) +
     // a column each for the name and the address: with no name known, the name's is left empty
     `<span class="pn">${esc(r.name)}</span>` +
@@ -478,7 +478,7 @@ function page() {
     <div class="p-mail">${esc(r.email)}</div>
     <div class="p-stats">${r.last ? `Last mail ${fullDate(r.last)}` : "No mail yet"} · ${r.lastSent ? `you last wrote ${fullDate(r.lastSent)}` : "you have not written to this address"}</div>
     <div class="p-actions"><button data-p="write" title="New message to ${who} (c)">Write</button><button data-p="mail">All mail</button><button data-p="from">Mail from</button><button data-p="to">Mail to</button><button data-p="copy">Copy address</button><span class="sep"></span><button data-p="rename" title="${RENAME_TIP} (F2)">Rename</button><button data-p="${r.pinned ? "unpin" : "pin"}"${r.hidden ? ` disabled title="${NO_PIN}"` : ` title="${r.pinned ? UNPIN_TIP : PIN_TIP} (s)"`}>${r.pinned ? "Unpin" : "Pin"}</button><button data-p="${r.hidden ? "unhide" : "hide"}"${r.pinned ? ` disabled title="${NO_HIDE}"` : ` title="${r.hidden ? UNHIDE_TIP : HIDE_TIP} (h)"`}>${r.hidden ? "Unhide" : "Hide"}</button><button data-p="delete"${r.pinned ? ` disabled title="${NO_DELETE}"` : ` title="${DELETE_TIP} (Del)"`}>Delete</button></div>
-    ${also.length ? `<div class="p-also">Same name: ${also.map(x => `<a href="#" data-also="${esc(x.email)}">${esc(x.email)}</a>`).join(", ")}</div>` : ""}</div>
+    ${also.length ? `<div class="p-also">Same name: ${also.map(x => `<a href="#" data-also="${attr(x.email)}">${esc(x.email)}</a>`).join(", ")}</div>` : ""}</div>
     <div class="p-recent"><i>loading recent messages...</i></div>`;
   const got = recent.get(r.email);
   paintWays(r.email);
@@ -583,8 +583,8 @@ function recentHtml(email, messages) {
   box.innerHTML = `<div class="p-head">Recent messages</div>` + messages.map(m => {
     const out = (m.headers?.from?.[0]?.email || "").toLowerCase() !== email;
     const subject = hooks.subject(m);
-    return `<div class="p-msg" data-id="${esc(m.id)}" data-email="${esc(email)}" title="${esc(subject)}">${dirIcon(out)}<span class="subj">${esc(subject)}</span><span class="fo">${esc(m.folder?.name || "")}</span><span class="dt">${esc(hooks.date(m.headers?.date))}</span></div>`;
-  }).join("") + (messages.length >= RECENT ? `<div class="p-msg p-all" data-id="" data-email="${esc(email)}"><span class="dir"></span><span class="subj">All mail with ${esc(showName(st.byEmail.get(email) || { email }))}...</span></div>` : "");
+    return `<div class="p-msg" data-id="${attr(m.id)}" data-email="${attr(email)}" title="${esc(subject)}">${dirIcon(out)}<span class="subj">${esc(subject)}</span><span class="fo">${esc(m.folder?.name || "")}</span><span class="dt">${esc(hooks.date(m.headers?.date))}</span></div>`;
+  }).join("") + (messages.length >= RECENT ? `<div class="p-msg p-all" data-id="" data-email="${attr(email)}"><span class="dir"></span><span class="subj">All mail with ${esc(showName(st.byEmail.get(email) || { email }))}...</span></div>` : "");
 }
 
 const SHOWN_MAX = 60;            // names listed on the page of a large selection
@@ -596,7 +596,7 @@ function groupHtml(t) {
   return `<div class="p-card"><div class="p-name">${plural(n, "contact")} selected</div>
     <div class="p-actions"><button data-p="write"${off(WRITE_MAX, `A message can be started to ${WRITE_MAX} people at most`) || ' title="New message to all of them (c)"'}>Write to all</button><button data-p="from"${find || ' title="Mail any of these addresses sent (Enter)"'}>Mail from any</button><button data-p="to"${find || ' title="Mail sent to any of these addresses"'}>Mail to any</button><button data-p="copy">Copy addresses</button></div>
     <div class="p-actions">${anyLoose ? `<button data-p="pin" title="List these addresses first in People (s)">Pin</button>` : ""}${anyPinned ? `<button data-p="unpin" title="Stop listing these addresses first in People">Unpin</button>` : ""}${anyShown ? `<button data-p="hide" title="${HIDE_TIP.replace("this address", "these addresses").replace("it is", "they are")} (h)">Hide</button>` : ""}${anyHidden ? `<button data-p="unhide" title="${UNHIDE_TIP.replace("this address", "these addresses").replace("suggest it", "suggest them")}">Unhide</button>` : ""}${t.some(r => !r.pinned) ? `<button data-p="delete" title="${DELETE_TIP.replace("this address", "these addresses").replace("keep it", "keep them")} (Del)">Delete</button>` : ""}<span class="sep"></span><button data-p="clear" title="Select nobody (Esc)">Clear selection</button></div>
-    <div class="p-chips">${t.slice(0, SHOWN_MAX).map(r => `<span class="chip" title="${esc(r.name ? `${r.name} <${r.email}>` : r.email)}"><span>${r.name ? `<b>${esc(r.name)}</b>` : esc(r.email)}</span><a data-unmark="${esc(r.email)}" title="Take out of the selection">×</a></span>`).join("")}${n > SHOWN_MAX ? `<span class="p-rest">and ${(n - SHOWN_MAX).toLocaleString()} more</span>` : ""}</div></div>`;
+    <div class="p-chips">${t.slice(0, SHOWN_MAX).map(r => `<span class="chip" title="${esc(r.name ? `${r.name} <${r.email}>` : r.email)}"><span>${r.name ? `<b>${esc(r.name)}</b>` : esc(r.email)}</span><a data-unmark="${attr(r.email)}" title="Take out of the selection">×</a></span>`).join("")}${n > SHOWN_MAX ? `<span class="p-rest">and ${(n - SHOWN_MAX).toLocaleString()} more</span>` : ""}</div></div>`;
 }
 
 // ---------- keys ----------

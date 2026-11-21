@@ -48,10 +48,9 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
 // Names by source: a label other senders put on an address loses to the person's own From name,
 // which loses to the name the user typed, however often the weaker one is seen.
 {
-  const e = { names: { "Legacy": 9 } };
-  check(bestName(e) === "Legacy", "a name recorded before sources were kept still shows");
+  const e = {};
   for (let i = 0; i < 20; i++) noteName(e, "Click Here To Pay", "others");
-  check(bestName(e) === "Click Here To Pay", "others' labels outvote legacy names only by count");
+  check(bestName(e) === "Click Here To Pay", "with no other source, others' label names the address");
   noteName(e, "Ann Smith", "self");
   check(bestName(e) === "Ann Smith", "the person's own name beats any number of labels");
   noteName(e, "Annie", "mine"); noteName(e, "  ", "mine"); noteName(e, null, "mine");

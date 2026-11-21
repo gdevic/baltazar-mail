@@ -3,9 +3,12 @@
 // The Gmail extension's adapter (gmail/api.js) has the same exports.
 
 import { listParts, extract } from "./mime.js";
-import { sniffImage } from "./bytes.js";
+import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, failure, freshFailure, recent, RETRY_FAILED } from "./cache.js";
-import { clean, isoDate } from "./query.js";
+import { clean, fieldAtom } from "./query.js";
+import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds } from "./adapter.js";
+
+export { ApiError, TIMEOUTS, Timeout, normalizeFolders, isMessageId };
 
 const ORIGIN = "https://mail.yahoo.com";
 const BATCH = ORIGIN + "/c/ws/v3/batch";
@@ -40,14 +43,14 @@ export function isStrayImage(src) {
 
 // Only address characters reach a query: quotes, parentheses and backslashes would end the term.
 const bareAddress = email => String(email).replace(/["()\\\s]/g, "");
-// Queries the client runs by name, as opaque strings for query() and search(raw). Starred spans
-// every folder; search() adds the Spam and Trash exclusion.
+// Queries the client runs by name, as opaque strings for query(), search() and searchScoped().
+// Starred spans every folder; search() adds the Spam and Trash exclusion.
 export const queries = {
   starred: (unreadOnly = false) => `is:flagged ${LIST_FILTER}${unreadOnly ? " is:unread" : ""}`,
   unreadIn: folderId => `folderId:${folderId} is:unread`,
   // to: finds the address in To only and cc: in Cc; nothing finds it in a Bcc (verified 2026-11-20)
   person: email => { const e = bareAddress(email); return `(from:("${e}") OR to:("${e}") OR cc:("${e}"))`; },
-  // mail with attachments, for a folder's list of attachments (searchScoped raw); its rows carry
+  // mail with attachments, for a folder's list of attachments (searchScoped); its rows carry
   // each file's partId, size, type, links and objectId (verified 2026-11-20)
   files: () => "has:attachment",
 };
@@ -55,29 +58,16 @@ export const queries = {
 // ---------- search terms ----------
 // Yahoo atom for a term, or for its negation when Yahoo can negate it; null when it cannot.
 // query.js compiles the user's search with this dialect (see there for the language).
+const WORDS = { starred: "is:flagged", day: (op, d) => `${op}:${d}` };
 function atom(term, neg = false) {
-  const v = clean(term.value), lv = v.toLowerCase();
+  const v = clean(term.value);
   switch (term.field) {
     case null: return neg ? null : (/[\s:]/.test(v) ? `keyword:"${v}"` : `keyword:${v}`);
     case "from": return neg ? null : `from:("${v}")`;
     case "to": return neg ? null : `to:("${v}")`;
     case "subject": return neg ? null : `subject:"${v}"`;
-    case "has":
-      if (/^attachments?$/.test(lv)) return `${neg ? "-" : ""}has:attachment`;
-      throw new Error(`has:${v} is not a search term; has:attachment is`);
-    case "is":
-      if (lv === "starred" || lv === "flagged") return `${neg ? "-" : ""}is:flagged`;
-      if (lv === "unread") return neg ? "is:read" : "is:unread";
-      if (lv === "read") return neg ? "is:unread" : "is:read";
-      throw new Error(`is:${v} is not a search term; is:starred, is:unread and is:read are`);
-    case "after": case "before": {
-      const d = isoDate(v);
-      if (!d) throw new Error(`${term.field}:${v} is not a date; write it as YYYY-MM-DD`);
-      const f = (term.field === "after") !== neg ? "after" : "before";
-      return `${f}:${d}`;
-    }
   }
-  return null;
+  return fieldAtom(term, neg, WORDS);
 }
 export const dialect = { atom };
 
@@ -85,24 +75,8 @@ export class NotSignedIn extends Error {
   constructor() { super("Not signed in to Yahoo Mail"); this.name = "NotSignedIn"; }
 }
 
-export class ApiError extends Error {
-  constructor(msg, detail) { super(msg); this.name = "ApiError"; this.detail = detail; }
-}
-
-// Every request has a deadline, so a stalled connection ends in an error instead of waiting
-// forever. Uploads get extra time per megabyte sent.
-export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000 };
-export class Timeout extends Error {
-  constructor(what, ms) { super(`Yahoo did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
-}
-// fetch plus reading the body, both inside the deadline. read(resp) returns the body.
-async function timed(what, url, init, ms, read) {
-  const signal = AbortSignal.timeout(ms);
-  try {
-    const resp = await fetch(url, { ...init, signal });
-    return { resp, body: await read(resp) };
-  } catch (e) { throw signal.aborted && e.name === "TimeoutError" ? new Timeout(what, ms) : e; }
-}
+// Every request has a deadline (TIMEOUTS), past which it fails as a Timeout.
+const timed = deadlined("Yahoo");
 
 let session = null;
 async function forgetSession() { session = null; await chrome.storage.session.remove("ymSession"); }
@@ -224,14 +198,6 @@ function first(r) {
 // Yahoo's answer for a message that no longer exists (removed elsewhere, or already deleted).
 export const isGone = e => e instanceof ApiError && (e.detail?.httpCode === 404 || e.detail?.response?.error?.code === "EC-4007");
 
-// Every folder with a string id, a name and a types list, whatever shape Yahoo sent.
-export function normalizeFolders(list) {
-  return (Array.isArray(list) ? list : []).filter(f => f && f.id != null).map(f => ({
-    ...f, id: String(f.id), name: typeof f.name === "string" && f.name ? f.name : `Folder ${f.id}`,
-    types: Array.isArray(f.types) ? f.types.filter(t => typeof t === "string") : [],
-  }));
-}
-
 // The folder list is the first call after start-up; an inner sign-in refusal (a session that
 // went stale for this mailbox) gets one fresh sign-in.
 export async function folders(retry = true) {
@@ -239,7 +205,7 @@ export async function folders(retry = true) {
   const code = r[0]?.httpCode ?? 0;
   if (retry && (code === 401 || code === 403)) { await forgetSession(); await bootstrap(true); return folders(false); }
   const res = first(r);
-  return { folders: normalizeFolders(res.folders), accounts: res.accounts || [], ms: r.ms };
+  return { folders: normalizeFolders(res.folders), ms: r.ms };
 }
 
 export async function list(folderId, count = 100, offset = 0) {
@@ -247,8 +213,7 @@ export async function list(folderId, count = 100, offset = 0) {
     id: "GetMessageGroupList", method: "GET",
     uri: q(`folderId:${folderId} ${LIST_FILTER} count:${count} offset:${offset} -sort:date`),
   }]);
-  const res = first(r);
-  return { messages: res.messages || [], query: res.query, ms: r.ms };
+  return { messages: first(r).messages || [], ms: r.ms };
 }
 
 // Every message outside Spam and Trash, newest first, whatever folder it is in, but for the
@@ -262,26 +227,16 @@ export async function listAll(count = 100, offset = 0, { exclude = [] } = {}) {
     id: "GetMessageGroupList", method: "GET",
     uri: q(`${[ALL_MAIL, LIST_FILTER, ...exclude.map(id => `-folderId:${id}`)].join(" ")} count:${count} offset:${offset} -sort:date`),
   }]);
-  const res = first(r);
-  return { messages: res.messages || [], query: res.query, ms: r.ms };
+  return { messages: first(r).messages || [], ms: r.ms };
 }
 // How many messages listAll has to list, told from the folder list.
 export const countAll = (folders, exclude = []) => folders.filter(f => !f.types.some(t => LISTED_NOWHERE.includes(t)) && !exclude.map(String).includes(String(f.id))).reduce((n, f) => n + (f.total || 0), 0);
 
-// raw: term is already in Yahoo's query language (from:(..) OR to:(..)); otherwise a keyword search.
-export async function search(term, folderId = null, count = 100, offset = 0, raw = false) {
-  const scope = folderId ? `folderId:${folderId} ` : `${ALL_MAIL} `;
-  if (raw) {
-    const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`${scope}count:${count} offset:${offset} -sort:date ${term}`) }]);
-    const res = first(r);
-    return { messages: res.messages || [], query: res.query, ms: r.ms };
-  }
-  const r = await batch("messageGroups.getList", [{
-    id: "GetMessageGroupList", method: "GET",
-    uri: q(`${scope}count:${count} offset:${offset} -sort:date keyword:${term}`),
-  }]);
-  const res = first(r);
-  return { messages: res.messages || [], query: res.query, ms: r.ms };
+// A query in Yahoo's search language (queries.*, or one query.js wrote), over all mail outside
+// Spam and Trash.
+export async function search(qs, count = 100, offset = 0) {
+  const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`${ALL_MAIL} count:${count} offset:${offset} -sort:date ${qs}`) }]);
+  return { messages: first(r).messages || [], ms: r.ms };
 }
 
 export async function body(msgId) {
@@ -348,8 +303,6 @@ export async function extractText(a) {
   if (typeof t !== "string") throw new Error("no text in response");
   return t;
 }
-
-const dataUrl = blob => new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(blob); });
 
 // A thumbnail of an image attachment as a data: URL, or null. Yahoo renders them server-side
 // behind the session cookies, so the page fetches them; a failure is tried again after a minute.
@@ -452,14 +405,6 @@ export async function docPages(documentId, start, end, retryCount = 0) {
 // ---------- mutations ----------
 // Each id gets its own inner request, as the web client does; one HTTP round trip for all of them.
 // Returns the ids that succeeded and those that failed; throws only if nothing succeeded.
-// Message ids end up inside Yahoo query strings and URIs; anything but Yahoo's id alphabet is refused.
-const MSG_ID = /^[A-Za-z0-9_-]{1,64}$/;
-export const isMessageId = id => (typeof id === "string" || typeof id === "number") && MSG_ID.test(String(id));
-function checkIds(ids) {
-  const bad = ids.find(id => !isMessageId(id));
-  if (bad !== undefined) throw new ApiError(`refusing malformed message id ${JSON.stringify(String(bad).slice(0, 40))}`);
-}
-
 async function perMessage(name, ids, make) {
   checkIds(ids);
   const reqs = ids.map((id, i) => make(id, i));
@@ -477,9 +422,9 @@ const update = (name, ids, payload) => perMessage(name, ids, (id, i) => ({
 
 export function setRead(ids, read) { return update("messages.readFlagUpdate", ids, { message: { flags: { read } } }); }
 export function setStarred(ids, flagged) { return update("messages.starFlagUpdate", ids, { message: { flags: { flagged } } }); }
-// Search limited to a scope or to everything outside it. scope: { ids: [folderId...] } for a
-// folder and its subfolders, or { starred: true }. Yahoo accepts folderId:(a OR b) for a set;
-// for exclusion only one -folderId: term per folder works.
+// The scope of a search, as Yahoo's search language writes it: within include or outside exclude,
+// each { ids: [folderId...] } for a folder and its subfolders, or { starred: true }. Yahoo accepts
+// folderId:(a OR b) for a set; for exclusion only one -folderId: term per folder works.
 export function scopeFilter({ include = null, exclude = null } = {}) {
   const parts = include?.ids?.length ? [] : [ALL_MAIL];
   if (include?.starred) parts.push("is:flagged");
@@ -489,8 +434,9 @@ export function scopeFilter({ include = null, exclude = null } = {}) {
   return parts.join(" ");
 }
 
-export async function searchScoped(term, { raw = null, include = null, exclude = null } = {}, count = 100, offset = 0) {
-  return query([scopeFilter({ include, exclude }), raw || `keyword:${term}`].filter(Boolean).join(" "), count, offset);
+// A query as for search(), within a scope or outside it (see scopeFilter).
+export function searchScoped(qs, { include = null, exclude = null } = {}, count = 100, offset = 0) {
+  return query(`${scopeFilter({ include, exclude })} ${qs}`, count, offset);
 }
 
 // One Yahoo query in its own search language (see query.js for what it can express).
