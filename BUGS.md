@@ -8,17 +8,10 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 |---|---|---|---|---|
 | ADPT-4 | Medium | Gmail | A send answered 5xx after it was sent goes out twice | likely |
 | CONT-5 | Medium | Contacts | Mail that arrives during the first build and is filed before the next refresh is never learned | reproduced |
-| CORE-2 | Medium | App | Starred › Mark all read marks every row of the open list read | reproduced |
-| CORE-3 | Medium | App | The unread count drops twice when a refresh lands within the mark-read delay | reproduced |
-| CORE-4 | Medium | App | A search that ends after the user went to the composer takes the keyboard | reproduced |
-| CORE-5 | Medium | App | After a search the reader's Delete does nothing and says the message is in Trash | reproduced |
-| VIEWER-1 | Medium | Attachments | A file left before its bytes arrived still takes over the viewer | reproduced |
-| VIEWER-3 | Medium | Attachments | Text, CSV and HTML attachments are decoded as UTF-8 only | reproduced |
 | ADPT-3 | Medium | Gmail | A search in All Mail lists every hit twice | reproduced |
 | ADPT-2 | Medium | Gmail | Load more at the exact end of a list starts again at page 1 | likely |
 | ADPT-5 | Medium | Gmail | Label counts include trashed mail, so an emptied label cannot be deleted | likely |
 | TOOL-3 | Medium | Dark mode | Legacy colours without `#` and modern colour syntax are not darkened | reproduced |
-| VIEWER-2 | Medium | Attachments | Every picture, audio or video stepped past stays in memory until the viewer closes | reproduced |
 | CACHE-1 | Medium | Gmail | Caches count entries, not bytes, and hold full-size images | confirmed |
 | SG-1 | Medium | Security | A message's styles still tell its sender about the reader (Gmail) | reproduced |
 | TOOL-2 | Medium | Tests | The sandbox's network isolation is asserted by checks that cannot fail | confirmed |
@@ -33,30 +26,6 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 ### CONT-5. Mail that arrives during the first build and is filed before the next refresh is never learned
 
 `ext/mail.js:593` clears `contactsDirty` although `syncContacts` only returns the run under way (`ext/mail.js:2703`); the refresh reads Sent and Inbox down to its bookmark (`ext/contacts.js:298`, `237`) and the build's last pass skips Inbox rows (`ext/contacts.js:269`). A new correspondent's message that arrives after the Inbox pass and is archived or filed during the build stays out of Contacts until a Rebuild; the Gmail build can span hours. Fix: remember a sync asked for during a run, and refresh once more when the run ends. Reproduced.
-
-### CORE-2. Starred › Mark all read marks every row of the open list read
-
-`ext/mail.js:506-507`: for Starred the folder is null, so `here` is true whatever view is open and every row is shown read, while only starred messages were marked at the provider; opening them later does not mark them read, since the reader marks only rows it believes unread. Fix: treat only the Starred view as here, and elsewhere mark only starred rows. Reproduced.
-
-### CORE-3. The unread count drops twice when a refresh lands within the mark-read delay
-
-`ext/mail.js:1349-1359` (the mark-read timer), `ext/mail.js:1550-1564` (`applyFlags`), `ext/mail.js:742`, `757-759`, `626-630`. A refresh replaces the row objects; when the timer fires, `applyFlags` lowers the folder's count for the new row, then `!state.messages.includes(m)` holds for the old object it captured and `bumpFolder` lowers it again. The count and the tab title stay one too low, and if the tab is then in the background, the next poll's correct count looks like new mail and puts up the new-mail dot. Fix: compare by id, and read the current row's flags. Reproduced.
-
-### CORE-4. A search that ends after the user went to the composer takes the keyboard
-
-`ext/mail.js:2207` (`doSearch`), `1155` (`searchPerson`) and `1135` (`goToMessage`) end with `$("list").focus()`, where the folder loads use `focusListIfStill` (`ext/mail.js:1980`). Letters typed for the composer then run shortcuts: j selects a result, e archives it, # deletes it, and c, r, a or f replace the composer. Fix: note `focusWhere()` at the start and end with `focusListIfStill`. Reproduced.
-
-### CORE-5. After a search the reader's Delete does nothing and says the message is in Trash
-
-`ext/mail.js:2846`, `760`, `1824-1829`, `1713-1717`. A search that does not match the open message leaves it in the reader; Delete works from the list's rows, finds none and reports "already in Trash", and Undelete answers "already in Inbox". Fix: act on the open message when it is no row of the list, or clear the reader. Reproduced.
-
-### VIEWER-1. A file left before its bytes arrived still takes over the viewer
-
-`ext/viewer.js:262-264` calls `sandboxed()` after `await bytes()` without a stale check, `sandboxed()` replaces `current` (`ext/viewer.js:394`), and `stale()` (`ext/viewer.js:258`) compares only the list and the index. Open a slow PDF and step to a picture: when the PDF's bytes arrive, a hidden frame is added and `current` loses its zoom, so the zoom buttons and + - 0 stop working on the picture; stepping away and back to the same PDF before its bytes arrive renders it twice. Fix: a sequence number for each `show()`, checked before `sandboxed()`. Reproduced.
-
-### VIEWER-3. Text, CSV and HTML attachments are decoded as UTF-8 only
-
-`ext/viewer.js:293`, `283`, `458` use `blob.text()` or force `charset=utf-8`; `asText` (`ext/bytes.js:4-15`) reads byte-order marks and falls back to Windows-1252, but only the raw view uses it. An Excel CSV from a Western Windows, a Notepad "Unicode" file or a Windows-1252 HTML report shows replacement characters or NULs. Fix: decode with `asText`, or with the part's charset where the adapter has it. Reproduced.
 
 ### ADPT-3. Gmail: a search in All Mail lists every hit twice
 
@@ -73,10 +42,6 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 ### TOOL-3. Legacy colours without # and modern colour syntax are not darkened
 
 `ext/darken.js:44-68` (`parseColor`), `ext/darken.js:137-138`. `bgcolor="ffffff"` and `color="000000"`, which browsers read as #ffffff and #000000, are kept, giving black text on the dark page or light text on a table left white; `oklch()`, `lab()`, `hwb()`, `color()` and `hsl()` with bare numbers are kept the same way. Fix: give a bare 3- or 6-digit attribute value its `#` before remapping, and keep an element's text colour when its background colour did not parse. Reproduced.
-
-### VIEWER-2. Every picture, audio or video stepped past stays in memory until the viewer closes
-
-`ext/viewer.js:123-127` keeps every object URL, and only `close()` (`ext/viewer.js:142-148`) revokes them, not `teardown()` (`ext/viewer.js:136-140`). Stepping through 60 photos of 4 MB holds 240 MB. Fix: revoke the object URLs in `teardown()`. Reproduced.
 
 ### CACHE-1. Gmail: caches count entries, not bytes, and hold full-size images
 
@@ -115,12 +80,6 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 
 ### COMP-14. A message only to Cc or Bcc is announced as "to " with no one
 `ext/compose.js:1094` names only To. Fix: name To, Cc and Bcc together. Confirmed.
-
-### CORE-6. A fetch that fails after the user opened another message replaces it with the error
-`ext/mail.js:1259` checks `state.openId` after a successful fetch only; `showReaderError` then hides the message on screen and clears `currentBody`. Fix: return quietly in the catch when `openId` changed. Reproduced.
-
-### CORE-7. The mark-read timer is dropped when it fires during an action
-`ext/mail.js:1349` runs the work through `run()`, which drops it while busy (`ext/mail.js:1603-1604`), and nothing tries again: the message stays unread and the status line says "busy, try again in a moment". Fix: rearm the timer briefly when busy. Reproduced.
 
 ### CORE-8. Each folder dialog adds another Tab handler
 `ext/mail.js:565` calls `trapFocus` on every open of the name dialog (`ext/mail.js:532-541`), and the name box stops every key (`ext/mail.js:557-561`): after the second dialog of a session Tab from Cancel skips OK, and Shift+Tab from the name box always leaves the dialog. Fix: trap once at start-up and let Tab through in the name box. Reproduced.

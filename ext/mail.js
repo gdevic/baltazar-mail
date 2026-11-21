@@ -503,8 +503,9 @@ async function markAllRead(f) {
       await markEachRead(() => api.search(api.queries.starred(true), null, 100, 0, true));
     }
   } catch (e) { handleError(e, "mark all read"); return; }
-  const here = !f || (state.view.kind === "folder" && state.view.folderId === f.id);
-  for (const m of state.messages) if (here || m.folder?.id === f.id) m.flags = { ...m.flags, read: true };
+  // the rows shown read are those marked: the folder's, or the starred ones (Starred is no folder)
+  const here = f ? state.view.kind === "folder" && state.view.folderId === f.id : !!state.view.starred;
+  for (const m of state.messages) if (here || (f ? m.folder?.id === f.id : m.flags?.flagged)) m.flags = { ...m.flags, read: true };
   if (f) { const live = state.byId.get(f.id); if (live) live.unread = 0; }
   renderList(); updateFolderCounts();
   status(`marked ${f ? folderName(f) : "Starred"} read`);
@@ -970,6 +971,8 @@ function updateToolbar() {
 
 // ---------- reader ----------
 let currentBody = null;
+// The row of the message in the reader, which a search that does not find it leaves there.
+let readerRow = null;
 let markReadTimer = null;
 
 // DOMPurify (vendor/purify.min.js) removes anything in a message that could run, navigate or
@@ -1128,6 +1131,7 @@ async function openCard(anchor, email, name) {
 // pages of the folder until it turns up; failing that, the person's search shows it.
 const GO_TO_PAGES = 10;
 async function goToMessage(m, email) {
+  const from = focusWhere();
   const fid = m.folder?.id;
   if (!fid || !state.byId.has(fid)) { searchPerson(email); return; }
   await openFolder(fid);
@@ -1140,7 +1144,7 @@ async function goToMessage(m, email) {
   if (state.view !== v) return;            // the user went elsewhere meanwhile
   if (i < 0) { status(`that message is further back in ${folderName(state.byId.get(fid))}; showing the search`); searchPerson(email); return; }
   clearMarks(); select(i);
-  $("list").focus();
+  focusListIfStill(from);
   if (folderType(state.byId.get(fid)) === "DRAFT") editDraft(i); else open(i);
 }
 
@@ -1151,6 +1155,7 @@ const findFrom = (emails, field = "from") => doSearch([].concat(emails).map(e =>
 // All mail with a person, either way. openId: a message to select and open there. A search begun
 // in Contacts, or in a search that was, goes back to Contacts (Esc).
 async function searchPerson(email, openId = null) {
+  const from = focusWhere();
   const back = [state.view, state.view.back].find(v => v?.kind === "contacts");
   leaveView();
   state.prevView = state.view;
@@ -1160,7 +1165,7 @@ async function searchPerson(email, openId = null) {
   renderFolders();
   const v = state.view;
   await loadList("fresh");
-  $("list").focus();
+  focusListIfStill(from);
   const i = openId && state.view === v ? state.messages.findIndex(m => m.id === openId) : -1;
   if (i >= 0) { select(i); open(i); }
 }
@@ -1265,7 +1270,8 @@ async function openMessage(m, how = "user") {
   clearTimeout(markReadTimer);
   status("fetching body...");
   let r;
-  try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) { messageGone(m.id); return; } showReaderError(e, "fetching the message"); return; }
+  // a failure for a message the user has left meanwhile is no news about the one now open
+  try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) { messageGone(m.id); return; } if (state.openId === m.id) showReaderError(e, "fetching the message"); return; }
   if (state.openId !== m.id) return;
   try { await renderMessage(m, r, how); } catch (e) { showReaderError(e, "rendering the message"); }
 }
@@ -1281,7 +1287,7 @@ function messageGone(id) {
 function showReaderError(e, what) {
   handleError(e, what);
   if (e instanceof api.NotSignedIn) return;
-  currentBody = null;      // the previous message must not come back on a redraw, or print
+  currentBody = null; readerRow = null;      // the previous message must not come back on a redraw, or print
   $("reader-empty").textContent = `Error ${what}: ${e.message}`;
   $("reader-empty").classList.remove("hidden");
   $("reader-head").classList.add("hidden");
@@ -1326,7 +1332,7 @@ function setFrame(doc, bg = "#fff") {
 async function renderMessage(m, r, how = "user") {
   r.source = r.html;
   r.html = cleanHtml(r.html);
-  currentBody = r;
+  currentBody = r; readerRow = m;
   const h = r.message.headers || {};
   $("reader-empty").classList.add("hidden");
   $("reader-head").classList.remove("hidden");
@@ -1352,16 +1358,19 @@ async function renderMessage(m, r, how = "user") {
   clearTimeout(markReadTimer);
   if (settings.markReadSec != null && !m.flags?.read && !(how === "auto" && keptUnread.has(m.id))) {
     // In a hidden tab nobody has read it yet: the timer starts again once the tab is seen.
+    // The message is found by its id each time, as a refresh of the list puts new rows in place
+    // of the old; one that is no row of the list (a message shown from a folder's attachments)
+    // has its folder counted here. While an action runs, the mark waits for it.
     const fire = () => {
-      if (state.openId !== m.id || m.flags?.read) return;
+      const row = () => state.messages.find(x => x.id === m.id);
+      if (state.openId !== m.id || (row() || m).flags?.read) return;
       if (document.hidden) { document.addEventListener("visibilitychange", function again() { if (document.hidden) return; document.removeEventListener("visibilitychange", again); if (state.openId === m.id) arm(); }); return; }
+      if (busy) { arm(500); return; }
       run(async () => {
         try {
           const r2 = await api.setRead([m.id], true);
           applyFlags(r2.ok, { read: true });
-          // a message shown from a folder's attachments is no row of the list, so its folder is
-          // counted here
-          if (r2.ok.includes(m.id) && !state.messages.includes(m)) {
+          if (r2.ok.includes(m.id) && !row()) {
             if (!m.flags?.read) bumpFolder(m.folder?.id, 0, -1);
             m.flags = { ...(m.flags || {}), read: true };
             updateFolderCounts();
@@ -1370,7 +1379,7 @@ async function renderMessage(m, r, how = "user") {
         catch (e) { handleError(e, "mark read"); }
       });
     };
-    const arm = () => { clearTimeout(markReadTimer); markReadTimer = setTimeout(fire, settings.markReadSec * 1000); };
+    const arm = (ms = settings.markReadSec * 1000) => { clearTimeout(markReadTimer); markReadTimer = setTimeout(fire, ms); };
     arm();
   }
 }
@@ -1396,7 +1405,7 @@ async function relinkBody() {
 
 const READER_EMPTY = "Select a message to read it. Press ? for keyboard shortcuts.";
 function clearReader() {
-  state.openId = null; currentBody = null;
+  state.openId = null; currentBody = null; readerRow = null;
   $("reader-empty").textContent = READER_EMPTY;
   $("r-attach").classList.add("hidden");
   clearTimeout(markReadTimer);
@@ -1688,6 +1697,8 @@ const redo = () => undoOrRedo(redoStack, undoStack, "redo", ["redoing", "redone"
 
 // ---------- actions ----------
 const byIds = ids => { const set = new Set(ids); return state.messages.filter(m => set.has(m.id)); };
+// The same, with the message open in the reader where the list no longer holds it.
+const rowsOrOpen = ids => { const out = byIds(ids); if (readerRow && ids.includes(readerRow.id) && !out.some(m => m.id === readerRow.id)) out.push(readerRow); return out; };
 const groupBy = (pairs) => { const g = new Map(); for (const [k, v] of pairs) { if (!g.has(k)) g.set(k, []); g.get(k).push(v); } return g; };
 // Some messages of a batch failed: say how many, and that the rest went through.
 const DONE = { mark: "changed", star: "changed", move: "moved", archive: "archived", delete: "deleted", spam: "marked as spam", notspam: "marked not spam" };
@@ -1731,7 +1742,7 @@ async function doSetStarred(ids, flagged) {
 async function doMove(ids, folderId, verb = "move") {
   if (!ids.length) return;
   const dest = state.byId.get(String(folderId)); if (!dest) { status("unknown destination folder"); return; }
-  const msgs = byIds(ids);
+  const msgs = rowsOrOpen(ids);
   const fallback = state.view.kind === "folder" ? state.view.folderId : null;
   const origins = msgs.map(m => ({ id: m.id, from: m.folder?.id ?? fallback, unread: !m.flags?.read }));
   const moving = origins.filter(o => o.from !== dest.id);
@@ -1749,6 +1760,8 @@ async function doMove(ids, folderId, verb = "move") {
       : ["TRASH", "BULK"].includes(folderType(dest)) && !v.scope?.ids?.includes(dest.id);
     if (leaves) removeLocal(r.ok);
     else { for (const m of byIds(r.ok)) m.folder = { ...(m.folder || {}), id: dest.id, name: dest.name }; renderList(); }
+    // the open message moved from outside the list leaves the reader
+    if (readerRow && okSet.has(readerRow.id) && !state.messages.some(m => m.id === readerRow.id)) clearReader();
     updateFolderCounts();
     const n = plural(done.length, "message"), where = folderName(dest).split("/").pop();
     const words = { move: [`move ${n} to ${where}`, `moved ${n} to ${where}`], archive: [`archive ${n}`, `archived ${n}`], delete: [`delete ${n}`, `deleted ${n}`],
@@ -2213,6 +2226,7 @@ function updateScopeChip() {
 }
 
 async function doSearch(term, everywhere = false) {
+  const from = focusWhere();
   term = term.trim();
   if (!term) return;
   let ast;
@@ -2229,7 +2243,7 @@ async function doSearch(term, everywhere = false) {
   renderFolders();
   updateScopeChip();
   await loadList("fresh");
-  $("list").focus();
+  focusListIfStill(from);
 }
 
 // ---------- keyboard ----------
@@ -2868,7 +2882,7 @@ $("person").addEventListener("wheel", e => { if (e.ctrlKey && e.target.closest?.
 $("toolbar").onclick = e => { const b = e.target.closest("button[data-act]"); if (b && !b.disabled) runAction(b.dataset.act); };
 $("r-images").onclick = loadImages;
 $("r-print").onclick = printMessages;
-$("r-delete").onclick = () => { const id = state.openId; if (id) run(() => rowInTrash(byIds([id])[0]) ? doUndelete(id) : doDelete([id])); };
+$("r-delete").onclick = () => { const id = state.openId; if (id) run(() => rowInTrash(rowsOrOpen([id])[0]) ? doUndelete(id) : doDelete([id])); };
 $("r-dark").onclick = toggleReaderColours;
 $("compose-btn").onclick = () => startCompose("new");
 for (const b of document.querySelectorAll("[data-reply]")) b.onclick = () => startCompose(b.dataset.reply);

@@ -49,6 +49,7 @@ export function tile(a) {
 let hooks = null;
 // The files the viewer steps through, each with the id of the message it belongs to (msgId).
 let items = [], index = 0;
+let shown = 0;        // counts show() calls: a file left before it is drawn is drawn no more
 let objectUrls = [];
 
 export function init(h) {
@@ -120,6 +121,13 @@ async function fetchBlob(a) {
   return new Blob([bytes], { type: MIME[extOf(a.filename)] || (MEDIA_TYPE.test(type || "") ? type : "application/octet-stream") });
 }
 
+// A text file's characters, in the encoding asText recognises (UTF-8, Windows-1252, UTF-16 with
+// its mark); what it takes for binary is read as UTF-8 all the same, as the file says it is text.
+async function textOf(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return asText(bytes) ?? new TextDecoder().decode(bytes);
+}
+
 function objectUrl(blob, type) {
   const u = URL.createObjectURL(type && blob.type !== type ? new Blob([blob], { type }) : blob);
   objectUrls.push(u);
@@ -133,18 +141,19 @@ const MIME = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg
 // ---------- viewer ----------
 let current = null;   // { cleanup(), zoom(dir) } for the renderer on screen
 
+// The file on screen goes, with the object URLs that held its bytes.
 function teardown() {
   try { current?.cleanup?.(); } catch {}
   current = null;
   $("v-zoom").classList.add("hidden");
+  for (const u of objectUrls) URL.revokeObjectURL(u);
+  objectUrls = [];
 }
 
 function close() {
   teardown();
   $("viewer").classList.add("hidden");
   $("v-body").innerHTML = "";
-  for (const u of objectUrls) URL.revokeObjectURL(u);
-  objectUrls = [];
 }
 
 const center = html => `<div class="v-center">${html}</div>`;
@@ -247,7 +256,7 @@ async function show(i) {
   if (!items.length) return;
   teardown();
   index = (i + items.length) % items.length;
-  const a = items[index], k = kindOf(a), list = items, at = index;
+  const a = items[index], k = kindOf(a), seq = ++shown;
   $("viewer").classList.remove("hidden");
   $("v-name").textContent = noBidi(a.filename || "Untitled");
   const meta = extra => { $("v-meta").textContent = `${sizeStr(a.size)} · ${LABEL[k]}${extra ? ` · ${extra}` : ""}${items.length > 1 ? ` · ${index + 1} of ${items.length}` : ""}`; };
@@ -255,7 +264,7 @@ async function show(i) {
   $("v-prev").disabled = $("v-next").disabled = items.length < 2;
   const body = $("v-body");
   body.innerHTML = center("Loading...");
-  const stale = () => items !== list || index !== at || !isOpen();
+  const stale = () => seq !== shown || !isOpen();
   const ctx = { a, k, body, stale, meta };
   const bytes = async () => (await fetchBlob(a)).arrayBuffer();
   try {
@@ -280,7 +289,7 @@ async function show(i) {
       body.innerHTML = center(`<${k} controls autoplay></${k}>`);
       body.querySelector(k).src = objectUrl(blob, MIME[ext]);
     } else if (k === "html") {
-      const { html, page } = hooks.attachedHtml(await blob.text());
+      const { html, page } = hooks.attachedHtml(await textOf(blob));
       body.innerHTML = `<iframe sandbox="" referrerpolicy="no-referrer" title="HTML"></iframe>`;
       const frame = body.querySelector("iframe");
       if (page) frame.style.background = page.bg;
@@ -290,7 +299,7 @@ async function show(i) {
       await sandboxed(ctx, { kind: "zip", bytes: await blob.arrayBuffer() });
     } else {
       if (blob.size > 3 * 1048576) { body.innerHTML = center(`Too large to preview (${sizeStr(blob.size)}). <button id="v-dl2">Download</button>`); $("v-dl2").onclick = () => download(a); return; }
-      await sandboxed(ctx, { kind: "text", text: await blob.text(), ext });
+      await sandboxed(ctx, { kind: "text", text: await textOf(blob), ext });
     }
   } catch (e) {
     if (stale()) return;
@@ -337,6 +346,7 @@ const CHUNK = 3;
 
 function sandboxed(ctx, request) {
   const { a, body, stale, meta } = ctx;
+  if (stale()) return Promise.resolve();      // its bytes came after the user moved on
   return new Promise((resolve, reject) => {
     const frame = document.createElement("iframe");
     frame.className = "v-box";
@@ -459,7 +469,7 @@ async function openInTab(a) {
   if (!type) return download(a);
   try {
     const blob = await fetchBlob(a);
-    const u = URL.createObjectURL(new Blob([blob], { type }));
+    const u = URL.createObjectURL(new Blob([type.startsWith("text/") ? await textOf(blob) : blob], { type }));
     window.open(u, "_blank", "noopener");
     setTimeout(() => URL.revokeObjectURL(u), 60000);
   } catch {

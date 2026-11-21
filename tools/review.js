@@ -156,6 +156,19 @@ scenario("links lose their tracking only when the setting asks, and the open mes
 });
 
 // ---------- attachments ----------
+// Each picture the viewer steps past lets go of its bytes; only the file on screen holds any.
+scenario("the viewer lets go of a picture's bytes when it moves on", async ({ page }, expect) => {
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.evaluate(() => { window.revoked = []; const was = URL.revokeObjectURL.bind(URL); URL.revokeObjectURL = u => { window.revoked.push(u); was(u); }; });
+  await page.locator("#r-attach .att-card").nth(3).click();
+  await page.waitForSelector("#v-body img.v-img", { timeout: 10000 });
+  const src = await page.locator("#v-body img.v-img").getAttribute("src");
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  await page.waitForTimeout(600);
+  const r = { blob: src?.startsWith("blob:"), let: (await page.evaluate(() => window.revoked)).includes(src) };
+  expect(r.blob && r.let, "the picture's object URL is revoked when the next file shows: " + JSON.stringify(r));
+});
+
 scenario("a previewed file's type comes from its name, not the sender", async ({ page, mock }, expect) => {
   mock.patchBody = (id, m) => { if (id.startsWith("MSG1_")) { m.attachments[3].filename = "pic.avif"; m.attachments[3].subtype = "avif"; } };
   mock.patchRaw = raw => raw.replace('Content-Type: image/png; name="photo.png"', 'Content-Type: text/html; name="pic.avif"');
@@ -1073,11 +1086,52 @@ scenario("Mark all read on Starred marks the starred unread mail, not the open l
     }
     return prev(a);
   };
-  const before = h.calls.length;
+  const before = h.calls.length, unread = () => page.locator("#rows .row.unread").count(), shown = await unread();
   await menuOf(page, folderRow(page, "Starred")); await pickMenu(page, "Mark all read"); await page.waitForTimeout(1500);
   const marked = h.calls.slice(before).filter(c => c.name === "messages.readFlagUpdate").flatMap(c => c.envelope.requests.map(r => decodeURIComponent(r.uri).match(/id:\(([^)]+)\)/)?.[1]));
   expect(asked >= 2 && JSON.stringify(marked.sort()) === JSON.stringify(["MSG31_1", "MSG31_2"]), "only the starred unread messages are marked: " + JSON.stringify({ asked, marked }));
+  // the Inbox shown meanwhile has none of them: its rows stay as they were
+  const after = await unread();
+  expect(shown > 0 && after === shown, "the open list is not shown read: " + JSON.stringify({ shown, after }));
 }, { settings: { pollSec: 600 } });
+
+// A refresh that lands while the open message waits to be marked read replaces its row: the
+// folder's count still goes down by one.
+scenario("a message marked read during a refresh lowers the unread count once", async ({ page }, expect) => {
+  const count = () => folderRow(page, "Inbox").locator(".ct").textContent();
+  const was = await count();
+  await page.locator("#rows .row.unread").first().click();
+  await page.locator("#list").focus(); await page.keyboard.press("Shift+R");
+  await page.waitForTimeout(3000);
+  const r = { was, now: await count() };
+  expect(Number(r.now) === Number(r.was) - 1, "one less unread: " + JSON.stringify(r));
+}, { settings: { pollSec: 600, markReadSec: 2 } });
+
+// A search that answers late leaves the keyboard where the user went meanwhile.
+scenario("a slow search does not take the keyboard from the composer", async (h, expect) => {
+  const { page } = h;
+  h.mock.listDelay = 1500;
+  await page.locator("#search").fill("Subject"); await page.locator("#search").press("Enter");
+  await page.locator("#compose-btn").click(); await page.waitForSelector("#compose:not(.hidden)");
+  await page.waitForTimeout(2500);
+  h.mock.listDelay = 0;
+  const r = { title: await page.locator("#list-title").textContent(), focus: await page.evaluate(() => !!document.activeElement?.closest("#compose")) };
+  expect(/Subject/.test(r.title) && r.focus, "the search is shown and the composer keeps the keyboard: " + JSON.stringify(r));
+});
+
+// A search that does not find the open message leaves it in the reader, where Delete still works.
+scenario("the reader's Delete works on a message a search has left out of the list", async (h, expect) => {
+  const { page } = h, prev = h.mock.handler;
+  h.mock.handler = a => /nomatch/.test(decodeURIComponent(a.top?.uri || "")) ? { responses: [{ id: a.top.id, httpCode: 200, response: { result: { messages: [], query: {} } } }] } : prev?.(a);
+  await page.locator("#rows .row").first().click(); await page.waitForTimeout(800);
+  await page.locator("#search").fill("nomatch"); await page.locator("#search").press("Enter");
+  await page.waitForFunction(() => !document.querySelector("#rows .row"), null, { timeout: 5000 }).catch(() => {});
+  const shown = await page.locator("#r-subject").textContent();
+  const before = h.calls.length;
+  await page.locator("#r-delete").click(); await page.waitForTimeout(1200);
+  const r = { shown, moved: h.calls.slice(before).some(c => c.name === "messages.moveV3" || /move/i.test(c.name || "")), status: await page.locator("#st-msg").textContent(), empty: await page.locator("#reader-empty").isVisible() };
+  expect(r.shown === "Subject 1-1" && r.moved && /^deleted 1 message/.test(r.status) && r.empty, "the open message is deleted and leaves the reader: " + JSON.stringify(r));
+});
 
 scenario("Mark all read stops and says so when Yahoo keeps messages unread", async (h, expect) => {
   const { page } = h; const ops = folderServer(h);
