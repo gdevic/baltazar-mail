@@ -615,5 +615,23 @@ const lastMod = () => modsOf().at(-1);
   const ended = await api.setup.view();
   ok(ended.kind === "ended" && /me@gmail\.com/.test(ended.text), "a sign-in that ended names its account: " + JSON.stringify([ended.kind, ended.text]));
 }
+// A full row cache: a list keeps the rows it already had when fetching its new ones makes room.
+// Last, as it runs on a clock of its own, so that filling the cache waits on no quota.
+{
+  let now = Date.now();
+  const realTimeout = globalThis.setTimeout;
+  Date.now = () => now;
+  globalThis.setTimeout = (fn, ms = 0, ...a) => { now += Math.max(0, ms || 0); return realTimeout(fn, 0, ...a); };
+  const t = Math.floor(now / 1000);
+  for (let i = 0; i < 5000; i++) mock.addMessage({ id: `k${i}`, labels: ["Label_keep"], subject: `keep ${i}`, from: "k <k@x.com>", cc: "", date: t - i, html: "<p>k</p>" });
+  const all = await api.list("Label_keep", 5000, 0);       // the cache now holds these rows only, k0 the oldest
+  mock.addMessage({ id: "knew", labels: ["Label_keep"], subject: "keep new", from: "k <k@x.com>", cc: "", date: t + 60, html: "<p>k</p>" });
+  const top = await api.list("Label_keep", 20, 0);
+  ok(all.messages.length === 5000 && top.messages.map(x => x.id).join() === ["knew", ...Array.from({ length: 19 }, (_, i) => `k${i}`)].join(),
+    "a list with one new row keeps its kept rows: " + top.messages.map(x => x.id).slice(0, 4).join() + ` (${top.messages.length})`);
+  for (let i = 0; i < 5000; i++) mock.messages.delete(`k${i}`);
+  mock.messages.delete("knew");
+  globalThis.setTimeout = realTimeout;
+}
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

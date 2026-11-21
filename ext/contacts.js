@@ -562,6 +562,16 @@ export const undoImport = undo => openDb().then(d => new Promise((ok, no) => {
   t.onerror = () => no(t.error);
 }));
 
+// Whether an address completes what was typed: the address, or a word of its name, starts with
+// it. Only a completion may be taken for the typed text; an address that merely contains it is
+// offered, never chosen by a key.
+export function completes(query, a) {
+  const q = String(query || "").trim().toLowerCase(), name = String(a?.name || "").toLowerCase();
+  return !!q && (String(a?.email || "").toLowerCase().startsWith(q) || name.startsWith(q) || name.split(/\s+/).some(w => w.startsWith(q)));
+}
+
+// The addresses that match what was typed: the address itself first, then its completions, then
+// those that only contain it, each group by how recently and how often it was written.
 export async function suggest(query, limit = 8, exclude = new Set()) {
   await loadAll();
   const q = (query || "").trim().toLowerCase();
@@ -569,16 +579,11 @@ export async function suggest(query, limit = 8, exclude = new Set()) {
   const rows = [];
   for (const e of cache.values()) {
     if (exclude.has(e.email) || e.deleted || isHidden(e)) continue;
-    if (q) {
-      const name = e.name.toLowerCase();
-      const words = name.split(/\s+/);
-      const hit = e.email.startsWith(q) || name.startsWith(q) || words.some(w => w.startsWith(q)) || e.email.slice(e.email.indexOf("@") + 1).startsWith(q) || e.email.includes(q);
-      if (!hit) continue;
-    }
-    rows.push(e);
+    const rank = !q || e.email === q ? 0 : completes(q, e) ? 1 : e.email.includes(q) ? 2 : -1;
+    if (rank >= 0) rows.push({ e, rank });
   }
-  rows.sort((a, b) => (q ? score(b, now) - score(a, now) : b.last - a.last) || (b.lastSent || 0) - (a.lastSent || 0));
-  return rows.slice(0, limit).map(e => ({ name: e.name, email: e.email }));
+  rows.sort((a, b) => a.rank - b.rank || (q ? score(b.e, now) - score(a.e, now) : b.e.last - a.e.last) || (b.e.lastSent || 0) - (a.e.lastSent || 0));
+  return rows.slice(0, limit).map(({ e }) => ({ name: e.name, email: e.email }));
 }
 
 // How many contacts there are, and one of them by its address: neither knows of a deleted one.

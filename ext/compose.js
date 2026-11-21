@@ -63,7 +63,9 @@ class AddrField {
     if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); moveSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
     if (e.key === "Enter" || e.key === "Tab" || e.key === "," || e.key === ";") {
-      if (open && suggestSel >= 0) { e.preventDefault(); this.add(suggestItems[suggestSel]); this.input.value = ""; hideSuggest(); return; }
+      // Ctrl+Enter sends what was typed, never a suggestion
+      const sending = e.key === "Enter" && (e.ctrlKey || e.metaKey);
+      if (open && suggestSel >= 0 && !sending) { e.preventDefault(); this.add(suggestItems[suggestSel]); this.input.value = ""; hideSuggest(); return; }
       if (this.input.value.trim()) { if (e.key !== "Tab") e.preventDefault(); this.commit(true); hideSuggest(); return; }
       if (e.key === "Enter") e.preventDefault();
       return;
@@ -73,9 +75,15 @@ class AddrField {
 }
 
 let suggestField = null, suggestItems = [], suggestSel = -1, suggestSeq = 0;
+// The first row is preselected, for Enter to take, only when it is what was typed or completes
+// it; once a whole address is typed, only that address itself. Otherwise a key commits the text.
+function preselect(typed, a) {
+  const t = typed.trim().toLowerCase();
+  return !!a && (a.email.toLowerCase() === t || (!ADDR.test(t) && contacts.completes(t, a)));
+}
 function showSuggest(field, items) {
   const sg = $("c-suggest");
-  suggestField = field; suggestItems = items; suggestSel = items.length ? 0 : -1;
+  suggestField = field; suggestItems = items; suggestSel = preselect(field.input.value, items[0]) ? 0 : -1;
   if (!items.length) { hideSuggest(); return; }
   sg.innerHTML = items.map((a, i) => `<div data-i="${i}" class="${i === suggestSel ? "kb" : ""}"><span>${a.name ? `${esc(a.name)}<i>${esc(a.email)}</i>` : esc(a.email)}</span><a class="hide" data-hide="${esc(a.email)}" title="Hide this address: it is never suggested again, and Contacts lists it under Hidden">×</a></div>`).join("");
   const r = field.input.getBoundingClientRect();
@@ -96,7 +104,7 @@ function showSuggest(field, items) {
 }
 function moveSuggest(d) {
   if (!suggestItems.length) return;
-  suggestSel = (suggestSel + d + suggestItems.length) % suggestItems.length;
+  suggestSel = suggestSel < 0 ? (d > 0 ? 0 : suggestItems.length - 1) : (suggestSel + d + suggestItems.length) % suggestItems.length;
   $("c-suggest").querySelectorAll("div").forEach((el, i) => el.classList.toggle("kb", i === suggestSel));
 }
 function hideSuggest() { ++suggestSeq; $("c-suggest").classList.add("hidden"); suggestSel = -1; }
@@ -833,13 +841,18 @@ function extractInline(html, taken = new Set()) {
 // signature markers.
 const KEEP_CLASSES = new Set(["ymq", "ymsig"]);
 // Attributes that make a picture load; held back (renamed) while the reader's rule says no images.
-const IMAGE_ATTRS = ["src", "srcset", "poster", "background", "href", "xlink:href", "style"];
+// A srcset is a list of addresses, any of which may be the one loaded, so it is always held. The
+// attributes read as CSS, style and SVG's painting and clipping ones, are held when they name an
+// address.
+const CSS_ATTRS = ["style", "fill", "stroke", "mask", "clip-path", "filter", "marker-start", "marker-mid", "marker-end", "cursor"];
+const IMAGE_ATTRS = ["src", "srcset", "poster", "background", "href", "xlink:href", ...CSS_ATTRS];
 const HELD = "data-held-";
 function holdImages(root) {
   for (const el of root.querySelectorAll("*")) {
     for (const a of IMAGE_ATTRS) {
       const v = el.getAttribute(a); if (v == null) continue;
-      const loads = a === "style" ? /url\(|image-set\(|\\/i.test(v)
+      const loads = CSS_ATTRS.includes(a) ? /url\(|image-set\(|\\/i.test(v)
+        : a === "srcset" ? true
         : a === "href" || a === "xlink:href" ? el.namespaceURI === "http://www.w3.org/2000/svg" && el.localName !== "a"
         : !/^(data:|cid:)/i.test(v.trim());
       if (loads) { el.setAttribute(HELD + a.replace(":", "-"), v); el.removeAttribute(a); }

@@ -1,7 +1,8 @@
 # All test suites: the unit tests and the bundled-library hashes, then the built Yahoo extension in
 # Playwright's Chromium against a mocked Yahoo (smoke.js, yahoo-runtime.js) and the built Gmail
-# extension against a mocked Gmail (gmail-runtime.js). Each suite builds what it tests. Runs on
-# every push to main and every pull request, before every release, and from the Actions tab.
+# extension against a mocked Gmail (gmail-runtime.js), and beside them the scenarios of review.js,
+# the security regressions among them, in shards. Each suite builds what it tests. Runs on every
+# push to main and every pull request, before every release, and from the Actions tab.
 name: Tests
 
 on:
@@ -55,3 +56,30 @@ jobs:
 
       - name: Gmail runtime test (the built Gmail extension)
         run: node tools/gmail-runtime.js
+
+  # Each scenario of review.js runs on a fresh profile, so a shard is every fourth of them.
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Review scenarios (the built Yahoo and Gmail extensions)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: node tools/review.js "--shard=$SHARD/4"

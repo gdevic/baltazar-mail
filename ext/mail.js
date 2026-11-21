@@ -1156,9 +1156,10 @@ async function searchPerson(email, openId = null) {
   const i = openId && state.view === v ? state.messages.findIndex(m => m.id === openId) : -1;
   if (i >= 0) { select(i); open(i); }
 }
-// A new message to these people ({ name, email }).
+// A new message to these people ({ name, email }). When the message being written cannot be put
+// away, no new one opens, and that message keeps the recipients it had.
 async function writeTo(list) {
-  await startCompose("new");
+  if (!(await startCompose("new"))) return;
   for (const a of list) compose.addRecipient(a);
 }
 
@@ -1403,7 +1404,7 @@ function hideReaderForCompose(hide) {
 
 // Reply, reply all and forward answer the message in the reader, wherever the cursor is. The body
 // is taken once, so opening another message meanwhile cannot change what is answered. A failure
-// brings the reader back.
+// brings the reader back. Answers whether it opened a composer.
 let composeSeq = 0;
 async function startCompose(mode) {
   const seq = ++composeSeq;
@@ -1413,13 +1414,14 @@ async function startCompose(mode) {
   if (mode !== "new" && (!body || !state.openId || body.message.id !== state.openId)) { status("open a message first"); return; }
   hideReaderForCompose(true);
   try {
-    if (mode === "new") { await compose.open({ mode, myEmail: me }); return; }
+    if (mode === "new") { await compose.open({ mode, myEmail: me }); return true; }
     status("preparing...");
     const html = await inlineImages(body.html, body);
     if (seq !== composeSeq) return;
     body.html = html;
     await compose.open({ mode, message: body.message, body, images, myEmail: me });
     status("");
+    return true;
   } catch (e) { if (!compose.isOpen()) hideReaderForCompose(false); handleError(e, "compose"); }
 }
 

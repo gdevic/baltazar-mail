@@ -568,15 +568,20 @@ function toRow(m, listed = null) {
 // is fetched once and kept; its labels, which do change, come from labelsOf, which every change
 // made here and every change Gmail's history reports keeps current. A refresh, or a folder opened
 // again, then fetches only the messages it has not seen.
+// The rows already kept are taken first and made the newest, so the room the fetched rows take in
+// the cache never costs this answer a row. A message deleted or forgotten meanwhile has lost its
+// labels and is left out.
 const rowCache = new Map();        // message id -> the message as Gmail answered it for a row
 const ROW_CACHE = 5000;
 async function rows(ids, listed = null, cap = FOREGROUND) {
-  const need = ids.filter(id => !rowCache.has(id));
+  const found = new Map();
+  for (const id of ids) if (rowCache.has(id)) { const m = rowCache.get(id); found.set(id, m); remember(rowCache, id, m, ROW_CACHE); }
+  const need = ids.filter(id => !found.has(id));
   const got = need.length ? await batch(need.map(id => ({ method: "GET", path: `/messages/${id}`, query: { format: "full", fields: ROW_FIELDS } })), 5, cap) : [];
   const bad = got.findIndex(r => r.status !== 404 && !(r.status === 200 && r.json));
   if (bad >= 0) throw new ApiError(`GET /messages/${need[bad]}: HTTP ${got[bad].status} ${String(got[bad].json?.error?.message || "").slice(0, 160)}`, { status: got[bad].status, error: got[bad].json?.error || null });
-  got.forEach((r, i) => { if (r.status === 200) { remember(rowCache, need[i], r.json, ROW_CACHE); labelsOf.set(need[i], r.json.labelIds || []); } });
-  const out = ids.filter(id => rowCache.has(id)).map(id => { const m = rowCache.get(id); return toRow({ ...m, labelIds: labelsOf.get(id) || m.labelIds }, listed); });
+  got.forEach((r, i) => { if (r.status === 200) { found.set(need[i], r.json); remember(rowCache, need[i], r.json, ROW_CACHE); labelsOf.set(need[i], r.json.labelIds || []); } });
+  const out = ids.filter(id => found.has(id) && labelsOf.has(id)).map(id => toRow({ ...found.get(id), labelIds: labelsOf.get(id) }, listed));
   if (out.some(m => m.labelIds.includes("DRAFT"))) { await loadDrafts(false); for (const m of out) if (m.labelIds.includes("DRAFT")) m.csid = draftOf.get(m.id) || undefined; }
   return out;
 }

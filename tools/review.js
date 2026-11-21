@@ -1524,7 +1524,12 @@ scenario("the quoted original is part of the reply and can be answered inline", 
 });
 
 scenario("a quote from Spam keeps its images out of the app but sends them", async ({ page, calls, mock }, expect) => {
-  mock.patchBody = (id, m, body) => { if (id.startsWith("MSG6_")) body.html = '<p>Spam text</p><img src="https://ecp.yusercontent.com/t-quote.png" width="5" height="5"><div style="width:9px;height:9px;background:url(https://ecp.yusercontent.com/t-qbg.png)">b</div>'; };
+  // also the addresses that hide behind an inline part: a srcset whose first candidate is cid:,
+  // a picture's source, and SVG painting and clipping attributes
+  const T = n => `https://ecp.yusercontent.com/t-q${n}.png`;
+  mock.patchBody = (id, m, body) => { if (id.startsWith("MSG6_")) body.html = `<p>Spam text</p><img src="${T("uote")}" width="5" height="5"><div style="width:9px;height:9px;background:url(${T("bg")})">b</div>` +
+    `<img alt="" src="cid:logo@spam" srcset="cid:logo@spam 0.25x, ${T("set")} 1x"><picture><source srcset="cid:a@spam 0.25x, ${T("source")} 1x"><img alt="" src="cid:a@spam"></picture>` +
+    `<svg width="20" height="20"><rect width="10" height="10" fill="url(${T("fill")}#p)" mask="url(${T("mask")}#m)" clip-path="url(${T("clip")}#c)"/></svg>`; };
   await folder(page, "Spam");
   await page.locator("#rows .row").first().click(); await page.waitForTimeout(600);
   await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
@@ -1534,7 +1539,8 @@ scenario("a quote from Spam keeps its images out of the app but sends them", asy
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
   const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
   expect(!loaded.length, "no image of the Spam quote loads while writing: " + JSON.stringify(loaded));
-  expect(/src="https:\/\/ecp\.yusercontent\.com\/t-quote\.png"/.test(html) && /url\(https:\/\/ecp\.yusercontent\.com\/t-qbg\.png\)/.test(html) && !/data-held/.test(html), "the sent quote has them back: " + html.slice(0, 400));
+  expect(/src="https:\/\/ecp\.yusercontent\.com\/t-quote\.png"/.test(html) && /url\(https:\/\/ecp\.yusercontent\.com\/t-qbg\.png\)/.test(html) && /srcset="cid:logo@spam 0\.25x, https:\/\/ecp\.yusercontent\.com\/t-qset\.png 1x"/.test(html) &&
+    /fill="url\(https:\/\/ecp\.yusercontent\.com\/t-qfill\.png#p\)"/.test(html) && !/data-held/.test(html), "the sent quote has them back: " + html.slice(0, 900));
 });
 
 scenario("the font size box sets the size it shows", async ({ page }, expect) => {
@@ -1597,6 +1603,44 @@ scenario("a draft opens in the format it was saved in, whatever the default", as
   const rec = await page.evaluate(k => chrome.storage.local.get("draftFormats").then(x => x.draftFormats?.[k]), csid);
   expect(rec === "text", "a save records the format: " + JSON.stringify({ csid, rec }));
 }, { settings: { composeHtml: false } });
+
+// Enter takes a suggestion only when it is the typed address or completes what was typed: an
+// address that merely contains the text, however recent, never stands in for it.
+scenario("a typed address is never replaced by a suggestion that only contains it", async ({ page }, expect) => {
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
+  await page.evaluate(async when => {
+    const c = await import("./contacts.js");
+    await c.learn([{ headers: { date: String(when), from: [{ name: "Ann Old", email: "ann@corp.example" }], to: [{ name: "Me", email: "me@yahoo.com" }] } }]);
+    await c.noteSent([{ name: "Joann New", email: "joann@corp.example" }, { name: "Jordan", email: "jordan@gmail.com" }]);
+  }, Math.floor(Date.now() / 1000) - 200 * 86400);
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  const offered = {};
+  for (const text of ["ann@corp.example", "dan@gmail.com", "jor"]) {
+    await page.locator("#c-to input").type(text);
+    // the list is up before the key, so the key meets it
+    await page.waitForSelector("#c-suggest:not(.hidden)", { timeout: 5000 }).catch(() => {});
+    offered[text] = (await page.locator("#c-suggest div span").allTextContents()).join(" | ");
+    await page.keyboard.press("Enter");
+  }
+  const chips = await page.$$eval("#c-to .chip", els => els.map(e => e.title));
+  expect(/joann@corp\.example/.test(offered["ann@corp.example"]) && /jordan@gmail\.com/.test(offered["dan@gmail.com"]) && /jordan@gmail\.com/.test(offered.jor),
+    "the longer addresses are offered: " + JSON.stringify(offered));
+  expect(JSON.stringify(chips) === JSON.stringify(["Ann Old <ann@corp.example>", "dan@gmail.com", "Jordan <jordan@gmail.com>"]),
+    "Enter keeps the typed address or its exact contact, and completes a partial one: " + JSON.stringify(chips));
+});
+
+scenario("Write in Contacts leaves alone a message that cannot be put away", async ({ page }, expect) => {
+  await newMessage(page, { subject: "Keep" });
+  await page.locator("#c-to input").type("car");          // unfinished, so the message cannot be saved
+  await contactsOpen(page);
+  await contactRow(page, "o@x.com").click();
+  await page.keyboard.press("c");                         // Write, as the composer covers the person's page
+  await page.waitForTimeout(800);
+  const r = { open: await page.locator("#compose:not(.hidden)").count(), subject: await page.inputValue("#c-subject"), typed: await page.inputValue("#c-to input"),
+    to: await page.$$eval("#c-to .chip", els => els.map(e => e.title)), notice: await notice(page) };
+  expect(r.open === 1 && r.subject === "Keep" && r.typed === "car" && JSON.stringify(r.to) === JSON.stringify(["q@example.com"]) && /kept open/.test(r.notice),
+    "the message stays as it was, without the person Write was for: " + JSON.stringify(r));
+});
 
 scenario("Tab from the subject goes to the message, past the toolbar", async ({ page }, expect) => {
   await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");

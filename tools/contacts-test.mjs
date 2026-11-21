@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses, planImport } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses, planImport, completes } = await import("../dist/baltazar-mail-yahoo/contacts.js");
 const file = await import("../dist/baltazar-mail-yahoo/contactsfile.js");
 
 const machine = [
@@ -199,6 +199,13 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   check(order("last") === "bob al zoe", "last: the last mail first, then by address: " + order("last"));
   check(order("wrote") === "zoe al bob", "wrote: the one last written to first: " + order("wrote"));
   check(rows[0].email === "zoe@example.com", "sorting leaves the given list as it was");
+}
+// What may stand for typed text in the composer: an address or a word of the name that starts
+// with it, never an address that only contains it.
+{
+  const joann = { name: "Joann New", email: "joann@corp.example" }, jordan = { name: "", email: "jordan@gmail.com" };
+  check(completes("jo", joann) && completes("NEW", joann) && completes("joann@corp", joann) && completes(" joann@corp.example ", joann), "an address or a name word that starts with the text completes it");
+  check(!completes("ann@corp.example", joann) && !completes("dan@gmail.com", jordan) && !completes("corp.example", joann) && !completes("", joann), "an address that only contains the text does not complete it");
 }
 console.log(fail ? `${fail} FAIL` : `PASS (${machine.length} machine, ${person.length} person)`);
 process.exit(fail ? 1 : 0);
