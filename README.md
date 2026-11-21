@@ -15,7 +15,7 @@ Everything a mail client does, and:
 
 - **Attachments open in place:** PDF, Office documents, spreadsheets, pictures and ZIP listings, without downloading.
 - **A folder's attachments in one list:** right-click a folder › Show attachments lists every attachment in its mail, with its subfolders' if you like, such as the tickets and itineraries of a trip.
-- **Contacts in one list:** everyone in your mail, at the bottom of the folder list, learned from the message headers of every folder. Filter, pick one or several people, and write to them, see all mail with them, rename them, or pin the ones you write to most. The list exports to a text file you can edit and import back. It keeps itself tidy: an address goes once no mail with it is left.
+- **Contacts in one list:** everyone in your mail, learned from the message headers and suggested as you write. Pin, hide, rename or delete them, write to several at once, and export the list to a text file you can edit and import back.
 - **Sixteen light and dark palettes**, with a dark mode that darkens the messages to match.
 - **Undo for everything:** several levels of undo and redo for mailbox actions, and undo-send.
 - **Tracking removed from links**, when you switch it on.
