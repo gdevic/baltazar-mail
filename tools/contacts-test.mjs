@@ -172,9 +172,9 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   check(JSON.stringify(merged.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":1,"hidden":1,"shown":0,"removed":0,"restored":0}', "and counts what it did: " + JSON.stringify(merged.counts));
   const replaced = planImport(book(), [x("robin@x.example", "Robin Hale", "pinned"), x("maya@x.example", "Maya", "pinned"), x("ms@x.example", "MS"), x("noreply@shop.example", "Shop"), x("new@y.example")], { replace: true, now: 1000 });
   const now = Object.fromEntries(replaced.put.map(e => [e.email, e]));
-  check(JSON.stringify(replaced.drop) === '["bare@x.example"]' && now["robin@x.example"].pinned === 1000 && now["maya@x.example"].pinned === 1001 && now["maya@x.example"].given === "Maya" && !("ms@x.example" in now) &&
+  check(JSON.stringify(replaced.drop) === '["bare@x.example"]' && now["robin@x.example"].pinned === 999 && now["maya@x.example"].pinned === 1000 && now["maya@x.example"].given === "Maya" && !("ms@x.example" in now) &&
     now["noreply@shop.example"].hidden === false && now["new@y.example"].added && now["new@y.example"].name === "",
-    "replacing puts the pins in the file's order, shows what the file does not hide, and takes out who is not in it: " + JSON.stringify(replaced));
+    "replacing puts the pins in the file's order, the last of them now, shows what the file does not hide, and takes out who is not in it: " + JSON.stringify(replaced));
   check(JSON.stringify(replaced.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":0,"hidden":0,"shown":1,"removed":1,"restored":0}', "and counts what it did: " + JSON.stringify(replaced.counts));
   // A contact the user deleted is in no list, and the file does not know of it: the book's own file
   // leaves the deletion alone, replacing does not take it out, and a line that names it brings the
@@ -190,6 +190,31 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   const back = planImport(new Map([["ms@x.example", { ...book().get("ms@x.example"), given: "Mislav" }]]), [x("ms@x.example")], { replace: true, now: 1000 });
   check(back.put.length === 1 && !("given" in back.put[0]) && back.put[0].name === "MS", "replacing with a line that has no name takes the user's name back: " + JSON.stringify(back.put));
   setOwnAddresses([]);
+}
+// An unchanged export imported changes nothing, whatever the user chose: a contact unhidden, a
+// given name the mail now gives too, pins made together; and pins an import gives end now.
+{
+  setOwnAddresses(["me@yahoo.com"]);
+  const pins = Array.from({ length: 20 }, (_, i) => ({ email: `p${String(i).padStart(2, "0")}@x.example`, name: `P ${i}`, nameBy: { self: { [`P ${i}`]: 1 } }, last: 9, lastSent: 9, pinned: 500 }));
+  const book = () => new Map([
+    { email: "support@acme.example", name: "Acme", nameBy: { self: { Acme: 2 } }, last: 50, lastSent: 40, hidden: false },
+    { email: "unhid@x.example", name: "Un Hid", nameBy: { self: { "Un Hid": 1 } }, last: 30, lastSent: 0, hidden: false, pinned: 300 },
+    { email: "ana@x.example", name: "Ana Kos", nameBy: { self: { "Ana Kos": 4 } }, last: 20, lastSent: 10, given: "Ana Kos" },
+    ...pins,
+  ].map(e => [e.email, structuredClone(e)]));
+  const listed = b => [...b.values()].map(e => ({ name: e.name, email: e.email, pinned: e.pinned || 0, hidden: isHidden(e), lastSent: e.lastSent }));
+  const written = file.parse(file.format(listed(book()))).entries;
+  for (const replace of [false, true]) { const p = planImport(book(), written, { replace, now: 1000 }); check(!p.put.length && !p.drop.length, `an unchanged file keeps every choice (${replace ? "replacing" : "merging"}): ` + JSON.stringify(p.put.map(e => e.email))); }
+  const x = (email, word = "") => ({ email, name: "", pinned: word === "pinned", hidden: false });
+  const added = planImport(book(), [x("n1@x.example", "pinned"), x("n2@x.example", "pinned"), x("n3@x.example", "pinned")], { now: 1000 }).put.map(e => e.pinned);
+  check(JSON.stringify(added) === "[998,999,1000]", "the pins an import gives are in its order, the last of them now: " + JSON.stringify(added));
+}
+// A line written as a To field is several addresses, refused, while a name that is an address is one.
+{
+  const several = ["Ana Kos <ana@x.example>, Bob Ban <bob@x.example>", "<ana@x.example>; <bob@x.example>", "ana@x.example, Bob <bob@x.example>"].map(t => file.parse(t).errors[0]?.why);
+  check(several.every(w => w === "several addresses: a line is one contact"), "several addresses on a line are refused: " + JSON.stringify(several));
+  const one = file.parse('john@x.example <john@x.example>\n"Kos, Ana <ana@x.example>" <ana@x.example>\nSmith, John <js@x.example>\n');
+  check(!one.errors.length && one.entries.map(e => e.name).join("|") === "john@x.example|Kos, Ana <ana@x.example>|Smith, John", "a name that is an address, or quoted, is one contact: " + JSON.stringify(one));
 }
 // The Contacts filter and the two orders.
 {

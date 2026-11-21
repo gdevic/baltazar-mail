@@ -6,14 +6,8 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 | # | Severity | Area | Finding | Confidence |
 |---|---|---|---|---|
-| COMP-2 | Medium | Writing | SVG, AVIF, TIFF, HEIC and ICO pictures in the text are left out of the message | reproduced |
-| COMP-4 | Medium | Writing | Autosave commits, or complains about, the address being typed | confirmed |
 | ADPT-4 | Medium | Gmail | A send answered 5xx after it was sent goes out twice | likely |
-| CONT-6 | Medium | Contacts | Importing an unchanged export rewrites the user's choices | reproduced |
-| CONT-4 | Medium | Contacts | An import line with several bracketed addresses becomes one contact | reproduced |
-| CONT-2 | Medium | Contacts | Undoing the delete of a draft records its recipients as people the user wrote to | reproduced |
 | CONT-5 | Medium | Contacts | Mail that arrives during the first build and is filed before the next refresh is never learned | reproduced |
-| CONT-3 | Medium | Contacts | Double-clicking a row's trash bin deletes and leaves Contacts | confirmed |
 | CORE-2 | Medium | App | Starred › Mark all read marks every row of the open list read | reproduced |
 | CORE-3 | Medium | App | The unread count drops twice when a refresh lands within the mark-read delay | reproduced |
 | CORE-4 | Medium | App | A search that ends after the user went to the composer takes the keyboard | reproduced |
@@ -32,37 +26,13 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 ## Medium
 
-### COMP-2. SVG, AVIF, TIFF, HEIC and ICO pictures in the text are left out of the message
-
-`ext/compose.js:145-157` (the picker, paste and drop take any `image/*`), `ext/compose.js:626-638` (`insertImages` checks only the size), `ext/compose.js:817-819` (`extractInline` drops what it cannot send inline), `ext/bytes.js:29-33` (`sniffImage` knows PNG, JPEG, GIF, BMP and WebP). The picture shows in the editor, never reaches the recipient, and is gone from a reopened draft, with no message; dropped elsewhere on the composer the same file would have been attached. Fix: attach a picture that cannot go inline, with a status line. Reproduced.
-
-### COMP-4. Autosave commits, or complains about, the address being typed
-
-`ext/compose.js:312` (the timer), `ext/compose.js:1004-1009` and `1042` (`collect` calls `strictGet`), `ext/compose.js:1001`, `ext/compose.js:39-43` (`commit(true)` adds what parses and warns about what does not). If the 30 s tick lands while `john.smith@company.com` is half typed, either `john.smith@company.c` becomes a chip and the rest is typed on its own, or "Not an address: john.smith@comp" appears, and again every 30 s. The comment on `saveNow` promises no message about an unfinished address during a silent save. Fix: a draft save takes only the chips; `strictGet` is for sending. Confirmed.
-
 ### ADPT-4. Gmail: a send answered 5xx after it was sent goes out twice
 
 `gmail/api.js:288-291` (`call` retries 500 to 504), `gmail/api.js:962-974` (`upload`), `gmail/api.js:1003-1004` (`send`). When `drafts.send` answers 503 although the message went out, `call()` repeats it and gets 404, since the draft is gone; `send()` reads that as a draft deleted elsewhere and sends again with `messages.send`. The retry in `saveDraft` can likewise leave a second draft. Fix: never retry a send upload on 5xx and never fall back to `messages.send` after a retried `drafts.send`; word a 5xx as the timeout is worded ("check Sent"). Likely: the chain is reproduced against the mock; that Gmail answers 5xx after sending is not recorded.
 
-### CONT-6. Importing an unchanged export rewrites the user's choices
-
-`ext/contacts.js:509` (`set` rewrites `hidden` even when it already gives the wanted visibility), `ext/contacts.js:505` (replace drops `given` when it equals the learned name), `ext/contacts.js:521`, `ext/mail.js:2795-2796`. A Merge of an unchanged file drops `hidden: false` from a contact hidden and then unhidden, and a Replace does so for every unhidden contact, so an automated-looking address the user writes to falls out of the suggestions; a Replace also drops the given name of a contact renamed to what its mail now says, after which forget can remove it. The status says nothing changed, yet an undo step is pushed. Fix: in `set`, return when the visibility is already the wanted one; in replace, drop `given` only when the name differs from `bestName(e)`. Reproduced, and the fix checked on a copy.
-
-### CONT-4. An import line with several bracketed addresses becomes one contact
-
-`ext/contactsfile.js:46-49` checks for several addresses only on a line without angle brackets; `ext/mail.js:2788` refuses Replace only on reported errors. `Ana Kos <ana@x.example>, Bob Ban <bob@x.example>` gives one entry, bob@x.example named `Ana Kos <ana@x.example>, Bob Ban`, with no error; Merge renames Bob, and Replace removes Ana without refusing. Fix: report several addresses when the name part, not quoted, holds `<`, `>` or `@`. Reproduced.
-
-### CONT-2. Undoing the delete of a draft records its recipients as people the user wrote to
-
-`ext/mail.js:1829`, `1741`, `1754`, `1778-1780` (`mailBack` learns the rows that came back), `ext/contacts.js:172-185` (`record` trusts a From that is the user's own). Deleting a draft to a new address and pressing z, or Undelete on it in Trash, moves the address to People with "you last wrote" and ranks it higher, for good, though the build leaves Drafts out for this very reason. Fix: skip draft rows in `mailBack`, as `hooks.draft` does. Reproduced.
-
 ### CONT-5. Mail that arrives during the first build and is filed before the next refresh is never learned
 
 `ext/mail.js:593` clears `contactsDirty` although `syncContacts` only returns the run under way (`ext/mail.js:2703`); the refresh reads Sent and Inbox down to its bookmark (`ext/contacts.js:298`, `237`) and the build's last pass skips Inbox rows (`ext/contacts.js:269`). A new correspondent's message that arrives after the Inbox pass and is archived or filed during the build stays out of Contacts until a Rebuild; the Gmail build can span hours. Fix: remember a sync asked for during a run, and refresh once more when the run ends. Reproduced.
-
-### CONT-3. Double-clicking a row's trash bin deletes and leaves Contacts
-
-`ext/people.js:123`: the double-click handler leaves out `.pe` and `.pk` but not the bin `.tr`. The first click deletes the contact and redraws the list, the second deletes it again or deletes the contact that moved up into the row, and the double-click then opens All mail for it. Fix: leave out `.tr` as well. Confirmed.
 
 ### CORE-2. Starred › Mark all read marks every row of the open list read
 
@@ -199,9 +169,6 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 
 ### ADPT-11. Gmail: a bulk change of more than 1,000 messages reports all as failed when a later chunk fails
 `gmail/api.js:814-816`, `835`, `891-892`: flags are not applied and no undo is pushed for the chunks that did change. Fix: return those as ok and the rest as failed. Confirmed.
-
-### CONT-7. Pins made together are rewritten by Replace, and imported pin times run ahead of the clock
-`ext/contacts.js:496` treats equal pin times as out of order, `ext/contacts.js:511` dates imported pins `now + pin`, and `pinMany` (`ext/contacts.js:404-405`) gives one time to all. A Replace of 20 contacts pinned together reports 19 changed, and a pin made 3 s after importing 20 pinned lines lands fourth. Fix: compare with `<`, and date imported pins so the last is now. Reproduced.
 
 ### CONT-8. A name the file cannot carry is renamed by the round trip
 `ext/contacts.js:153` cuts a name at 100 UTF-16 units, which can split an emoji, and keeps control characters; `ext/contactsfile.js:17` writes those as spaces, and the file's encoding turns a lone surrogate into U+FFFD, so a Merge of the unchanged file renames the contact. Fix: store names as the file writes them, and cut on code points. Reproduced.

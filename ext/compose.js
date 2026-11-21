@@ -327,8 +327,7 @@ async function openNow(opts) {
   renderFiles();
   $("compose").classList.remove("hidden");
   dirty = false;
-  clearInterval(autosaveTimer);
-  autosaveTimer = setInterval(() => { if (dirty && hasContent()) saveNow(true); }, 30000);
+  startAutosave();
   if (opts.mode === "new") fields.to.focus(); else focusEditor();
   return true;
 }
@@ -643,10 +642,14 @@ function placeCaretAt(x, y) {
   if (r) { const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
 }
 
+// A picture goes into the text only in a format that mail shows there (sniffImage); one in any
+// other, such as SVG, AVIF, TIFF or HEIC, could not travel in the text, so it is attached.
 async function insertImages(files) {
   const ed = $("c-editor"); ed.focus();
+  const other = [];
   for (const f of files) {
     if (f.size > 10 * 1024 * 1024) { warn(`${f.name} is larger than 10 MB to place in the text; attach it instead.`); continue; }
+    if (!sniffImage(new Uint8Array(await f.slice(0, 12).arrayBuffer()))) { other.push(f); continue; }
     const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(f); });
     const img = document.createElement("img");
     img.src = dataUrl; img.alt = f.name; img.dataset.name = f.name || `pasted-${Date.now()}.png`;
@@ -655,6 +658,8 @@ async function insertImages(files) {
     else ed.appendChild(img);
   }
   dirty = true;
+  const n = other.length ? addFiles(other) : 0;
+  if (n) hooks.status(`attached ${other.map(f => f.name).join(", ")}: a picture of that kind cannot be shown in the text of a message`);
 }
 
 // ---------- pictures in the message ----------
@@ -1026,14 +1031,23 @@ function hasContent() {
 }
 
 function strictGet(f) { if (!f.commit(true)) throw new Error(`Not an address: ${f.input.value.trim()}`); return f.get(); }
+// An address still being typed in To, Cc or Bcc, which the autosave leaves alone.
+const typingAddress = () => ["to", "cc", "bcc"].some(k => !!fields[k].input.value.trim());
+// Saves the message every 30 s while it has changes.
+function startAutosave() {
+  clearInterval(autosaveTimer);
+  autosaveTimer = setInterval(() => { if (dirty && hasContent()) saveNow(true, { tick: true }); }, 30000);
+}
 
 // The message as it will be saved or sent. With upload (a send), every file is uploaded; otherwise files already stored with the draft go as references to their parts.
-function collect(upload = false) {
+// With chipsOnly (the autosave), the recipients are the chips, and an address being typed is left as it is.
+function collect(upload = false, { chipsOnly = false } = {}) {
+  const who = f => chipsOnly ? f.list.slice() : strictGet(f);
   const acct = accounts.find(a => a.email === $("c-from").value) || accounts[0];
   const from = { name: acct?.sendingName || "", email: acct?.email || $("c-from").value };
   const d = {
     csid: draft.csid, from, replyTo: acct?.replyToAddress ? { email: acct.replyToAddress } : from,
-    to: strictGet(fields.to), cc: strictGet(fields.cc), bcc: strictGet(fields.bcc),
+    to: who(fields.to), cc: who(fields.cc), bcc: who(fields.bcc),
     subject: $("c-subject").value.trim(), inReplyTo: draft.inReplyTo, files: draft.files, refs: draft.refs || [],
     ownRefs: false, draftFolderId: hooks.folderByType("DRAFT")?.id,
   };
@@ -1056,19 +1070,21 @@ function collect(upload = false) {
 
 // ---------- save / send ----------
 // Saves the message to Drafts. Returns "" when saved, otherwise the reason it was not, which is
-// also shown, except an unfinished address during a silent save (autosave, closing).
+// also shown, except during a silent save (autosave, closing). The autosave (tick) saves the
+// recipients already made chips and leaves an address being typed alone; the message then stays
+// changed, so a later save, or closing, takes the address once it is whole.
 // Saves run one at a time, each for the message it started on: one that ends after the message
 // was sent, discarded or replaced by another touches only its own message's state.
-async function saveNow(silent = false) {
+async function saveNow(silent = false, { tick = false } = {}) {
   if (!draft) return "no message";
   const mine = draft;
   if (saving) await saving.catch(() => {});
   if (draft !== mine) return "";
   saveError = null;
   let d;
-  try { d = collect(); } catch (e) { if (!silent) warn(e.message); return e.message; }
+  try { d = collect(false, { chipsOnly: tick }); } catch (e) { if (!silent) warn(e.message); return e.message; }
   if (!d.draftFolderId) { warn("There is no Drafts folder to save the message in."); return "no Drafts folder"; }
-  dirty = false;          // edits made while the save is in flight mark the message again
+  dirty = tick && typingAddress();   // edits made while the save is in flight mark the message again
   // References to parts of the previous save that the provider refuses or drops: saved again, uploading
   const p = api.saveDraft(d).catch(e => { if (!d.ownRefs) throw e; return { partial: true }; })
     .then(r => r.partial && d.ownRefs ? (forgetStored(mine), api.saveDraft({ ...d, ...uploadAll(mine) })) : r);
@@ -1149,8 +1165,7 @@ async function reopenFrom(snap) {
   renderFiles();
   $("compose").classList.remove("hidden");
   dirty = true;
-  clearInterval(autosaveTimer);
-  autosaveTimer = setInterval(() => { if (dirty && hasContent()) saveNow(true); }, 30000);
+  startAutosave();
   focusEditor();
 }
 

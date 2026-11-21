@@ -1757,10 +1757,14 @@ async function doMove(ids, folderId, verb = "move") {
     status(words[1], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
     // Contacts mirrors the mail outside Trash and Spam: these messages have left it, or come back
-    // to it, and an undo turns that round (see mailLeft)
+    // to it, and an undo turns that round (see mailLeft). A message that comes back into Drafts was
+    // never sent, so it tells nothing of whom the user writes to.
     const moved = msgs.filter(m => okSet.has(m.id));
-    const [went, came] = outOfMail(dest) ? [mailLeft, mailBack] : done.some(o => outOfMail(state.byId.get(o.from))) ? [mailBack, mailLeft] : [() => {}, () => {}];
-    went(moved);
+    const unsent = f => folderType(f) === "DRAFT", origin = new Map(known.map(o => [o.id, o.from]));
+    const toDest = unsent(dest) ? [] : moved, toOrigin = moved.filter(m => !unsent(state.byId.get(origin.get(m.id))));
+    const [went, came] = outOfMail(dest) ? [() => mailLeft(moved), () => mailBack(toOrigin)]
+      : done.some(o => outOfMail(state.byId.get(o.from))) ? [() => mailBack(toDest), () => mailLeft(moved)] : [() => {}, () => {}];
+    went();
     // A provider that can take back exactly what its move changed says how (undo); otherwise each
     // message moves back to the folder it came from. A redo's own answer undoes the redo.
     let last = r;
@@ -1772,10 +1776,10 @@ async function doMove(ids, folderId, verb = "move") {
           for (const [from, g] of groupBy(known.map(o => [o.from, o.id]))) out.push(await api.move(g, from));
           if (known.length < done.length) notify(`${done.length - known.length} message(s) had no known origin folder and stayed in ${dest.name}`, { info: true });
         }
-        came(moved);
+        came();
         return out.flat();
       },
-      redo: async () => { last = await api.move(done.map(o => o.id), dest.id, { from }); went(moved); return last; } });
+      redo: async () => { last = await api.move(done.map(o => o.id), dest.id, { from }); went(); return last; } });
   } catch (e) { handleError(e, verb); }
 }
 

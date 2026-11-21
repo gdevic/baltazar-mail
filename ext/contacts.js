@@ -493,10 +493,12 @@ export async function rebuild() {
 export function planImport(rows, entries, { replace = false, now = Math.floor(Date.now() / 1000) } = {}) {
   const put = [], listed = new Set(), counts = { added: 0, renamed: 0, pinned: 0, unpinned: 0, hidden: 0, shown: 0, removed: 0, restored: 0 };
   const mine = entries.filter(x => !own.has(x.email));
-  // replacing puts the pins in the file's order, unless they are in it already
+  // replacing puts the pins in the file's order, unless they are in it already (pins made at once
+  // share a time, which is in order); the pins it gives are dated so that the last one is now
   const pins = mine.filter(x => x.pinned).map(x => rows.get(x.email)?.pinned || 0);
-  const reorder = replace && pins.some((p, i) => !p || (i && p <= pins[i - 1]));
-  let pin = 0;
+  const reorder = replace && pins.some((p, i) => !p || (i && p < pins[i - 1]));
+  const fresh = mine.filter(x => !x.hidden && x.pinned && (reorder || !rows.get(x.email)?.pinned));
+  const pinAt = new Map(fresh.map((x, i) => [x.email, now - fresh.length + 1 + i]));
   for (const x of mine) {
     listed.add(x.email);
     const stored = rows.get(x.email);
@@ -504,13 +506,15 @@ export function planImport(rows, entries, { replace = false, now = Math.floor(Da
     const was = stored?.deleted ? null : stored;
     const e = stored ? structuredClone(stored) : { email: x.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false, added: true };
     if (stored?.deleted) { delete e.deleted; e.added = true; }
-    if (replace) { const learned = bestName({ ...e, given: "" }); if (x.name && x.name !== learned) e.given = x.name; else delete e.given; }
+    // a given name the file shows unchanged stays the user's, though the mail now says the same
+    if (replace) { const learned = bestName({ ...e, given: "" }); if (x.name && x.name !== learned) e.given = x.name; else if (x.name !== bestName(e)) delete e.given; }
     else if (x.name && x.name !== bestName(e)) e.given = x.name;
-    // hidden and shown are written as a choice only where the guess about the address says otherwise
+    // hidden and shown are written as a choice only where the guess about the address says
+    // otherwise, and a contact already shown or hidden as the file says keeps the choice it has
     const guess = isHidden({ ...e, hidden: undefined });
-    const set = hidden => { if (hidden === guess) delete e.hidden; else e.hidden = hidden; };
+    const set = hidden => { if (isHidden(e) === hidden) return; if (hidden === guess) delete e.hidden; else e.hidden = hidden; };
     if (x.hidden) { set(true); delete e.pinned; }
-    else if (x.pinned) { set(false); if (reorder || !e.pinned) e.pinned = now + pin; pin++; }
+    else if (x.pinned) { set(false); if (pinAt.has(x.email)) e.pinned = pinAt.get(x.email); }
     else if (replace) { set(false); delete e.pinned; }
     e.name = bestName(e);
     const a = { name: e.name, pinned: !!e.pinned, hidden: isHidden(e) }, b = was && { name: bestName(was), pinned: !!was.pinned, hidden: isHidden(was) };

@@ -47,6 +47,9 @@ export function parse(text) {
     let name = m ? m[1].trim() : "";
     const email = (m ? m[2] : bare[0]).trim().toLowerCase(), rest = m ? m[3] : bare.slice(1).join(" ");
     if (!ADDRESS.test(email)) return bad(m ? "the address between < and > is not one" : /@.*[,;\s].*@/.test(s) ? "several addresses: a line is one contact" : "no address: write Name <address>, or the address alone");
+    // a name that is not quoted cannot hold an address of its own: such a line is several
+    // addresses, as a To field is written (the file's own names are quoted when they hold < or >)
+    if (!/^".*"$/s.test(name) && (/[<>]/.test(name) || (name.includes("@") && /[,;]/.test(name)))) return bad("several addresses: a line is one contact");
     if (/^".*"$/s.test(name)) name = name.slice(1, -1).replace(/\\(.)/gs, "$1");
     name = noBidi(name).trim().slice(0, NAME_MAX);
     const words = rest.toLowerCase().split(/[\s,;]+/).filter(Boolean), other = words.find(w => !WORDS.includes(w));

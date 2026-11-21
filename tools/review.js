@@ -512,6 +512,38 @@ const mailWith = h => {
     return messages ? { responses: [{ id: top.id, httpCode: 200, response: { result: { messages, query: {} } } }] } : null;
   };
 };
+// A draft was never sent: deleting one and taking the delete back tells Contacts nothing of whom
+// the user writes to.
+scenario("a draft whose delete is undone is not taken for mail the user wrote", async (h, expect) => {
+  const { page } = h, NEW = "never.sent@x.example";
+  h.mock.handler = ({ top, uri }) => {
+    const q = decodeURIComponent(uri.split("q=")[1] || "");
+    if (!/folderId:3\b/.test(q) || /is:unread|has:attachment/.test(q)) return null;
+    const m = msg(1, "3");
+    return { responses: [{ id: top.id, httpCode: 200, response: { result: { messages: [{ ...m, headers: { ...m.headers, from: [{ name: "Me Myself", email: "me@yahoo.com" }], to: [{ name: "Never Sent", email: NEW }], cc: [] } }], query: {} } } }] };
+  };
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});   // the build has finished
+  await folder(page, "Draft");
+  await page.locator("#rows .row").first().click({ modifiers: ["Control"] });
+  await page.locator("#list").focus(); await page.keyboard.press("Delete");
+  await page.waitForFunction(() => /^deleted 1 message/.test(document.getElementById("st-msg").textContent), null, { timeout: 8000 }).catch(() => {});
+  await page.keyboard.press("z");
+  await page.waitForFunction(() => /^undone/.test(document.getElementById("st-msg").textContent), null, { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  const r = { status: await page.locator("#st-msg").textContent(), known: await inBook(page, NEW) };
+  expect(/^undone/.test(r.status) && !r.known, "the draft's recipient is not learned: " + JSON.stringify(r));
+});
+
+// The bin of a row deletes; a double-click on it does not also open the person's mail.
+scenario("a double-click on a contact's bin stays in Contacts", async ({ page }, expect) => {
+  await contactsOpen(page);
+  await contactsTab(page, "others");
+  await contactRow(page, "s5@x.com").hover(); await contactRow(page, "s5@x.com").locator(".tr").dblclick();
+  await page.waitForTimeout(800);
+  const r = { contacts: await page.evaluate(() => document.getElementById("app").classList.contains("contacts-view")), title: await page.locator("#list-title").textContent() };
+  expect(r.contacts, "still in Contacts: " + JSON.stringify(r));
+});
+
 scenario("Contacts forgets an address with no mail left, on its page and when its mail is deleted, and undo brings it back", async (h, expect) => {
   const { page } = h, r = {};
   const text = sel => page.locator(sel).first().textContent().catch(() => "");
@@ -1697,6 +1729,38 @@ scenario("a message brought back by undo-send is saved when a loading draft open
   const r = { back, now: await page.inputValue("#c-subject"), saved: saves(calls).map(c => msgOf(c)?.message?.headers?.subject), reader: await page.locator("#reader").isHidden() };
   expect(r.back === "Alpha" && r.now === "Subject 3-1" && r.saved.includes("Alpha") && r.reader, "the message brought back is in Drafts, and the draft is open: " + JSON.stringify(r));
 }, { settings: { undoSendSec: 10 } });
+
+// The autosave takes the recipients already made chips, and leaves an address being typed as it
+// is: no chip of half an address, no complaint about it.
+scenario("the autosave leaves an address being typed alone", async ({ page, calls }, expect) => {
+  await page.clock.install();
+  await page.reload(); await page.waitForSelector("#rows .row", { timeout: 15000 });
+  await newMessage(page, { subject: "Half typed", text: "body" });
+  const r = {};
+  for (const half of ["john.smith@company.c", "john.smith@comp"]) {
+    // still in To, as when the tick lands while the address is typed
+    await page.locator("#c-to input").fill(""); await page.locator("#c-to input").type(half);
+    const before = saves(calls).length;
+    await page.clock.fastForward(31000);
+    await page.waitForTimeout(800);
+    r[half] = { saved: saves(calls).length - before, to: msgOf(saves(calls).pop())?.message?.headers?.to?.map(a => a.email), typed: await page.inputValue("#c-to input"),
+      chips: await page.$$eval("#c-to .chip", els => els.map(e => e.title)), notice: await notice(page) };
+  }
+  const ok = v => v.saved === 1 && JSON.stringify(v.to) === '["q@example.com"]' && JSON.stringify(v.chips) === '["q@example.com"]' && !v.notice;
+  expect(ok(r["john.smith@company.c"]) && r["john.smith@company.c"].typed === "john.smith@company.c" && ok(r["john.smith@comp"]) && r["john.smith@comp"].typed === "john.smith@comp",
+    "the draft is saved with the chips, and the address being typed stays as typed: " + JSON.stringify(r));
+}, { allow: /Blocked script execution in 'about:blank'/ });   // the test clock is refused by the sandboxed frames
+
+// A picture mail cannot show in the text (SVG here) is attached instead of being lost on sending.
+scenario("a picture of a kind the text cannot carry is attached", async ({ page }, expect) => {
+  await newMessage(page, { subject: "Pictures", text: "see" });
+  await page.setInputFiles("#c-imgfile", [{ name: "logo.svg", mimeType: "image/svg+xml", buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>') },
+    { name: "dot.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64") }]);
+  await page.waitForTimeout(600);
+  const r = { inText: await page.$$eval("#c-editor img", els => els.map(e => e.dataset.name)), attached: await page.$$eval("#c-filelist .c-file", els => els.map(e => e.firstChild.textContent.trim())),
+    status: await page.locator("#st-msg").textContent() };
+  expect(JSON.stringify(r.inText) === '["dot.png"]' && JSON.stringify(r.attached) === '["logo.svg"]' && /^attached logo\.svg: /.test(r.status), "the PNG is in the text and the SVG attached: " + JSON.stringify(r));
+});
 
 scenario("Write in Contacts leaves alone a message that cannot be put away", async ({ page }, expect) => {
   await newMessage(page, { subject: "Keep" });

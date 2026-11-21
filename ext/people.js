@@ -120,7 +120,7 @@ export function init(h) {
     }
     clearMarks(); select(i);
   };
-  rows.ondblclick = e => { const i = at(e); if (i >= 0 && !e.target.closest(".pe, .pk")) { select(i); act("mail"); } };
+  rows.ondblclick = e => { const i = at(e); if (i >= 0 && !e.target.closest(".pe, .pk, .tr")) { select(i); act("mail"); } };
   rows.oncontextmenu = e => {
     const i = at(e); if (i < 0) return;
     e.preventDefault();
