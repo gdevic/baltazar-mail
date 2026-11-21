@@ -412,6 +412,15 @@ const lastMod = () => modsOf().at(-1);
   await api.renameFolder("Label_1", "Work");
   const patches = mock.calls.filter(x => x.method === "PATCH").map(x => [x.path, x.body.name]);
   ok(JSON.stringify(patches) === JSON.stringify([["/labels/Label_1", "Work"], ["/labels/Label_2", "Work/FPGA"], [`/labels/${c.result.id}`, "Work/New"]]), "rename cascades: " + JSON.stringify(patches));
+  // a label whose mail is all in Trash holds none, whatever its counts say; one in Inbox holds some
+  // (asked, as Delete asks, with the folder list read afresh)
+  await api.folders();
+  mock.addMessage({ id: "tr1", labels: [c.result.id, "TRASH"], subject: "gone", from: "t <t@x.com>", cc: "", html: "<p>t</p>" });
+  const onlyTrash = await api.holdsMail([c.result.id]);
+  mock.addMessage({ id: "tr2", labels: [c.result.id, "INBOX"], subject: "kept", from: "t <t@x.com>", cc: "", html: "<p>t</p>" });
+  const kept = await api.holdsMail([c.result.id]), tree = await api.holdsMail(["Label_1", c.result.id]);
+  ok(onlyTrash === false && kept === true && tree === true && lastCall("GET", /^\/messages$/).q.maxResults === "1", "holdsMail asks one listing of one message: " + JSON.stringify({ onlyTrash, kept, tree }));
+  for (const id of ["tr1", "tr2"]) mock.messages.delete(id);
   await api.deleteFolder(c.result.id);
   ok(!mock.labels.some(l => l.id === c.result.id), "delete");
   const badId = await outcome(api.deleteFolder("ALL"));

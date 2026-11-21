@@ -4,26 +4,7 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 ## Summary
 
-| # | Severity | Area | Finding | Confidence |
-|---|---|---|---|---|
-| CONT-5 | Medium | Contacts | Mail filed out of Inbox during the first build, before Contacts reads it, is never learned | reproduced |
-| ADPT-5 | Medium | Gmail | Label counts include trashed mail, so an emptied label cannot be deleted | likely |
-| SG-1 | Medium | Security | A message's styles still tell its sender about the reader (Gmail) | reproduced |
-| the rest | Low | various | see below | |
-
-## Medium
-
-### CONT-5. Mail filed out of Inbox during the first build, before Contacts reads it, is never learned
-
-The refresh after a poll reads Sent and Inbox down to its bookmark (`ext/contacts.js:298`, `237`), and the build's last pass skips Inbox rows (`ext/contacts.js:269`). A new correspondent's message that arrives after the Inbox pass and is archived or filed before the build ends is in neither, so it stays out of Contacts until a Rebuild; the Gmail build can span hours. Fix: end a first build with a pass over all mail down to the everywhere pass's own bookmark, which costs requests in proportion to the mail that came during the build. Reproduced.
-
-### ADPT-5. Gmail: label counts include trashed mail, so an emptied label cannot be deleted
-
-`gmail/api.js:422-433` (counts from `labels.get`), `856-862` (a move to Trash keeps user labels and STARRED), `442-445` (`starredCount`), `ext/mail.js:350-353`, `433-441`. After all of a label's mail is deleted, the label keeps its total for up to 30 days, and Delete is greyed out ("it holds N messages"); the Starred count is higher than the Starred view. Fix: decide emptiness, and count Starred, with `messages.list` and `maxResults=1`, which leaves out Spam and Trash. Likely.
-
-### SG-1. A message's styles still tell its sender about the reader (Gmail)
-
-`ext/mail.js:1016-1036` (`READS_CONTENT` is only `[` and `:has(`), `gmail/api.js:47` (`img-src https:`). Rules under `@media` (`prefers-color-scheme`, `pointer`, width), `:hover`, `:dir(rtl)`, `:nth-child(An+B of S)`, `:empty` and sibling combinators survive the pruning. With images on, the default outside Spam and Trash, the Gmail reader fetches their addresses from any host, which tells the sender the reader's theme, pointer and window size, which parts were hovered, and the direction of the text, without a click. SECURITY.md ("a style cannot fetch an address that depends on what the message says") and PRIVACY.md ("that it was opened, your IP address and browser") say less than this. In the Yahoo edition such rules reach only Yahoo's image proxy. Fix: drop a rule that names an external `url()` when it sits under a feature query, under an interaction or `:dir()` pseudo-class, or under an `of S` selector, and correct both texts. Reproduced in the real extension.
+No critical, high or medium finding is open. What is left is low: rare cases, small faults, missing tests, hardening, and code that can go.
 
 ## Low
 
@@ -87,6 +68,12 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 ### TOOL-3. Dark mode leaves lab() and lch() colours alone
 `ext/darken.js` (`parseColor`) reads hex, rgb(), hsl(), hwb(), oklab(), oklch(), color(srgb) and colour names, but not CIE lab() and lch(), so a light background written that way stays light under text that was made light. Fix: convert CIE Lab (D50) through XYZ to sRGB, or keep an element's text colour when its background did not parse. Confirmed.
 
+### ADPT-5. Gmail: the Starred count includes starred mail in Trash
+`gmail/api.js` (`starredCount`) reads the count Gmail keeps for its STARRED label, which takes in starred mail moved to Trash, so the count is higher than the Starred view. Fix: count with `messages.list`, which leaves Spam and Trash out, at five units a time instead of one. Likely.
+
+### CONT-5. Mail filed out of Inbox during the first build, before Contacts reads it, is never learned
+Left as it is: catching it would take a pass over all mail after the first build, which costs requests. The refresh after a poll reads Sent and Inbox down to its bookmark (`ext/contacts.js`, `sync`), and the build's last pass skips Inbox rows, so a new correspondent's message that arrives after the Inbox pass and is archived or filed before the build ends stays out of Contacts until a Rebuild. Reproduced.
+
 ### ADPT-6. Gmail keeps every opened message's text part data until sign-out
 `gmail/api.js:680`, `712`, `748` (`partRefs`): reading 200 messages of 494 KB keeps about 130 MB. Fix: keep only the attachment id, type and name, or bound the map. Reproduced.
 
@@ -120,9 +107,6 @@ A sync that finds the build under way resumes from the stored bookmark (`ext/con
 ### SY-2. A message's style sheet can replace the printed header
 `ext/print.js:37-38` puts each message in a shadow root, where `:host{position:relative!important;top:-139px!important;z-index:9!important;background:#fff!important}` moves the whole message box over the header above it, so a forged From, To, Date and Subject print; `contain: paint` (`ext/print.css:14`) clips only what is inside the box. It breaks SECURITY.md's "their styles cannot change the printed header". Fix: drop `:host` and `:host-context` rules in `contentBlindCss`, and pin the position of `.body` in print.css. Reproduced in the real extension.
 
-### SY-3. A forged From of the user's own address puts its sender among the people the user wrote to
-`ext/contacts.js:172` (`isOwn`) trusts the From header, so a received message `From: me@yahoo.com` to `"Alice Smith" <alice.smith@attacker.example>` records the attacker as someone the user wrote to, ranked above the real Alice in the suggestions. Yahoo's sender authentication limits this to aliases and linked accounts on other domains. Fix: take "the user wrote it" only from Sent and from `noteSent`. Reproduced in the real extension.
-
 ### TOOL-1. tools/review.js passes a scenario whatever the Content Security Policy blocked
 `tools/review.js:1903-1904` fails a scenario on a request to the real network or a console error, but the harness files every CSP violation under `cspViolations` (`tools/harness.js:303-305`), which the runner never reads, so a scenario whose page the policy broke can still pass. Fix: fail on a violation the scenario does not expect, with a pattern per scenario for those it provokes on purpose. Confirmed.
 
@@ -142,7 +126,6 @@ None of these is a vulnerability today.
 - `esc()` strips bidi controls, yet escaped values are read back as addresses (`data-hide` at `ext/compose.js:80`, `86`; `data-email`, `data-unmark`, `data-also` at `ext/people.js:132-133`), so an address holding such controls is acted on as its look-alike.
 - Copy addresses (`ext/people.js:342`) replaces `"`, `,`, `<` and `>` in names but not `;`, which the address parser splits on.
 - A reply to a Spam message saved as a draft and reopened loads its quote's images: saving puts the held attributes back, and drafts open with images allowed (`ext/compose.js:242`).
-- PRIVACY.md's Yahoo section does not say that an image shown through Yahoo's proxy still tells its sender when the message was read.
 
 ## Code to remove
 

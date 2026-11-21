@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses, planImport, completes } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses, setInbox, planImport, completes } = await import("../dist/baltazar-mail-yahoo/contacts.js");
 const file = await import("../dist/baltazar-mail-yahoo/contactsfile.js");
 
 const machine = [
@@ -104,13 +104,18 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   const iva = thread.get("iva@email.isp-net.example");
   check(machineAddress(iva.email) && !isHidden(iva) && isHidden({ ...iva, copied: false }), "an address at a bulk-mail subdomain is a person once mail was copied to it, and a machine's otherwise");
   check(got.every(e => e.lastSent === 0 && e.last === 1700000000) && thread.get("ana@mac.example").nameBy.others["Ana Kos"] === 1 && thread.get("ivo@class.example").nameBy.self["Ivo Horvat"] === 1, "a message someone else wrote dates the mail, not a writing to them, and names them by source");
-  // Who wrote a message says which way it went, not where it is kept: a reply of the user's read
-  // from Inbox is a writing to its recipients, as is anything read from Sent.
-  const reply = new Map();
-  record({ headers: { date: "1700000500", from: [who("ME@yahoo.com", "Me Myself")], to: [who("serena@maker.example", "Maker Services")], cc: [who("lin@maker.example")] } }, reply);
+  // Who wrote a message says which way it went, not where it is kept: a reply of the user's filed
+  // in a folder of their own is a writing to its recipients, as is anything read from Sent. In
+  // Inbox anyone's mail arrives with any From, so a message there is taken as received.
+  setInbox("1");
+  const mineIn = folder => { const out = new Map(); record({ folder: { id: folder }, headers: { date: "1700000500", from: [who("ME@yahoo.com", "Me Myself")], to: [who("serena@maker.example", "Maker Services")], cc: [who("lin@maker.example")] } }, out); return out; };
+  const reply = mineIn("31");
   const serena = reply.get("serena@maker.example"), lin = reply.get("lin@maker.example");
   check(reply.size === 2 && serena.lastSent === 1700000500 && pile(serena) === "people" && !serena.copied && pile(lin) === "people" && lin.copied && serena.nameBy.mine["Maker Services"] === 1,
-    "a message the user wrote, kept in Inbox, lists its recipients under People: " + JSON.stringify([...reply.values()]));
+    "a message the user wrote, filed in a folder of theirs, lists its recipients under People: " + JSON.stringify([...reply.values()]));
+  const forged = mineIn("1"), fake = forged.get("serena@maker.example");
+  check(fake && !fake.lastSent && pile(fake) !== "people", "a message in Inbox with the user's From is taken as received: " + JSON.stringify([...forged.values()]));
+  setInbox(null);
   const sent = new Map();
   record({ headers: { date: "1700000900", from: [who("alias@elsewhere.example")], to: [who("pat@x.example")], bcc: [who("quiet@x.example")] } }, sent, true);
   check(sent.size === 2 && sent.get("pat@x.example").lastSent === 1700000900 && sent.get("quiet@x.example").copied && !sent.has("alias@elsewhere.example"), "whatever is read from Sent is the user's, whichever address it was sent from: " + JSON.stringify([...sent.values()]));

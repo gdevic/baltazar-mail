@@ -17,7 +17,7 @@ Baltazar Mail (the Yahoo Mail edition), using the Yahoo™ sign-in already in yo
 | `mail.yahoo.com` | reading the session values Yahoo's own web page uses, and every mailbox operation: folders, lists, search, reading, moving, deleting, drafts, sending |
 | `apis.mail.yahoo.com` | the raw source of a message, from which attachments are taken for preview and download |
 | `cloud-apis.mail.yahoo.com` | attachment thumbnails, images embedded in messages, and Yahoo's text extraction for documents |
-| `*.yusercontent.com` | images in messages, which Yahoo routes through this proxy |
+| `*.yusercontent.com` | images in messages, which Yahoo routes through this proxy; Yahoo fetches each from its sender's server, so a picture shown can still tell the sender that, and when, the message was read, though not your IP address |
 
 When a document format has no viewer in the extension (for example PowerPoint), the Yahoo extension's preview asks Yahoo's own document converter to render it. The file is already stored at Yahoo; nothing is sent elsewhere.
 
@@ -28,11 +28,11 @@ Baltazar Mail for Gmail, with the Google™ sign-in you give it:
 | `accounts.google.com` | Google's own sign-in page, opened in a window of its own when you click Sign in with Google, and used silently to renew the sign-in while the browser keeps your Google session |
 | `gmail.googleapis.com` | every mailbox operation through the Gmail API: labels, lists, search, reading, attachments, moving, deleting, drafts, sending |
 | `oauth2.googleapis.com` | revoking the sign-in when you click Sign out in Settings; the token goes in the request's body |
-| the senders' own servers | images in messages, when the setting lets them load: Gmail's API hands over the message as the sender wrote it, so each image is fetched from wherever the sender put it, which tells that server your address and that the message was opened. The default is to load them automatically except in Spam and Trash; Settings can limit that to when you ask |
+| the senders' own servers | images in messages, when the setting lets them load: Gmail's API hands over the message as the sender wrote it, so each image is fetched from wherever the sender put it, which tells that server your IP address and that the message was opened, and, through the message's styles, such things as how wide your window is, whether you read in a dark theme or with a mouse, and which parts of the message the pointer went over. The default is to load them automatically except in Spam and Trash; Settings can limit that to when you ask |
 
 The setup guide on the Gmail extension's sign-in page links to pages of the Google Cloud™ console (`console.cloud.google.com`), where you make the Google client the extension signs in through. Each opens in a tab of its own when you click it, like any link; the extension itself sends nothing there.
 
-The extension's Content Security Policy (in its `manifest.json`) makes the browser block any other destination for the extension's own requests, so mail and everything else the extension sends goes only to these hosts. The Yahoo extension's pages may load images only from Yahoo's image proxy. The Gmail extension's pages may load images (including those a message's styles name) from any `https:` host, which is what lets a message's images load from their senders' servers. Such a request is made by the message's own HTML and styles, so it can tell that server what the message itself is able to (that it was opened, your IP address and browser); it carries no referrer and never your Google sign-in.
+The extension's Content Security Policy (in its `manifest.json`) makes the browser block any other destination for the extension's own requests, so mail and everything else the extension sends goes only to these hosts. The Yahoo extension's pages may load images only from Yahoo's image proxy. The Gmail extension's pages may load images (including those a message's styles name) from any `https:` host, which is what lets a message's images load from their senders' servers. Such a request is made by the message's own HTML and styles, so it can tell that server what the message itself is able to: that it was opened and when, your IP address and browser, and what the message's styles can see of the page it is shown in (the window's width, a dark or light theme, the kind of pointer, where the pointer is), never what other messages or the rest of the app hold. It carries no referrer and never your Google sign-in.
 
 ## What is stored on your computer
 

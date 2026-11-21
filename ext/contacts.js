@@ -90,6 +90,9 @@ async function loadAll() {
 }
 
 export function setOwnAddresses(list) { own = new Set(list.map(e => e.toLowerCase())); }
+// The Inbox's folder id, as the sync is told it (see isOwn).
+let inboxFolder = null;
+export function setInbox(id) { inboxFolder = id == null ? null : String(id); }
 
 // Machine senders, recognized from the address alone (no network, no headers):
 //  1. the local part says noreply anywhere, has an unambiguous machine word anywhere
@@ -170,8 +173,10 @@ export function bestName(e) {
 }
 
 // Whether the user wrote a message: its From is one of the user's own addresses, wherever the
-// message is kept (a copy to oneself, or a reply filed beside its original, is in no Sent folder).
-const isOwn = m => own.has((m.headers?.from?.[0]?.email || "").trim().toLowerCase());
+// message is kept (a copy to oneself, or a reply filed beside its original, is in no Sent folder),
+// except in Inbox: mail arrives there with whatever From its sender writes, so a message there is
+// taken as received until the user files it elsewhere.
+const isOwn = m => own.has((m.headers?.from?.[0]?.email || "").trim().toLowerCase()) && !(inboxFolder && String(m.folder?.id) === inboxFolder);
 
 // Record one message's addresses into pending (address -> what this scan adds). A message the user
 // wrote (inSent: it was read from Sent; otherwise its From says so) tells whom the user wrote to;
@@ -294,6 +299,7 @@ async function scanFolder(folderId, inSent, full, progress, pace, skip = null) {
 // messages { sent, inbox, rest } hold, rest being what the last pass has to read. progress({ read,
 // total }): rows read so far of those the passes have to read, as far as totals says.
 export async function sync({ inbox, sent, drafts, totals = {}, full = false, progress, pace } = {}) {
+  setInbox(inbox);
   await loadAll();
   const built = await getMeta("built");
   const doFull = full || !built;

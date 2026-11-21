@@ -448,6 +448,17 @@ export async function starredCount() {
 
 const LABEL_ID = /^[A-Za-z0-9_-]{1,64}$/;
 function checkLabel(id) { if (!LABEL_ID.test(String(id)) || id === ALL) throw new ApiError(`refusing malformed folder id ${JSON.stringify(String(id).slice(0, 20))}`); }
+
+// Whether any of these labels is on mail outside Spam and Trash. A label's own counts take in the
+// mail moved to Trash, for the 30 days it is kept there, so they cannot say whether a label is
+// empty; one listing of a single message answers instead.
+export async function holdsMail(ids) {
+  ids = ids.map(String);
+  for (const id of ids) checkLabel(id);
+  const query = ids.length === 1 ? { labelIds: ids, maxResults: 1 } : { q: `(${ids.map(labelTerm).join(" OR ")})`, maxResults: 1 };
+  const r = await call("GET", "/messages", { query, units: 5 });
+  return !!(r.messages || []).length;
+}
 const isSpamOrTrash = id => id === "SPAM" || id === "TRASH";
 
 export async function createFolder(name) {

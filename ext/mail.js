@@ -342,13 +342,14 @@ function showFolderMenu(f, x, y) {
   const t = f === "head" ? "" : f ? folderType(f) : "STARRED";
   // A folder's menu opens with Show attachments, which only looks, where a hasty click lands. Mark
   // all read, which cannot be undone, follows in a group of its own. What cannot apply is greyed out,
-  // with the reason as its tooltip: Mark all read with nothing unread, Delete while the folder or
-  // a subfolder holds mail, Empty when there is nothing in it. Delete and Empty check again when
-  // chosen, with the folder list read afresh.
+  // with the reason as its tooltip: Mark all read with nothing unread, Delete while the counts say
+  // the folder or a subfolder holds mail, Empty when there is nothing in it. Delete and Empty check
+  // again when chosen, with the folder list read afresh.
   const real = f && f !== "head";
   const markRead = real && !f.unread ? ["mark-read", "Mark all read", "", "Nothing in it is unread", true] : ["mark-read", "Mark all read"];
   const showFiles = ["files", "Show attachments", "", "List every attachment in the folder's mail in place of its messages, until you leave it"];
-  const full = real ? [f, ...subfolders(f)].filter(x => (x.total || 0) > 0) : [];
+  // a provider whose counts take in mail in Trash (holdsMail) is asked when Delete is chosen
+  const full = real && !api.holdsMail ? [f, ...subfolders(f)].filter(x => (x.total || 0) > 0) : [];
   const held = full.reduce((s, x) => s + x.total, 0);
   const del = full.length ? ["delete", "Delete", "", `Only an empty folder can be deleted: ${full.length > 1 || full[0] !== f ? "it and its subfolders hold" : "it holds"} ${plural(held, "message")}`, true] : ["delete", "Delete"];
   const empty = label => real && !f.total ? ["empty", label, "", "It is already empty", true] : ["empty", label];
@@ -433,7 +434,12 @@ async function deleteFolderAsk(f) {
   try { await loadFolders(true); } catch (e) { handleError(e, "delete folder"); return; }
   f = state.byId.get(f.id); if (!f) return;
   const tree = [f, ...subfolders(f)];
-  const full = tree.filter(x => (x.total || 0) > 0);
+  if (api.holdsMail) {
+    let holds;
+    try { holds = await api.holdsMail(tree.map(x => x.id)); } catch (e) { handleError(e, "delete folder"); return; }
+    if (holds) { notify(`"${folderName(f)}" is not empty: ${tree.length > 1 ? "it or its subfolders hold mail" : "it holds mail"}. Move or delete it first.`); return; }
+  }
+  const full = api.holdsMail ? [] : tree.filter(x => (x.total || 0) > 0);
   if (full.length) {
     const n = full.reduce((s, x) => s + x.total, 0);
     notify(`"${folderName(f)}" is not empty: ${full.length > 1 || full[0] !== f ? `it and its subfolders hold` : "it holds"} ${plural(n, "message")}. Move or delete them first.`);
