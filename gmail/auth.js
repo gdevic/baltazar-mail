@@ -122,6 +122,8 @@ async function profileEmail(access) {
   const why = resp.status === 403 ? refusal(doc) : "";
   if (why === "api-off") throw new NotSignedIn("Google signed you in, but the Gmail API is off in the project of this client", "api-off");
   if (why === "scope") throw new NotSignedIn("Google gave no permission to use Gmail", "scope");
+  // a rate limit is a moment's wait, not a refusal of the account
+  if (resp.status === 429 || (resp.status === 403 && /rateLimit/i.test(doc?.error?.errors?.[0]?.reason || ""))) throw new Error(`Google is limiting requests just now (HTTP ${resp.status}); try again in a moment`);
   if (resp.status === 401 || resp.status === 403) throw new NotSignedIn(`Google did not confirm the account (HTTP ${resp.status})`);
   throw new Error(`Google could not confirm the account (HTTP ${resp.status})`);
 }

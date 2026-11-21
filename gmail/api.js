@@ -104,11 +104,14 @@ function atom(term, neg = false) {
       if (lv === "unread") return neg ? "is:read" : "is:unread";
       if (lv === "read") return neg ? "is:unread" : "is:read";
       throw new Error(`is:${v} is not a search term; is:starred, is:unread and is:read are`);
+    // Gmail reads a written date as midnight Pacific time, so the day goes as the seconds of the
+    // user's own midnight
     case "after": case "before": {
       const d = isoDate(v);
       if (!d) throw new Error(`${term.field}:${v} is not a date; write it as YYYY-MM-DD`);
       const f = (term.field === "after") !== neg ? "after" : "before";
-      return `${f}:${d.replaceAll("-", "/")}`;
+      const [y, mo, day] = d.split("-").map(Number);
+      return `${f}:${Math.floor(new Date(y, mo - 1, day).getTime() / 1000)}`;
     }
   }
   return null;

@@ -31,9 +31,10 @@
 
   // ---------- links and keys go back to the viewer ----------
   root.addEventListener("click", e => {
-    const link = e.composedPath().find(n => n.tagName === "A" && n.getAttribute?.("href"));
+    // a link of HTML, of SVG or of an image map
+    const link = e.composedPath().find(n => (n.localName === "a" || n.localName === "area") && (n.getAttribute?.("href") || n.getAttribute?.("xlink:href")));
     if (!link) return;
-    const href = link.getAttribute("href");
+    const href = link.getAttribute("href") || link.getAttribute("xlink:href");
     if (mode === "pdf" && href.startsWith("#")) return;   // PDF.js handles its own destinations
     e.preventDefault();
     if (href.startsWith("#")) {

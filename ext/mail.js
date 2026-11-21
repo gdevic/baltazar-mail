@@ -1485,7 +1485,9 @@ async function editDraft(i, { anyway = false } = {}) {
   }
   if (seq !== composeSeq) return;
   hideReaderForCompose(true);
-  await compose.open({ mode: "draft", message: r.message, body: r, files, partIds: atts.map(a => a.partId), myEmail: $("account").textContent });
+  // a draft's quote may come from mail whose images the reader holds back; with images set to
+  // never, so does the reopened draft
+  await compose.open({ mode: "draft", message: r.message, body: r, files, partIds: atts.map(a => a.partId), myEmail: $("account").textContent, images: settings.images !== "never" });
   hideReaderForCompose(compose.isOpen());
   status("");
 }

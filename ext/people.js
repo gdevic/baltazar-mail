@@ -339,7 +339,7 @@ async function act(what, button) {
       else if (n <= FIND_MAX) hooks.find(emails, what); else hooks.status(`a search can name ${FIND_MAX} addresses at most`);
       break;
     case "copy": {
-      const text = n === 1 ? emails[0] : t.map(r => r.name ? `${noBidi(r.name).replace(/[",<>]/g, " ").trim()} <${r.email}>` : r.email).join(", ");
+      const text = n === 1 ? emails[0] : t.map(r => r.name ? `${noBidi(r.name).replace(/[",;<>]/g, " ").trim()} <${r.email}>` : r.email).join(", ");
       try { await navigator.clipboard.writeText(text); hooks.status(n === 1 ? `copied ${emails[0]}` : `copied ${plural(n, "address")}`); if (button?.tagName === "BUTTON") button.textContent = "Copied"; }
       catch { hooks.status("could not copy"); }
       break;

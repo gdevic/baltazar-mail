@@ -172,9 +172,10 @@ const lastMod = () => modsOf().at(-1);
 // search dialect: the whole query in Gmail's language
 {
   const nq = s => nativeQuery(parse(s), api.dialect);
-  ok(nq("alex (picture OR photo) -spam from:bob after:2026-01-05 is:unread -has:attachment") === "alex (picture OR photo) -spam from:bob after:2026/01/05 is:unread -has:attachment", "compiled query: " + nq("alex (picture OR photo) -spam from:bob after:2026-01-05 is:unread -has:attachment"));
+  const midnight = (y, m, d) => Math.floor(new Date(y, m - 1, d).getTime() / 1000);   // the user's own, as Gmail is given it
+  ok(nq("alex (picture OR photo) -spam from:bob after:2026-01-05 is:unread -has:attachment") === `alex (picture OR photo) -spam from:bob after:${midnight(2026, 1, 5)} is:unread -has:attachment`, "compiled query: " + nq("alex (picture OR photo) -spam from:bob after:2026-01-05 is:unread -has:attachment"));
   ok(nq("-(a OR b) c") === "-a -b c" && nq("NOT (a b)") === "-a OR -b" && nq("(a b) OR c") === "(a b) OR c" && nq('"quarterly review" subject:"x y"') === '"quarterly review" subject:"x y"', "De Morgan, grouping and phrases: " + JSON.stringify([nq("-(a OR b) c"), nq("NOT (a b)"), nq("(a b) OR c"), nq('"quarterly review" subject:"x y"')]));
-  ok(nq('"Alex" AND "Picture"') === "Alex Picture" && nq("-is:unread -after:2026-02-01") === "is:read before:2026/02/01", "AND of words needs no evaluation; negations flip: " + JSON.stringify([nq('"Alex" AND "Picture"'), nq("-is:unread -after:2026-02-01")]));
+  ok(nq('"Alex" AND "Picture"') === "Alex Picture" && nq("-is:unread -after:2026-02-01") === `is:read before:${midnight(2026, 2, 1)}`, "AND of words needs no evaluation; negations flip: " + JSON.stringify([nq('"Alex" AND "Picture"'), nq("-is:unread -after:2026-02-01")]));
   // a quoted word that Gmail would read as an operator is written quoted
   const literal = ['"-v2"', 'apple "OR" pie', 'from:"-x"', '"{a}"'].map(nq);
   ok(JSON.stringify(literal) === JSON.stringify(['"-v2"', 'apple "OR" pie', 'from:"-x"', '"{a}"']), "quoted operators stay words: " + JSON.stringify(literal));
