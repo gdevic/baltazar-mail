@@ -8,12 +8,6 @@ No critical, high or medium finding is open. What is left is low: rare cases, sm
 
 ## Low
 
-### COMP-10. Switching a reply to plain text drops the quote markers
-`ext/compose.js:888-903` (`toText`) writes a blockquote's text without `> ` and keeps the HTML source's line breaks and indentation, whereas a reply opened in plain text quotes properly (`ext/compose.js:258`). Fix: prefix quoted lines for each level, and collapse white space outside pre. Confirmed.
-
-### COMP-11. The 25 MB check sees only files attached in the composer
-Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded attachments (`ext/compose.js:269-270`) are not counted, and send checks nothing (`ext/compose.js:1076-1083`); the provider then refuses, and the draft cannot be saved, so the composer closes only with Discard. Fix: one total of all three, checked on insert, when a forward opens and before send. Confirmed.
-
 ### CORE-9. While a message's inline images load, its header sits over the previous message's body
 `ext/mail.js:1322-1340` (`renderMessage`) fills the header and shows the old frame before it awaits `inlineImages`. Fix: show a blank frame, or the body without its inline images, first. Confirmed.
 

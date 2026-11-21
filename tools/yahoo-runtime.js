@@ -774,7 +774,8 @@ const { launch, watchdog, viewerKey } = require("./harness");
   // is sent the events a browser sends when it freezes and thaws it, and its clock is moved on in
   // between, so a sleep of three hours takes no time here.
   {
-    const locks = () => page.evaluate(async () => (await navigator.locks.query()).held.map(l => l.name));
+    // the awake locks only: a Contacts sync holds a lock of its own while it runs
+    const locks = () => page.evaluate(async () => (await navigator.locks.query()).held.map(l => l.name).filter(n => n.startsWith("awake-")));
     const sleep = () => page.evaluate(() => { document.dispatchEvent(new Event("freeze")); document.dispatchEvent(new Event("resume")); });
     const stored = () => page.evaluate(async () => { const s = await chrome.storage.local.get(["sleeps", "sleepNoted"]); return { sleeps: s.sleeps || [], noted: !!s.sleepNoted }; });
     const a = results.awake = { locks: await locks() };

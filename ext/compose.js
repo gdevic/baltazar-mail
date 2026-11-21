@@ -652,6 +652,7 @@ async function insertImages(files) {
   const other = [];
   for (const f of files) {
     if (f.size > 10 * 1024 * 1024) { warn(`${f.name} is larger than 10 MB to place in the text; attach it instead.`); continue; }
+    if (carried() + f.size > api.LIMITS.messageBytes) { warn(`Not placed: ${f.name}. A message carries at most ${MB()} MB of attachments and pictures.`); continue; }
     if (!sniffImage(new Uint8Array(await f.slice(0, 12).arrayBuffer()))) { other.push(f); continue; }
     const dataUrl = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(f); });
     const img = document.createElement("img");
@@ -917,10 +918,16 @@ function withoutStyleSheets(html) {
 }
 
 // Plain text of an HTML message: links keep their address, list items their bullet or number,
-// table cells a tab between them.
+// table cells a tab between them, and a quoted message "> " before each of its lines, as plain-text
+// mail quotes, nested quotes nested. The HTML source's own line breaks and indentation are not
+// text, outside pre.
 function toText(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   doc.querySelectorAll("style, script").forEach(e => e.remove());
+  const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) if (!n.parentElement?.closest("pre")) n.data = n.data.replace(/\s+/g, " ");
+  for (const q of [...doc.querySelectorAll("blockquote")].filter(q => !q.parentElement?.closest("blockquote")))
+    q.replaceWith(doc.createTextNode(`\n${toText(q.innerHTML).split("\n").map(l => l ? `> ${l}` : ">").join("\n")}\n`));
   for (const a of doc.querySelectorAll("a[href]")) {
     const href = a.getAttribute("href").trim(), text = a.textContent.trim();
     if (/^https?:\/\//i.test(href) && text && text !== href && text !== href.replace(/\/$/, "")) a.append(` <${href}>`);
@@ -932,7 +939,7 @@ function toText(html) {
   for (const td of doc.querySelectorAll("td, th")) if (td.nextElementSibling) td.append("\t");
   doc.querySelectorAll("br").forEach(e => e.replaceWith("\n"));
   doc.querySelectorAll("p, div, tr, li, h1, h2, h3, h4, blockquote, pre").forEach(e => e.append("\n"));
-  return doc.body.textContent.replace(/ +\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return doc.body.textContent.replace(/ +\n/g, "\n").replace(/\n (?! )/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 function textToHtml(t) { return esc(t).replace(/\n/g, "<br>"); }
 
@@ -955,8 +962,16 @@ function withFiles(list, files) {
 }
 // Files that would take the message over the provider's size limit are left out, with a notice.
 // A file already attached is not added again, so it counts once. Returns how many were attached.
+// What a message carries, as its limit (api.LIMITS.messageBytes) counts it: the files attached,
+// the attachments forwarded and the pictures in its text (a data: URL holds three bytes in four
+// characters).
+const MB = () => Math.round(api.LIMITS.messageBytes / 1048576);
+function carried() {
+  const pictures = draft.html ? [...$("c-editor").querySelectorAll('img[src^="data:"]')].reduce((s, i) => s + Math.floor(i.getAttribute("src").length * 3 / 4), 0) : 0;
+  return draft.files.reduce((s, f) => s + f.size, 0) + draft.refs.reduce((s, r) => s + (r.size || 0), 0) + pictures;
+}
 function addFiles(files) {
-  const have = draft.files.reduce((s, f) => s + f.size, 0) + draft.refs.reduce((s, r) => s + (r.size || 0), 0);
+  const have = carried();
   const fits = [], over = [];
   let used = have;
   for (const f of files) {
@@ -1125,6 +1140,7 @@ async function send() {
   let d;
   try { d = collect(true); } catch (e) { warn(`Not sent: ${e.message}`); return; }
   if (!d.to.length && !d.cc.length && !d.bcc.length) { warn("Not sent: the message has no recipients."); fields.to.focus(); return; }
+  if (carried() > api.LIMITS.messageBytes) { warn(`Not sent: the message carries more than ${MB()} MB of attachments and pictures. Remove some first.`); return; }
   if (!d.subject && !confirm("Send without a subject?")) return;
   const sentId = hooks.folderByType("SENT")?.id;
   if (!sentId || !d.draftFolderId) { warn("Not sent: the Sent or Drafts folder was not found."); return; }

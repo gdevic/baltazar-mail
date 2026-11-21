@@ -1854,6 +1854,20 @@ scenario("the autosave leaves an address being typed alone", async ({ page, call
     "the draft is saved with the chips, and the address being typed stays as typed: " + JSON.stringify(r));
 }, { allow: /Blocked script execution in 'about:blank'/ });   // the test clock is refused by the sandboxed frames
 
+// The limit on what a message carries counts the pictures in its text with its files (the limit
+// is made small here, so a picture and a file of a few kilobytes reach it).
+scenario("the size limit counts pictures in the text with the files", async ({ page }, expect) => {
+  await newMessage(page, { subject: "Heavy", text: "see" });
+  await page.evaluate(async () => { (await import("./api.js")).LIMITS.messageBytes = 3000; });
+  await page.setInputFiles("#c-imgfile", { name: "dot.png", mimeType: "image/png", buffer: Buffer.concat([Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64"), Buffer.alloc(1500)]) });
+  await page.waitForTimeout(400);
+  await page.setInputFiles("#c-files", { name: "notes.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(2000, 1) });
+  await page.waitForTimeout(400);
+  const r = { pictures: await page.locator("#c-editor img").count(), attached: await page.locator("#c-filelist .c-file").count(), notice: await notice(page) };
+  await page.evaluate(async () => { (await import("./api.js")).LIMITS.messageBytes = 25 * 1048576; });
+  expect(r.pictures === 1 && r.attached === 0 && /^Not attached: notes\.bin/.test(r.notice), "the file does not fit beside the picture: " + JSON.stringify(r));
+});
+
 // A picture mail cannot show in the text (SVG here) is attached instead of being lost on sending.
 scenario("a picture of a kind the text cannot carry is attached", async ({ page }, expect) => {
   await newMessage(page, { subject: "Pictures", text: "see" });
@@ -1892,6 +1906,19 @@ scenario("Tab from the subject goes to the message, past the toolbar", async ({ 
   await page.locator("#c-subject").focus(); await page.keyboard.press("Tab");
   const text = await page.evaluate(() => document.activeElement.id);
   expect(html === "c-editor" && typed.includes("typed after Tab") && text === "c-text", "Tab lands in the editor: " + JSON.stringify({ html, text }));
+});
+
+// A reply switched to plain text keeps its quote marked, each line of it, as plain-text mail does.
+scenario("a reply switched to plain text quotes with > before each line", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html = "<div>First line of the original,\n    written across\n    source lines.</div><blockquote><div>Older words</div></blockquote>"; };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.locator("#list").focus(); await page.keyboard.press("r"); await page.waitForSelector("#compose:not(.hidden)");
+  page.once("dialog", d => d.accept());
+  await page.selectOption("#c-mode", "text");
+  await page.waitForTimeout(300);
+  const lines = (await page.inputValue("#c-text")).split("\n");
+  const r = { first: lines.find(l => /First line/.test(l)), older: lines.find(l => /Older words/.test(l)) };
+  expect(r.first === "> First line of the original, written across source lines." && r.older === "> > Older words", "the quote's lines are marked, and nested quotes nested: " + JSON.stringify(r));
 });
 
 scenario("Insert link takes what people type, and edits or removes a link", async ({ page }, expect) => {
