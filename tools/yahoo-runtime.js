@@ -195,7 +195,9 @@ const { launch, watchdog, viewerKey } = require("./harness");
   let f = await box();
   await f.waitForFunction(() => document.querySelector(".pdfViewer .page canvas") && /Quarterly/.test(document.querySelector(".textLayer")?.textContent || ""), null, { timeout: 15000 });
   results.vSandbox = await f.evaluate(() => ({ origin: self.origin, cookies: (() => { try { return document.cookie; } catch { return "blocked"; } })(), chrome: typeof chrome !== "undefined" && !!chrome.runtime?.id }));
-  results.vSandbox.fetch = await f.evaluate(async () => { try { await fetch("https://mail.yahoo.com/"); return "allowed"; } catch { return "blocked"; } });
+  results.vSandbox.fetch = await f.evaluate(async () => { try { await fetch("https://mail.yahoo.com/probe-sandbox"); return "allowed"; } catch { return "blocked"; } });
+  // CORS alone would refuse the answer, so what counts is that the request never left the sandbox
+  results.vSandbox.reached = mock.probes.some(p => p.url.includes("/probe-sandbox"));
   const scale0 = await f.evaluate(() => document.querySelector(".pdfViewer .page").getBoundingClientRect().width);
   await page.keyboard.press("+"); await page.waitForTimeout(400);
   const scale1 = await f.evaluate(() => document.querySelector(".pdfViewer .page").getBoundingClientRect().width);
@@ -945,14 +947,15 @@ const { launch, watchdog, viewerKey } = require("./harness");
   expect(results.vSlides.pages === 5 && results.vSlides.text.includes("Slide one") && results.vSlides.clean && results.vSlides.retried && results.vSlides.docId === "DOC8" && results.vKeyForward &&
     !results.vSlides.escaped && results.vSlides.styled === "26.6667px", "converter: " + JSON.stringify(results.vSlides));
   {
-    // img-src 'none' (reader) and img-src data: (reply quote) are a message's images blocked on
-    // purpose: Spam, Trash, or the setting. A Yahoo part address in a message frame is blocked by
-    // the extension's own policy as well, since no extension page may load Yahoo-host images.
-    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\//.test(v) && !/img-src ('none|data:\\?")/.test(v) &&
+    // Refused on purpose: the sandbox's probe (connect-src 'self'), and by img-src 'none' (reader)
+    // and img-src data: (reply quote) a message's images blocked by Spam, Trash or the setting. A
+    // Yahoo part address in a message frame is blocked by the extension's own policy as well, since
+    // no extension page may load Yahoo-host images.
+    const unexpected = (results.cspViolations || []).filter(v => !/https:\/\/mail\.yahoo\.com\/probe-sandbox/.test(v) && !/img-src ('none|data:\\?")/.test(v) &&
       !/^about:srcdoc: Loading the image 'https:\/\/cloud-apis\.mail\.yahoo\.com\//.test(v));
     expect(unexpected.length === 0, "content security policy blocked something the app needs: " + JSON.stringify(unexpected.slice(0, 5)));
   }
-  expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked", "sandbox isolation: " + JSON.stringify(results.vSandbox));
+  expect(results.vSandbox.origin === "null" && results.vSandbox.cookies === "blocked" && results.vSandbox.chrome === false && results.vSandbox.fetch === "blocked" && !results.vSandbox.reached, "sandbox isolation: " + JSON.stringify(results.vSandbox));
   expect(results.vRaw.textLabel === "View as text" && results.vRaw.text === "not really a deck" && results.vRaw.textMeta.includes("as text") &&
     results.vRaw.binLabel === "View as binary" && results.vRaw.hex.dump === "00000000  50 4b 03 04 14 00 00 00  41 42                    PK......AB" &&
     results.vRaw.hex.note === "10 bytes, shown as offset, hex and ASCII.", "view as text or binary: " + JSON.stringify(results.vRaw));

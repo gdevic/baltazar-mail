@@ -1237,15 +1237,18 @@ scenario("darkenHtml golden values, and crafted styles stay fast", async ({ page
     const out = darkenHtml('<div style="color:#333;background-color:#fff">a</div><font color="#000">b</font><table bgcolor="#ffffff"><tr><td>c</td></tr></table>' +
       '<div style="background:url(x.png);color:#000">d</div><div style="background-image:url(y.png)"><span style="color:#000">e</span></div><style>p{color:#000}</style>');
     const named = darkenHtml('<div style="background-color:lightyellow;color:darkblue;border-color:currentcolor">n</div>');
+    // legacy attributes without their #, and the colour forms of CSS Color 4
+    const bare = darkenHtml('<table bgcolor="ffffff"><tr><td><font color="000000">f</font></td></tr></table><div style="background:oklch(0.98 0 0);color:hwb(0 20% 80%)">g</div>');
     const t0 = performance.now();
     darkenHtml(`<div style="${"background:".repeat(90000)}">x</div><style>p{color:${"rgb(".repeat(250000)}}</style>`);
-    return { out, named, ms: performance.now() - t0 };
+    return { out, named, bare, ms: performance.now() - t0 };
   });
   const want = '<div style="color:#b1b1b1;background-color:#1f1f1f">a</div><font color="#e4e4e4">b</font><table bgcolor="#1f1f1f"><tbody><tr><td>c</td></tr></tbody></table>' +
     '<div style="background:url(x.png);color:#000">d</div><div style="background-image:url(y.png);color:#111111"><span style="color:#000">e</span></div><style>p{color:#e4e4e4}</style>';
   expect(r.out === want, "darkened HTML: " + r.out);
   expect(r.ms < 1500, "crafted style text darkens in linear time: " + Math.round(r.ms) + " ms");
   expect(!/lightyellow|darkblue/.test(r.named) && /currentcolor/.test(r.named), "every named colour darkens, keywords stay: " + r.named);
+  expect(r.bare === '<table bgcolor="#1f1f1f"><tbody><tr><td><font color="#e4e4e4">f</font></td></tr></tbody></table><div style="background:#212121;color:#b1b1b1">g</div>', "bare hex attributes and CSS Color 4 colours darken: " + r.bare);
 });
 
 // ---------- layout and look ----------

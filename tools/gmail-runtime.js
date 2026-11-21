@@ -153,6 +153,8 @@ const { FX } = require("./gmail-mock.js");
   let f = await box();
   await f.waitForFunction(() => document.querySelector(".pdfViewer .page canvas") && /Quarterly/.test(document.querySelector(".textLayer")?.textContent || ""), null, { timeout: 15000 });
   results.viewer = { pdfPages: await f.evaluate(() => document.querySelectorAll(".pdfViewer .page").length), sandboxFetch: await f.evaluate(async () => { try { await fetch("https://gmail.googleapis.com/sandbox-probe"); return "allowed"; } catch { return "blocked"; } }) };
+  // CORS alone would refuse the answer, so what counts is that the request never left the sandbox
+  results.viewer.sandboxReached = gmail.calls.some(c => c.path === "/sandbox-probe");
   const dl = page.waitForEvent("download", { timeout: 5000 }).catch(() => null);
   await page.locator("#v-dl").click();
   const d = await dl;
@@ -571,7 +573,7 @@ const { FX } = require("./gmail-mock.js");
   expect(r.subject === "Subject m-3" && r.from.includes("s3@x.com") && r.folder === "Inbox" && r.body.startsWith("Body of") && r.imgs[0]?.startsWith("data:image/png") && r.imgs[1]?.startsWith("data:image/png") && r.spacer <= 2 && r.spacer2 <= 6 && /img-src https: data:/.test(r.csp), "reading with the cid image inlined: " + JSON.stringify(r));
   expect(results.attach.cards === 7 && results.attach.labels.join(",") === "PDF,CSV,ZIP,,DOC,XLS,PPT" && results.attach.thumbs.length === 1 && results.attach.thumbs[0].startsWith("data:image/png"), "attachment strip: " + JSON.stringify(results.attach));
   const v = results.viewer;
-  expect(v.pdfPages === 2 && v.sandboxFetch === "blocked" && v.download === "report.pdf:true" && v.csv === "Z80,2,6502,1" && v.zip.includes("src/main.c") && v.img === 1 && v.doc && v.sheet === "Item,Cost,Z80,2.5,6502,1.25", "viewer through attachments.get: " + JSON.stringify(v));
+  expect(v.pdfPages === 2 && v.sandboxFetch === "blocked" && !v.sandboxReached && v.download === "report.pdf:true" && v.csv === "Z80,2,6502,1" && v.zip.includes("src/main.c") && v.img === 1 && v.doc && v.sheet === "Item,Cost,Z80,2.5,6502,1.25", "viewer through attachments.get: " + JSON.stringify(v));
   expect(/^No preview available for this file\. /.test(v.deck.note) && v.deck.raw === "View as text" && v.deck.text === "not really a deck" && v.deck.label === "" && v.closed, "no converter: the deck is offered as text: " + JSON.stringify(v.deck));
   const u = results.unsafe;
   expect(!u.error && !u.scripts && !u.forms && !u.frames && !u.refresh && !u.handlers && u.link && !u.link.ping && u.link.target === "_blank" && u.pwned === null, "the reader cleans the sender's own HTML: " + JSON.stringify(u));

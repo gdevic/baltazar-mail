@@ -6,54 +6,24 @@ Found on 21 November 2026 at commit 3934a9d by six agents that each searched one
 
 | # | Severity | Area | Finding | Confidence |
 |---|---|---|---|---|
-| ADPT-4 | Medium | Gmail | A send answered 5xx after it was sent goes out twice | likely |
 | CONT-5 | Medium | Contacts | Mail that arrives during the first build and is filed before the next refresh is never learned | reproduced |
-| ADPT-3 | Medium | Gmail | A search in All Mail lists every hit twice | reproduced |
-| ADPT-2 | Medium | Gmail | Load more at the exact end of a list starts again at page 1 | likely |
 | ADPT-5 | Medium | Gmail | Label counts include trashed mail, so an emptied label cannot be deleted | likely |
-| TOOL-3 | Medium | Dark mode | Legacy colours without `#` and modern colour syntax are not darkened | reproduced |
-| CACHE-1 | Medium | Gmail | Caches count entries, not bytes, and hold full-size images | confirmed |
 | SG-1 | Medium | Security | A message's styles still tell its sender about the reader (Gmail) | reproduced |
-| TOOL-2 | Medium | Tests | The sandbox's network isolation is asserted by checks that cannot fail | confirmed |
-| COMP-7 to ADPT-15 | Low | various | see below | |
+| the rest | Low | various | see below | |
 
 ## Medium
-
-### ADPT-4. Gmail: a send answered 5xx after it was sent goes out twice
-
-`gmail/api.js:288-291` (`call` retries 500 to 504), `gmail/api.js:962-974` (`upload`), `gmail/api.js:1003-1004` (`send`). When `drafts.send` answers 503 although the message went out, `call()` repeats it and gets 404, since the draft is gone; `send()` reads that as a draft deleted elsewhere and sends again with `messages.send`. The retry in `saveDraft` can likewise leave a second draft. Fix: never retry a send upload on 5xx and never fall back to `messages.send` after a retried `drafts.send`; word a 5xx as the timeout is worded ("check Sent"). Likely: the chain is reproduced against the mock; that Gmail answers 5xx after sending is not recorded.
 
 ### CONT-5. Mail that arrives during the first build and is filed before the next refresh is never learned
 
 `ext/mail.js:593` clears `contactsDirty` although `syncContacts` only returns the run under way (`ext/mail.js:2703`); the refresh reads Sent and Inbox down to its bookmark (`ext/contacts.js:298`, `237`) and the build's last pass skips Inbox rows (`ext/contacts.js:269`). A new correspondent's message that arrives after the Inbox pass and is archived or filed during the build stays out of Contacts until a Rebuild; the Gmail build can span hours. Fix: remember a sync asked for during a run, and refresh once more when the run ends. Reproduced.
 
-### ADPT-3. Gmail: a search in All Mail lists every hit twice
-
-`gmail/api.js:656-660` filters `ALL` out of the exclusions, so the "elsewhere" query is the bare search, and `ext/mail.js:715-716`, `737`, `745` append it without removing duplicates. Every hit repeats under "N matches in other folders", and "+N elsewhere" counts the same mail. Fix: `searchScoped` answers nothing when the exclusion holds `ALL`. Reproduced.
-
-### ADPT-2. Gmail: Load more at the exact end of a list starts again at page 1
-
-`gmail/api.js:588-612` (`listIds`). After a last page that is exactly full and has no `nextPageToken`, the next offset matches the cursor and `messages.list` is called without a token, which answers the first page. Load more never ends in a folder or search of 200, 300... messages, the Files view behaves the same, and the Contacts build rereads such a folder until it reaches 2,000 rows. Fix: answer no ids for an offset past a cursor that has no token. Likely: it depends on Gmail leaving out `nextPageToken` on an exactly full last page, as the mock does.
-
 ### ADPT-5. Gmail: label counts include trashed mail, so an emptied label cannot be deleted
 
 `gmail/api.js:422-433` (counts from `labels.get`), `856-862` (a move to Trash keeps user labels and STARRED), `442-445` (`starredCount`), `ext/mail.js:350-353`, `433-441`. After all of a label's mail is deleted, the label keeps its total for up to 30 days, and Delete is greyed out ("it holds N messages"); the Starred count is higher than the Starred view. Fix: decide emptiness, and count Starred, with `messages.list` and `maxResults=1`, which leaves out Spam and Trash. Likely.
 
-### TOOL-3. Legacy colours without # and modern colour syntax are not darkened
-
-`ext/darken.js:44-68` (`parseColor`), `ext/darken.js:137-138`. `bgcolor="ffffff"` and `color="000000"`, which browsers read as #ffffff and #000000, are kept, giving black text on the dark page or light text on a table left white; `oklch()`, `lab()`, `hwb()`, `color()` and `hsl()` with bare numbers are kept the same way. Fix: give a bare 3- or 6-digit attribute value its `#` before remapping, and keep an element's text colour when its background colour did not parse. Reproduced.
-
-### CACHE-1. Gmail: caches count entries, not bytes, and hold full-size images
-
-`ext/cache.js:7-10` bounds a cache by entries only; `gmail/api.js:795` (`inlineCache`, 200 data URLs of full-size images), `773` (`thumbCache`, 100 of up to 2 MB) and `754` (`bytesCache`, 20 attachments of any size). Reading 50 messages with four 3 MB photos each holds about 860 MB in the page. Fix: a byte budget in `remember`, about 50 MB for these three. Confirmed, with the sizes from a script.
-
 ### SG-1. A message's styles still tell its sender about the reader (Gmail)
 
 `ext/mail.js:1016-1036` (`READS_CONTENT` is only `[` and `:has(`), `gmail/api.js:47` (`img-src https:`). Rules under `@media` (`prefers-color-scheme`, `pointer`, width), `:hover`, `:dir(rtl)`, `:nth-child(An+B of S)`, `:empty` and sibling combinators survive the pruning. With images on, the default outside Spam and Trash, the Gmail reader fetches their addresses from any host, which tells the sender the reader's theme, pointer and window size, which parts were hovered, and the direction of the text, without a click. SECURITY.md ("a style cannot fetch an address that depends on what the message says") and PRIVACY.md ("that it was opened, your IP address and browser") say less than this. In the Yahoo edition such rules reach only Yahoo's image proxy. Fix: drop a rule that names an external `url()` when it sits under a feature query, under an interaction or `:dir()` pseudo-class, or under an `of S` selector, and correct both texts. Reproduced in the real extension.
-
-### TOOL-2. The sandbox's network isolation is asserted by checks that cannot fail
-
-`tools/yahoo-runtime.js:198` with `955`, `tools/gmail-runtime.js:155` with `574`, `tools/yahoo-runtime.js:951`. The probe fetch from render.html, whose origin is "null", is refused by CORS, since the mocked answers carry no `Access-Control-Allow-Origin`, whether or not the sandbox's CSP stops it; `connect-src *` in the sandbox CSP would pass both suites, as the Yahoo filter also drops every CSP violation that mentions `https://mail.yahoo.com/`. Fix: assert that the mock never saw the probe (`/sandbox-probe` in the Gmail mock's calls, a `/probe-` address in `mock.probes` for Yahoo), and narrow the Yahoo filter to it. Confirmed.
 
 ## Low
 
@@ -111,6 +81,12 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 ### TOOL-4. PDF note icons point at files that are not there
 `ext/render.js:82` gives PDFViewer no `imageResourcesPath`, so annotation icons resolve to the extension's root. Fix: `imageResourcesPath: base + "images/"`. Confirmed.
 
+### ADPT-4. Gmail: a draft save answered 5xx after Gmail stored it can leave a second draft
+`gmail/api.js` (`saveDraft` through `call`, which asks again after a server error). When Gmail stores a new draft and its answer is a 5xx, the save is asked again and a second draft is made. Fix: ask a first save again only for a rate limit, and look for the draft by its Message-ID before making another. Likely.
+
+### TOOL-3. Dark mode leaves lab() and lch() colours alone
+`ext/darken.js` (`parseColor`) reads hex, rgb(), hsl(), hwb(), oklab(), oklch(), color(srgb) and colour names, but not CIE lab() and lch(), so a light background written that way stays light under text that was made light. Fix: convert CIE Lab (D50) through XYZ to sRGB, or keep an element's text colour when its background did not parse. Confirmed.
+
 ### ADPT-6. Gmail keeps every opened message's text part data until sign-out
 `gmail/api.js:680`, `712`, `748` (`partRefs`): reading 200 messages of 494 KB keeps about 130 MB. Fix: keep only the attachment id, type and name, or bound the map. Reproduced.
 
@@ -155,9 +131,6 @@ It copies smoke.js up to its first `page.goto`, which since 79f94de includes a r
 
 ### TOOL-6. The Contacts page's own zoom has no test
 `settings.contactZoom` (`ext/mail.js:73`, `1228-1231`): Ctrl+wheel and + - 0 over a contact's recent messages. Confirmed.
-
-### ADPT-15. tools/gmail-test.mjs has no case for paging at the exact end, an All Mail search or a 5xx on send
-ADPT-2 to ADPT-4 all pass it today. Confirmed.
 
 ## Security hardening
 

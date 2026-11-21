@@ -150,12 +150,13 @@ globalThis.FileReader = class { readAsDataURL(blob) { blob.arrayBuffer().then(b 
 const gm = createGmail({ mime: { listParts, extract } });
 const mock = gm.state;
 const fetched = [];        // { at, url } of every request, for the pacing of background work
+let before = null;         // (method, url, body, headers) -> an answer of its own, or null for the mock's
 globalThis.fetch = async (url, init = {}) => {
   fetched.push({ at: Date.now(), url: String(url) });
   const method = init.method || "GET", headers = init.headers || {};
   let body = init.body;
   if (body instanceof Blob) body = Buffer.from(await body.arrayBuffer()).toString("latin1");
-  const r = gm.respond(method, String(url), body, headers);
+  const r = before?.(method, String(url), body, headers) || gm.respond(method, String(url), body, headers);
   if (r.text != null) return new Response(r.text, { status: r.status, headers: { "content-type": r.contentType } });
   return new Response(r.json == null ? null : JSON.stringify(r.json), { status: r.status, headers: { "content-type": "application/json" } });
 };
@@ -614,6 +615,33 @@ const lastMod = () => modsOf().at(-1);
   delete manifest.oauth2; await api.setup.paste(CID); delete local.gmSetup; local.gmAccount = "me@gmail.com";
   const ended = await api.setup.view();
   ok(ended.kind === "ended" && /me@gmail\.com/.test(ended.text), "a sign-in that ended names its account: " + JSON.stringify([ended.kind, ended.text]));
+}
+// Paging to the exact end of a list, a search in All Mail, and a send that Gmail answers with a
+// server error after it was sent.
+{
+  for (const id of ["pg1", "pg2", "pg3", "pg4"]) mock.addMessage({ id, labels: ["Label_pg"], subject: id, from: "p <p@x.com>", cc: "", html: "<p>p</p>" });
+  const page = async off => (await api.list("Label_pg", 2, off)).messages.map(x => x.id).join();
+  const pages = [await page(0), await page(2), await page(4)];
+  ok(pages[0].split(",").length === 2 && pages[1].split(",").length === 2 && pages[2] === "", "a page past the exact end of a list is empty: " + JSON.stringify(pages));
+  for (const id of ["pg1", "pg2", "pg3", "pg4"]) mock.messages.delete(id);
+  const elsewhere = await api.searchScoped("Subject", { raw: "Subject", exclude: { ids: ["ALL"] } }, 50, 0);
+  ok(elsewhere.messages.length === 0, "nothing is outside All Mail: " + elsewhere.messages.length);
+  const sentCopies = subject => [...mock.messages.values()].filter(m => m.labelIds.includes("SENT") && JSON.stringify(m).includes(subject)).length;
+  for (const via of ["messages", "drafts"]) {
+    const subject = `Once via ${via}`;
+    const d = { csid: `c-${via}`, from: { name: "Me", email: "me@gmail.com" }, to: [{ name: "", email: "ann@x.com" }], cc: [], bcc: [], subject, html: "<p>hi</p>", files: [], refs: [], inline: [] };
+    if (via === "drafts") d.csid = (await api.saveDraft(d)).message.csid;
+    let first = true;
+    before = (method, url, body, headers) => {
+      if (!first || !url.includes(`/upload/gmail/v1/users/me/${via}/send`)) return null;
+      first = false;
+      gm.respond(method, url, body, headers);           // Gmail sends it, and its answer is lost
+      return { status: 503, json: { error: { code: 503, message: "The service is currently unavailable.", errors: [{ reason: "backendError" }] } } };
+    };
+    const got = await outcome(api.send(d));
+    before = null;
+    ok(/may still have been sent/.test(got.e?.message || "") && sentCopies(subject) === 1, `a send answered 503 (${via}.send) is not sent again: ` + JSON.stringify({ error: got.e?.message, copies: sentCopies(subject) }));
+  }
 }
 // A full row cache: a list keeps the rows it already had when fetching its new ones makes room.
 // Last, as it runs on a clock of its own, so that filling the cache waits on no quota.

@@ -58,14 +58,28 @@ export function parseColor(s) {
     const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
     return [ch(m[1]), ch(m[2]), ch(m[3]), Math.max(0, Math.min(1, a))];
   }
-  m = s.match(/^hsla?\(\s*([\d.]+)(deg|turn|rad)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
+  m = s.match(/^hsla?\(\s*([\d.]+)(deg|turn|rad)?[\s,]+([\d.]+)%?[\s,]+([\d.]+)%?(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
+  if (m) return [...hsl(degrees(m[1], m[2]), Math.min(1, parseFloat(m[3]) / 100), Math.min(1, parseFloat(m[4]) / 100)), alpha(m[5])];
+  // CSS Color 4 forms a sender's styles may use: hwb(), oklab(), oklch() and color(srgb ...)
+  m = s.match(/^hwb\(\s*([\d.]+)(deg|turn|rad)?\s+([\d.]+)%?\s+([\d.]+)%?(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
   if (m) {
-    const h = parseFloat(m[1]) * (m[2] === "turn" ? 360 : m[2] === "rad" ? 180 / Math.PI : 1);
-    const a = m[5] === undefined ? 1 : m[5].endsWith("%") ? parseFloat(m[5]) / 100 : parseFloat(m[5]);
-    return [...hsl(((h % 360) + 360) % 360, Math.min(1, parseFloat(m[3]) / 100), Math.min(1, parseFloat(m[4]) / 100)), Math.max(0, Math.min(1, a))];
+    let w = parseFloat(m[3]) / 100, k = parseFloat(m[4]) / 100;
+    if (w + k > 1) { w /= w + k; k = 1 - w; }
+    return [...hsl(degrees(m[1], m[2]), 1, 0.5).map(c => Math.round(c * (1 - w - k) + 255 * w)), alpha(m[5])];
   }
+  m = s.match(/^oklab\(\s*([\d.]+%?)\s+(-?[\d.]+%?)\s+(-?[\d.]+%?)(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
+  if (m) return [...fromOk([part(m[1], 1), part(m[2], 0.4), part(m[3], 0.4)]), alpha(m[4])];
+  m = s.match(/^oklch\(\s*([\d.]+%?)\s+([\d.]+%?)\s+(-?[\d.]+)(deg|turn|rad)?(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
+  if (m) { const C = part(m[2], 0.4), h = degrees(m[3], m[4]) * Math.PI / 180; return [...fromOk([part(m[1], 1), C * Math.cos(h), C * Math.sin(h)]), alpha(m[5])]; }
+  m = s.match(/^color\(\s*srgb\s+([\d.]+%?)\s+([\d.]+%?)\s+([\d.]+%?)(?:\s*\/\s*([\d.]+%?))?\s*\)$/);
+  if (m) return [...[m[1], m[2], m[3]].map(v => Math.round(255 * Math.max(0, Math.min(1, part(v, 1))))), alpha(m[4])];
   return null;
 }
+// The pieces of those forms: an angle in degrees, an alpha, a number or percentage of a range.
+const degrees = (v, unit) => { const d = parseFloat(v) * (unit === "turn" ? 360 : unit === "rad" ? 180 / Math.PI : 1); return ((d % 360) + 360) % 360; };
+const alpha = v => Math.max(0, Math.min(1, v === undefined ? 1 : v.endsWith("%") ? parseFloat(v) / 100 : parseFloat(v)));
+const part = (v, range) => v.endsWith("%") ? parseFloat(v) / 100 * range : parseFloat(v);
+const fromOk = lab => fromOklab(lab).map(c => Math.round(toSrgb(Math.max(0, Math.min(1, c)))));
 
 const toLin = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
 const toSrgb = c => 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
@@ -112,7 +126,7 @@ export function remap(color, role) {
 }
 
 // Bounded, so a crafted value of unclosed rgb( cannot make matching quadratic.
-const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
+const COLOR_TOKEN = /#[0-9a-f]{3,8}\b|(?:rgba?|hsla?|hwb|oklab|oklch|color)\([^()]{0,80}\)|\b[a-z]{1,30}\b/gi;
 const remapValue = (value, role) => value.replace(COLOR_TOKEN, t => remap(t, role) || t);
 
 // Colour declarations in a style sheet or a style attribute. Declarations with an image are kept.
@@ -126,6 +140,9 @@ const ownTextColor = el => (el.getAttribute("style") || "").match(/(?:^|;)\s*col
 const hasBgImage = el => el.hasAttribute("background") ||
   (el.getAttribute("style") || "").split(";").some(d => /^\s*background(?:-image)?\s*:/i.test(d) && /url\(/i.test(d));
 
+// A colour attribute of old HTML may give six hex digits without their #, as browsers read it.
+const legacy = v => /^[0-9a-f]{6}$/i.test(String(v).trim()) ? `#${String(v).trim()}` : v;
+
 // The message HTML with its declared colours darkened. Uses an inert template: nothing loads.
 export function darkenHtml(html, doc = document) {
   const tpl = doc.createElement("template");
@@ -134,8 +151,8 @@ export function darkenHtml(html, doc = document) {
     const own = ownTextColor(el), bgImage = hasBgImage(el);
     if (el.tagName === "STYLE") el.textContent = darkenCss(el.textContent);
     if (!keepText && !bgImage) {
-      for (const attr of ["bgcolor"]) if (el.hasAttribute(attr)) { const v = remap(el.getAttribute(attr), "bg"); if (v) el.setAttribute(attr, v); }
-      for (const attr of ["color", "text", "link", "vlink", "alink"]) if (el.hasAttribute(attr)) { const v = remap(el.getAttribute(attr), "text"); if (v) el.setAttribute(attr, v); }
+      for (const attr of ["bgcolor"]) if (el.hasAttribute(attr)) { const v = remap(legacy(el.getAttribute(attr)), "bg"); if (v) el.setAttribute(attr, v); }
+      for (const attr of ["color", "text", "link", "vlink", "alink"]) if (el.hasAttribute(attr)) { const v = remap(legacy(el.getAttribute(attr)), "text"); if (v) el.setAttribute(attr, v); }
       if (el.hasAttribute("style")) el.setAttribute("style", darkenCss(el.getAttribute("style")));
     } else if (bgImage && !own) el.setAttribute("style", `${el.getAttribute("style") || ""};color:${inherited}`);
     for (const child of el.children) walk(child, own || inherited, keepText || bgImage);

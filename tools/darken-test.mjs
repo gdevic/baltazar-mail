@@ -13,6 +13,11 @@ eq(parseColor("inherit"), null, "keyword is not a colour");
 eq(JSON.stringify(parseColor("hsl(0, 100%, 50%)")), "[255,0,0,1]", "hsl");
 eq(JSON.stringify(parseColor("hsla(120deg 100% 25% / 0.5)")), "[0,128,0,0.5]", "hsla with spaces");
 eq(darkenCss("color:hsl(0,0%,20%)"), "color:#b1b1b1", "hsl text darkens like its hex");
+// the colour forms of CSS Color 4
+for (const [c, want] of [["hsl(0 0 100)", "[255,255,255,1]"], ["hwb(120 0% 50%)", "[0,128,0,1]"], ["oklab(0 0 0)", "[0,0,0,1]"], ["oklch(1 0 0)", "[255,255,255,1]"],
+  ["oklch(62.8% 0.2577 29.23)", "[255,0,0,1]"], ["color(srgb 1 0.5 0)", "[255,128,0,1]"], ["color(srgb 100% 0% 0% / 50%)", "[255,0,0,0.5]"]])
+  eq(JSON.stringify(parseColor(c)), want, c);
+eq(darkenCss("background:oklch(0.98 0 0);color:oklch(0.2 0 0)"), "background:#212121;color:#c4c4c4", "oklch paper and ink darken like their hex");
 // light paper and borders darken; dark ink lightens; hue survives
 eq(remap("#ffffff", "bg"), "#1f1f1f", "white paper");
 eq(remap("#dddddd", "bg"), "#282828", "light border");

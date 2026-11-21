@@ -12,7 +12,7 @@ import { getToken, forget, signOut as revoke, NotSignedIn, client, setClient, re
 import { build, parseAddresses, messageIdOf, replyHeaders } from "./rfc822.js";
 import { read, guide, help, explain, notes, projectOf, INTRO, ROUTES } from "./setup.js";
 import { sniffImage } from "./bytes.js";
-import { remember } from "./cache.js";
+import { remember, rememberUntil } from "./cache.js";
 import { clean, isoDate } from "./query.js";
 import { esc } from "./text.js";
 
@@ -270,7 +270,9 @@ function addQuery(url, query) {
 // server errors a few retries. units: its quota cost; cap: the pace it keeps (BACKGROUND for
 // background work). Returns the parsed JSON (null for an empty answer).
 async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
-  const { query = null, json = null, body = null, type = null, base = API, timeout = TIMEOUTS.batch, units = 1, cap = FOREGROUND } = opts;
+  // once: a request that may have taken effect though it failed (a send) is asked again only when
+  // Gmail refused it before doing anything (a rate limit), never after a server error
+  const { query = null, json = null, body = null, type = null, base = API, timeout = TIMEOUTS.batch, units = 1, cap = FOREGROUND, once = false } = opts;
   await quota(units, cap);
   const t = await getToken();
   const url = new URL(base + path);
@@ -285,7 +287,7 @@ async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
   if (resp.status === 401) { await forget(); throw new NotSignedIn(); }
   let doc = null;
   if (text) { try { doc = JSON.parse(text); } catch { doc = null; } }
-  if (retriable(resp.status, doc) && tries.again > 0) {
+  if (retriable(resp.status, doc) && tries.again > 0 && !(once && resp.status >= 500)) {
     await sleep(pauseFor(resp, doc, tries.again, cap === BACKGROUND));
     return call(method, path, opts, { ...tries, again: tries.again - 1 });
   }
@@ -603,6 +605,9 @@ async function listIds(params, count, offset, cap = FOREGROUND) {
     }
     if (cur.nextOffset < offset) { cursors.set(key, cur); return { ids: [], estimate: 0 }; }
   }
+  // a list whose page came without a token ends there: asked past it, it answers nothing (asked
+  // without a token, Gmail would answer its first page again)
+  if (offset > 0 && !cur.token) { cursors.set(key, cur); return { ids: [], estimate: 0 }; }
   // Gmail answers at most 500 ids a page; a longer list (a refresh of many loaded rows) takes several
   const want = Math.max(1, count), ids = [];
   let token = cur.token, estimate = 0;
@@ -657,8 +662,10 @@ export async function searchScoped(term, { raw = null, include = null, exclude =
     // a folder with its subfolders: any of their labels, through the search itself
     return listRows({ q: `(${ids.map(labelTerm).join(" OR ")}) ${q}`, includeSpamTrash: ids.some(isSpamOrTrash) }, count, offset);
   }
+  // nothing is outside All Mail, so a search there has no matches elsewhere
+  if (exclude?.ids?.map(String).includes(ALL)) return { messages: [], query: {}, ms: 0 };
   if (exclude?.starred) q = `-is:starred ${q}`;
-  const ids = (exclude?.ids || []).map(String).filter(id => id !== ALL);
+  const ids = (exclude?.ids || []).map(String);
   if (ids.length) q = `${ids.map(id => `-${labelTerm(id)}`).join(" ")} ${q}`;
   const r = await listRows({ q }, count, offset);
   // what the search still answered with one of those labels stays out
@@ -742,6 +749,10 @@ export async function body(msgId) {
 
 // { bytes, type, filename } of one attachment: Gmail's attachments.get by the part's attachment
 // id, which body() noted; a part not seen yet is looked up first. The newest parts stay cached.
+// What the caches of parts may hold, whatever the number of entries: attachments' bytes, and
+// pictures as data: URLs (a character a byte), since a picture in mail can be several megabytes.
+const BYTES_KEPT = 48 << 20, PICTURES_KEPT = 32 << 20;
+const urlSize = u => typeof u === "string" ? u.length : 0;
 const bytesCache = new Map();
 export async function partBytes(msgId, a) {
   checkIds([msgId]);
@@ -756,7 +767,7 @@ export async function partBytes(msgId, a) {
   }
   const bytes = ref.data != null ? fromB64url(ref.data) : await partData(msgId, { body: { attachmentId: ref.attachmentId } });
   const out = { bytes, type: ref.type, filename: ref.filename };
-  remember(bytesCache, key, out, 20);
+  rememberUntil(bytesCache, key, Promise.resolve(out), { max: 20, maxBytes: BYTES_KEPT, sizeOf: x => x.bytes.byteLength });
   return out;
 }
 
@@ -775,8 +786,7 @@ export async function thumbnail(msgId, a) {
   const key = partKey(msgId, a.partId);
   if (thumbCache.has(key)) return thumbCache.get(key);
   const p = partBytes(msgId, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? toDataUrl(bytes, t) : null; }).catch(() => null);
-  remember(thumbCache, key, p, 100);
-  return p;
+  return rememberUntil(thumbCache, key, p, { max: 100, maxBytes: PICTURES_KEPT, sizeOf: urlSize });
 }
 
 // Inline images are cid: references to the message's own parts: the part of a body() result
@@ -797,8 +807,7 @@ export async function inlineSource(src, body) {
   const key = partKey(message.id, a.partId);
   if (inlineCache.has(key)) return inlineCache.get(key);
   const p = partBytes(message.id, a).then(({ bytes }) => { const t = sniffImage(bytes); return t ? toDataUrl(bytes, t) : null; }).catch(() => null);
-  remember(inlineCache, key, p, 200);
-  return p;
+  return rememberUntil(inlineCache, key, p, { max: 200, maxBytes: PICTURES_KEPT, sizeOf: urlSize });
 }
 
 // ---------- mutations ----------
@@ -970,10 +979,10 @@ async function upload(method, path, meta, raw, what) {
   const body = new Blob([head, raw, `\r\n--${boundary}--\r\n`]);
   const timeout = TIMEOUTS.batch + Math.ceil(raw.length / 1048576) * TIMEOUTS.perMB;
   try {
-    return await call(method, path, { query: { uploadType: "multipart" }, body, type: `multipart/related; boundary=${boundary}`, base: UPLOAD, timeout, units: 10 });
+    return await call(method, path, { query: { uploadType: "multipart" }, body, type: `multipart/related; boundary=${boundary}`, base: UPLOAD, timeout, units: 10, once: what === "send" });
   } catch (e) {
     if (e instanceof ApiError && e.detail?.status === 400 && threadOf(meta)) return upload(method, path, withoutThread(meta), raw, what);
-    if (e instanceof Timeout && what === "send") e.message += "; it may still have been sent, so check Sent before sending it again";
+    if (what === "send" && (e instanceof Timeout || e.detail?.status >= 500)) { e.mayHaveSent = true; e.message += "; it may still have been sent, so check Sent before sending it again"; }
     throw e;
   }
 }
@@ -1004,8 +1013,9 @@ export async function send(d) {
   const { raw, threadId } = await rawFor(d);
   const meta = { message: threadId ? { threadId } : {} };
   const id = knownDrafts.has(d.csid) ? d.csid : null;
-  // a draft deleted or sent elsewhere (404) leaves the message to be sent on its own
-  const r = (id ? await upload("POST", "/drafts/send", { id, ...meta }, raw, "send").catch(e => { if (!isGone(e)) throw e; return null; }) : null)
+  // a draft deleted or sent elsewhere (404) leaves the message to be sent on its own; a send that
+  // may have gone out is never sent again
+  const r = (id ? await upload("POST", "/drafts/send", { id, ...meta }, raw, "send").catch(e => { if (!isGone(e) || e.mayHaveSent) throw e; return null; }) : null)
     || await upload("POST", "/messages/send", meta.message, raw, "send");
   if (id) dropDraft(id);
   return { message: { id: r.id, csid: d.csid }, ms: Math.round(performance.now() - t0) };
