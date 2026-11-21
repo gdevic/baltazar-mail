@@ -29,7 +29,7 @@ The two extensions are the same code with one module swapped, the adapter that s
 
 ## Reviews
 
-An independent review on 31 October 2026 found six issues, none allowing script to run; all are fixed. The summary is in [docs/security-review.md](docs/security-review.md). A second review on 1 November 2026 found no way for mail, attachments or GitHub to run script or reach your session; its medium findings (quoted content in reply drafts, images and styles in quotes and print) are fixed. Both reviews covered the Yahoo extension; the Gmail extension shares that code and adds the adapter, the sign-in module and the RFC 822 writer.
+An independent review on 21 November 2026, the first of both extensions and of the supply chain, found no way for mail, attachments or a web page to run script or reach your session or token; its findings (images in replies to blocked mail, a forged printed header, forged mail from your own address in Contacts) are fixed, and what a message's styles can still tell its sender in the Gmail extension is described above and in PRIVACY.md. The summary, and how a review is done, are in [docs/security-review.md](docs/security-review.md). Two earlier reviews, on 31 October and 1 November 2026, covered the Yahoo extension; their findings are fixed.
 
 ## Known limits
 
