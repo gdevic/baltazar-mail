@@ -1200,6 +1200,12 @@ function toggleReaderColours() {
   saveSettings(); syncDarkButton();
   if (currentBody && state.openId) showBody();
 }
+// An HTML attachment is shown as a message is: cleaned, and in a dark theme darkened, unless
+// messages are shown in their original colours.
+function attachedHtml(source) {
+  const html = cleanHtml(source), dark = darkApp() && !settings.readerOriginal;
+  return { html: dark ? darkenHtml(html) : html, page: dark ? DARK : null };
+}
 
 // The message zoom, on top of the text size setting, is one choice for every message read or
 // written: steps of 10% between 50% and 300%, 0 back to normal. The open frame, or the editor, is
@@ -2828,7 +2834,7 @@ wireSplitters();
 window.addEventListener("resize", () => applyLayout());
 wireMovePicker();
 wireContactCards();
-viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, cleanHtml, status, providerName: api.PROVIDER.name });
+viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, attachedHtml, status, providerName: api.PROVIDER.name });
 files.init(filesHooks);
 people.init(peopleHooks);
 $("contacts-link").onclick = () => openContacts();

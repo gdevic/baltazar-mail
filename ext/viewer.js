@@ -44,8 +44,8 @@ export function tile(a) {
 }
 
 // { thumb(msgId, a) -> data URL | null, bytes(msgId, a) -> { bytes, type, filename }, docPages?(docId, start, end, retry),
-//   extractText?(a) -> string, originalUrl?(a) -> url | null, listed(a) -> whether the strip shows it, cleanHtml(html),
-//   status(msg), providerName }
+//   extractText?(a) -> string, originalUrl?(a) -> url | null, listed(a) -> whether the strip shows it,
+//   attachedHtml(html) -> { html, page: the colours of its darkened page | null }, status(msg), providerName }
 let hooks = null;
 // The files the viewer steps through, each with the id of the message it belongs to (msgId).
 let items = [], index = 0;
@@ -169,6 +169,76 @@ async function rasterized(blob) {
   } finally { URL.revokeObjectURL(src); }
 }
 
+// ---------- pictures ----------
+// A picture opens whole, at its own size when that fits the pane. The wheel zooms it about the
+// pointer, and + and - about the middle of the pane: from whole up to ZOOM_MAX times its own size
+// (or the size that fills the pane, for a small one), stopping at its own size on the way. While
+// it is larger than the pane, dragging moves it, never further than its own edge. scale is CSS
+// pixels to a pixel of the picture.
+const ZOOM_MAX = 8, ZOOM_STEP = 1.25, WHEEL_ZOOM = 0.002;
+function picture(canvas, img, meta) {
+  const w = img.naturalWidth || 1, h = img.naturalHeight || 1;
+  let scale = 0, x = 0, y = 0, whole = true, said = 0;
+  const fills = () => Math.min(canvas.clientWidth / w, canvas.clientHeight / h);
+  function place() {
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    if (!W || !H) return;
+    if (whole) scale = Math.min(1, fills());
+    const sw = w * scale, sh = h * scale;
+    // Centred along an axis it fits on; along one it does not, its edges stay outside the pane.
+    x = sw <= W ? (W - sw) / 2 : Math.min(0, Math.max(W - sw, x));
+    y = sh <= H ? (H - sh) / 2 : Math.min(0, Math.max(H - sh, y));
+    Object.assign(img.style, { left: `${x}px`, top: `${y}px`, width: `${sw}px`, height: `${sh}px` });
+    img.classList.add("placed");
+    canvas.classList.toggle("pan", sw > W + 0.5 || sh > H + 0.5);
+    const percent = Math.round(scale * 100);
+    if (percent !== said) meta(`${w} × ${h} · ${said = percent}%`);
+  }
+  // The point of the picture at (px, py) of the pane stays there.
+  function zoomTo(next, px, py) {
+    if (!scale) return;
+    const least = Math.min(1, fills());
+    next = Math.min(Math.max(ZOOM_MAX, fills()), Math.max(least, next));
+    if ((scale < 1 && next > 1) || (scale > 1 && next < 1)) next = 1;
+    whole = next <= least;
+    x = px - ((px - x) * next) / scale;
+    y = py - ((py - y) * next) / scale;
+    scale = next;
+    place();
+  }
+  canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    zoomTo(scale * Math.exp(-Math.max(-240, Math.min(240, e.deltaY)) * WHEEL_ZOOM), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  canvas.onpointerdown = e => {
+    if (e.button !== 0 || !canvas.classList.contains("pan")) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add("panning");
+    let px = e.clientX, py = e.clientY;
+    canvas.onpointermove = m => { x += m.clientX - px; y += m.clientY - py; px = m.clientX; py = m.clientY; place(); };
+  };
+  canvas.onpointerup = canvas.onpointercancel = canvas.onlostpointercapture = () => { canvas.onpointermove = null; canvas.classList.remove("panning"); };
+  const resized = new ResizeObserver(place);
+  resized.observe(canvas);
+  place();
+  $("v-fit").title = "Whole picture (0)";
+  $("v-zoom").classList.remove("hidden");
+  current = { cleanup: () => resized.disconnect(),
+    zoom: dir => { if (dir) zoomTo(scale * ZOOM_STEP ** dir, canvas.clientWidth / 2, canvas.clientHeight / 2); else { whole = true; place(); } } };
+}
+
+// In a dark theme the renderers that draw text and tables themselves take the app's palette, and
+// a document's pages lie on its background; in a light one a file is shown on white paper.
+const ROLES = ["bg", "bg2", "bg3", "fg", "fg2", "fg3", "line", "accent"];
+function palette() {
+  const root = document.documentElement;
+  if (root.dataset.theme !== "dark") return null;
+  const css = getComputedStyle(root);
+  return Object.fromEntries(ROLES.map(k => [k, css.getPropertyValue(`--${k}`).trim()]));
+}
+
 // Office formats that have a renderer here; the rest go to the provider's converter.
 const isDocx = a => extOf(a.filename) === "docx" || /wordprocessingml/.test(a.subtype || "");
 const isSheet = a => ["xlsx", "xlsm", "xls", "ods", "numbers"].includes(extOf(a.filename)) || /spreadsheetml|ms-excel/.test(a.subtype || "");
@@ -199,18 +269,23 @@ async function show(i) {
     if (k === "image") {
       const drawn = ext === "svg" ? await rasterized(blob) : null;
       if (stale()) return;
-      body.innerHTML = `<img class="v-img" alt="">`;
+      body.innerHTML = `<div class="v-canvas"><img class="v-img" alt="" draggable="false"></div>`;
       const img = body.querySelector("img");
       img.src = drawn ? objectUrl(drawn.blob) : objectUrl(blob, MIME[ext]);
       if (drawn) img.srcset = `${img.src} ${drawn.density}x`;
-      img.onclick = () => img.classList.toggle("full");
+      await img.decode();
+      if (stale()) return;
+      picture(img.parentNode, img, meta);
     } else if (k === "audio" || k === "video") {
       body.innerHTML = center(`<${k} controls autoplay></${k}>`);
       body.querySelector(k).src = objectUrl(blob, MIME[ext]);
     } else if (k === "html") {
-      const html = hooks.cleanHtml(await blob.text());
+      const { html, page } = hooks.attachedHtml(await blob.text());
       body.innerHTML = `<iframe sandbox="" referrerpolicy="no-referrer" title="HTML"></iframe>`;
-      body.querySelector("iframe").srcdoc = `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">${html}`;
+      const frame = body.querySelector("iframe");
+      if (page) frame.style.background = page.bg;
+      frame.srcdoc = `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">` +
+        (page ? `<style>html{background:${page.bg};color-scheme:dark}body{color:${page.fg}}a{color:${page.link}}</style>` : "") + html;
     } else if (k === "zip") {
       await sandboxed(ctx, { kind: "zip", bytes: await blob.arrayBuffer() });
     } else {
@@ -280,7 +355,7 @@ function sandboxed(ctx, request) {
         case "ready":
           clearTimeout(timer);
           timer = setTimeout(() => fail("the preview took too long"), 120000);
-          send({ type: "render", ...request }, request.bytes ? [request.bytes] : []);
+          send({ type: "render", ...request, palette: palette() }, request.bytes ? [request.bytes] : []);
           break;
         case "done":
           clearTimeout(timer);
@@ -296,6 +371,7 @@ function sandboxed(ctx, request) {
           meta(String(m.text || "").slice(0, 120));
           break;
         case "zoomable":
+          $("v-fit").title = "Fit width (0)";
           $("v-zoom").classList.remove("hidden");
           if (current) current.zoom = dir => send({ type: "zoom", dir });
           break;

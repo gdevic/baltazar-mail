@@ -2,6 +2,7 @@
 // Yahoo in harness.js, so no scenario depends on another's state, and several processes can each
 // run a share of them at once (--shard=k/n: every nth scenario from the kth; tools/check.js).
 // node tools/review.js [filter] [--shard=k/n]
+const fs = require("fs"), path = require("path");
 const { launch, msg } = require("./harness");
 
 const scenarios = [];
@@ -165,6 +166,133 @@ scenario("a previewed file's type comes from its name, not the sender", async ({
   expect(type === "image/avif", "the preview blob is typed by the file name: " + type);
   const thumb = await page.evaluate(() => [...document.querySelectorAll("#r-attach .att-thumb img")].every(i => i.getAttribute("alt") === "" && i.src.startsWith("data:")));
   expect(thumb, "thumbnails are image elements with data: sources");
+});
+
+// The preview frame (the sandboxed render.html) once it has drawn.
+async function previewFrame(page) {
+  await page.waitForFunction(() => { const f = document.querySelector("#v-body .v-box"); return f && f.style.visibility === "" && !document.querySelector("#v-body .v-center"); }, null, { timeout: 15000 });
+  return page.frames().find(f => f.url().endsWith("/render.html") && !f.isDetached());
+}
+const partBytes = (raw, name, bytes) => raw.replace(new RegExp(`(filename="${name.replace(".", "\\.")}"\\r\\n\\r\\n)[\\s\\S]*?(\\r\\n--BOUND)`), (all, head, tail) => head + bytes.toString("base64") + tail);
+
+scenario("a picture opens whole on a checkerboard; the wheel zooms it under the pointer and a drag moves it, no further than its edge", async ({ page, mock }, expect) => {
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1600"><rect width="2400" height="1600" fill="#246"/><circle cx="600" cy="400" r="200" fill="#fc0"/></svg>');
+  mock.patchBody = (id, m) => { if (id.startsWith("MSG1_")) { m.attachments[3].filename = "plan.svg"; m.attachments[3].subtype = "svg+xml"; } };
+  mock.patchRaw = raw => partBytes(raw, "photo.png", svg);
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.locator("#r-attach .att-card").nth(3).click();
+  await page.waitForSelector("#v-body img.v-img.placed", { timeout: 10000 });
+  const look = () => page.evaluate(() => {
+    const canvas = document.querySelector("#v-body .v-canvas"), c = canvas.getBoundingClientRect(), i = canvas.firstChild.getBoundingClientRect(), css = getComputedStyle(canvas);
+    return { cx: c.left, cy: c.top, cw: c.width, ch: c.height, x: i.left - c.left, y: i.top - c.top, w: i.width, h: i.height, pan: canvas.classList.contains("pan"), cursor: css.cursor,
+      checks: css.backgroundImage.includes("conic-gradient"), meta: document.getElementById("v-meta").textContent, bar: !document.getElementById("v-zoom").classList.contains("hidden"),
+      open: !document.getElementById("viewer").classList.contains("hidden") };
+  });
+  const near = (a, b, by = 1) => Math.abs(a - b) <= by;
+  const whole = await look();
+  expect(whole.checks && whole.bar && !whole.pan && whole.cursor !== "grab" && whole.w <= whole.cw + 1 && whole.h <= whole.ch + 1 && near(whole.w / whole.h, 1.5, 0.01) &&
+    near(whole.x, (whole.cw - whole.w) / 2) && near(whole.y, (whole.ch - whole.h) / 2) && /2400 × 1600 · \d+%/.test(whole.meta),
+    "it opens whole and centred on the checkerboard, its size and zoom said: " + JSON.stringify(whole));
+  // the wheel zooms in; once the picture is larger than the pane both ways (until then it is kept
+  // centred), the point of the picture under the pointer stays under it
+  const px = whole.cx + whole.cw * 0.3, py = whole.cy + whole.ch * 0.3;
+  const under = g => [(px - g.cx - g.x) / g.w, (py - g.cy - g.y) / g.h];
+  await page.mouse.move(px, py);
+  for (let i = 0; i < 2; i++) await page.mouse.wheel(0, -100);
+  await page.waitForTimeout(200);
+  const larger = await look();
+  await page.mouse.wheel(0, -100);
+  await page.waitForTimeout(200);
+  const zoomed = await look();
+  expect(larger.w > larger.cw && larger.h > larger.ch && zoomed.w > whole.w * 1.6 && zoomed.pan && zoomed.cursor === "grab" && near(under(zoomed)[0], under(larger)[0], 0.005) && near(under(zoomed)[1], under(larger)[1], 0.005),
+    "the wheel zooms in about the pointer, and the picture can then be moved: " + JSON.stringify({ larger: under(larger), zoomed: under(zoomed), w: [whole.w, larger.w, zoomed.w], pane: [larger.cw, larger.ch], cursor: zoomed.cursor }));
+  // a drag moves it by as much as the pointer moves
+  await page.mouse.down(); await page.mouse.move(px + 40, py + 30, { steps: 4 });
+  const held = await look();
+  await page.mouse.up();
+  const moved = await look();
+  expect(held.cursor === "grabbing" && moved.cursor === "grab" && near(moved.x, zoomed.x + 40) && near(moved.y, zoomed.y + 30) && near(moved.w, zoomed.w),
+    "a drag moves it with the pointer: " + JSON.stringify({ from: [zoomed.x, zoomed.y], to: [moved.x, moved.y], held: held.cursor }));
+  // past its edge it stops, and letting go over the backdrop does not close the viewer
+  const [vw, vh] = await page.evaluate(() => [innerWidth, innerHeight]);
+  await page.mouse.move(px, py); await page.mouse.down(); await page.mouse.move(vw - 4, vh - 4, { steps: 6 }); await page.mouse.up();
+  await page.waitForTimeout(200);
+  const edge = await look();
+  expect(edge.open && near(edge.x, 0) && near(edge.y, 0), "a drag stops at the picture's edge, and ending over the backdrop keeps the viewer open: " + JSON.stringify(edge));
+  // 0 shows it whole again; zooming in stops at its own size on the way, and zooming out ends at whole
+  await page.mouse.move(px, py);
+  await page.keyboard.press("0"); await page.waitForTimeout(100);
+  const again = await look();
+  expect(near(again.w, whole.w) && near(again.x, whole.x) && near(again.y, whole.y) && !again.pan, "0 shows it whole again: " + JSON.stringify(again));
+  for (let i = 0; i < 12 && !/ · 100%/.test((await look()).meta); i++) await page.mouse.wheel(0, -100);
+  const own = await look();
+  expect(near(own.w, 2400) && / · 100%/.test(own.meta), "zooming in stops at the picture's own size: " + JSON.stringify({ w: own.w, meta: own.meta }));
+  for (let i = 0; i < 12; i++) await page.mouse.wheel(0, 100);
+  await page.waitForTimeout(100);
+  const out = await look();
+  expect(near(out.w, whole.w) && near(out.x, whole.x) && !out.pan, "zooming out ends at whole: " + JSON.stringify(out));
+  // + zooms about the middle of the pane
+  await page.click("#v-zin"); await page.waitForTimeout(100);
+  const plus = await look();
+  expect(near(plus.w, whole.w * 1.25) && near(plus.x + plus.w / 2, plus.cw / 2), "+ zooms about the middle: " + JSON.stringify(plus));
+  // a light theme: what the sandbox draws is on white paper
+  await page.click("#v-prev");
+  const f = await previewFrame(page);
+  const paper = await f.evaluate(() => ({ bg: getComputedStyle(document.body).backgroundColor, dark: document.documentElement.classList.contains("dark") }));
+  expect(paper.bg === "rgb(255, 255, 255)" && !paper.dark && await page.locator("#v-zoom").isHidden(), "in a light theme a listing is on white, and has no zoom buttons: " + JSON.stringify(paper));
+});
+
+scenario("in a dark theme the viewers take the app's colours, a document's pages stay paper and an HTML attachment is darkened as a message is", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m) => { if (id.startsWith("MSG1_")) Object.assign(m.attachments[1], { filename: "page.html", subtype: "html" }); };
+  mock.patchRaw = raw => partBytes(raw, "data.csv", Buffer.from('<div style="background-color:#ffffff;color:#000000">Hello</div>'));
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  const app = await page.evaluate(() => {
+    const rgb = v => { const i = document.body.appendChild(document.createElement("i")); i.style.color = v; const out = getComputedStyle(i).color; i.remove(); return out; };
+    const css = getComputedStyle(document.documentElement);
+    return { bg: rgb(css.getPropertyValue("--bg")), fg: rgb(css.getPropertyValue("--fg")), bg2: rgb(css.getPropertyValue("--bg2")) };
+  });
+  // the ZIP listing: the app's page and text colours, its heading the panel colour
+  await page.locator("#r-attach .att-card").nth(2).click();
+  let f = await previewFrame(page);
+  const zip = await f.evaluate(() => ({ bg: getComputedStyle(document.body).backgroundColor, fg: getComputedStyle(document.querySelector("td")).color, head: getComputedStyle(document.querySelector("th")).backgroundColor,
+    scheme: getComputedStyle(document.documentElement).colorScheme }));
+  const outer = await page.evaluate(() => ({ body: getComputedStyle(document.getElementById("v-body")).backgroundColor, frame: getComputedStyle(document.querySelector("#v-body .v-box")).backgroundColor }));
+  expect(zip.bg === app.bg && zip.fg === app.fg && zip.head === app.bg2 && zip.scheme === "dark" && outer.body === app.bg && outer.frame === app.bg,
+    "a listing has the app's colours, inside the frame and around it: " + JSON.stringify({ app, zip, outer }));
+  // the picture: darker checks
+  await page.click("#v-next");
+  await page.waitForSelector("#v-body img.v-img.placed", { timeout: 10000 });
+  const checks = await page.evaluate(() => getComputedStyle(document.querySelector("#v-body .v-canvas")).backgroundImage);
+  expect(/conic-gradient\(rgb\(43, 43, 43\)/.test(checks), "the checkerboard under a picture is dark: " + checks);
+  // the Word document: its pages white, what they lie on the app's
+  await page.click("#v-next");
+  f = await previewFrame(page);
+  await f.waitForSelector("section.docx", { timeout: 10000 });
+  const doc = await f.evaluate(() => ({ desk: getComputedStyle(document.querySelector(".docx-wrapper")).backgroundColor, page: getComputedStyle(document.querySelector("section.docx")).backgroundColor,
+    scheme: getComputedStyle(document.querySelector("section.docx")).colorScheme }));
+  expect(doc.desk === app.bg && doc.page === "rgb(255, 255, 255)" && doc.scheme === "light", "a Word document's pages stay white on the app's background: " + JSON.stringify(doc));
+  await page.click("#v-close");
+  // the HTML attachment: darkened as the reader darkens a message, and as written when messages are
+  const html = async () => { await page.locator("#r-attach .att-card").nth(1).click(); await page.waitForSelector("#v-body iframe[sandbox='']", { timeout: 10000 }); const s = await page.locator("#v-body iframe").getAttribute("srcdoc"); await page.click("#v-close"); return s; };
+  const dark = await html();
+  expect(/color-scheme:dark/.test(dark) && !/#ffffff/i.test(dark) && !/color:\s*#000000/i.test(dark) && /Hello/.test(dark), "an HTML attachment is darkened: " + dark.slice(-260));
+  await page.click("#r-dark"); await page.waitForTimeout(300);
+  const asWritten = await html();
+  expect(!/color-scheme:dark/.test(asWritten) && /#ffffff/i.test(asWritten), "and shown as written once messages are: " + asWritten.slice(-200));
+}, { settings: { theme: "dark" } });
+
+scenario("a PDF the viewer has to repair is shown without a warning in the console", async ({ page, mock, FX }, expect) => {
+  // its startxref points nowhere, so PDF.js indexes the file and would warn that it did
+  const pdf = Buffer.from(fs.readFileSync(path.join(FX, "report.pdf")).toString("latin1").replace(/startxref\n\d+/, "startxref\n12"), "latin1");
+  mock.patchRaw = raw => partBytes(raw, "report.pdf", pdf);
+  const warnings = [];
+  page.on("console", m => { if (/Warning:/.test(m.text())) warnings.push(m.text().slice(0, 120)); });
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.locator("#r-attach .att-card").nth(0).click();
+  const f = await previewFrame(page);
+  await page.waitForTimeout(800);
+  const pages = await f.evaluate(() => document.querySelectorAll(".pdfViewer .page").length);
+  expect(pages === 2 && !warnings.length, "the repaired PDF shows, and nothing is logged: " + JSON.stringify({ pages, warnings }));
 });
 
 // ---------- address book ----------

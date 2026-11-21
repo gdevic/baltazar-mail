@@ -1,14 +1,21 @@
-:root { --mono: ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace; }
-html, body { margin: 0; height: 100%; background: #fff; color: #111; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
+/* The colours are those of white paper; in a dark theme render.js replaces them with the app's palette. */
+:root { --mono: ui-monospace, Consolas, Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --bg: #fff; --bg2: #f0f0f0; --bg3: #e4e4e4; --fg: #111; --fg2: #555; --fg3: #777; --line: #ddd; --accent: #0a6b2c; }
+:root.dark { color-scheme: dark; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
 #root { position: absolute; inset: 0; overflow: auto; outline: none; }
-.center { height: 100%; display: flex; align-items: center; justify-content: center; color: #555; }
-.note { padding: 6px 18px; font-size: 11px; color: #777; background: #f4f4f4; border-bottom: 1px solid #e4e4e4; position: sticky; top: 0; z-index: 2; }
+.center { height: 100%; display: flex; align-items: center; justify-content: center; color: var(--fg2); }
+.note { padding: 6px 18px; font-size: 11px; color: var(--fg3); background: var(--bg2); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
 pre { margin: 0; padding: 14px 18px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
 pre.hex { white-space: pre; word-break: normal; }
 table.plain { border-collapse: collapse; font: 12px var(--mono); margin: 10px; }
-table.plain td, table.plain th { border: 1px solid #ddd; padding: 2px 8px; white-space: nowrap; }
-table.plain th { background: #f0f0f0; position: sticky; top: 0; }
-table.plain tr:nth-child(even) td { background: #fafafa; }
+table.plain td, table.plain th { border: 1px solid var(--line); padding: 2px 8px; white-space: nowrap; }
+table.plain th { background: var(--bg2); position: sticky; top: 0; }
+table.plain tr:nth-child(even) td { background: color-mix(in srgb, var(--bg2) 33%, var(--bg)); }
+
+/* A document's pages stay paper; in a dark theme only what they lie on follows it. */
+.dark #root.pdf, .dark #root.doc, .dark #root.pages, .dark #root.doc .docx-wrapper { background: var(--bg); }
+.page, #root.doc section.docx, #root.pdf .pdfViewer .page { color-scheme: light; }
 
 /* PDF */
 #root.pdf { background: #525659; }
@@ -21,19 +28,19 @@ table.plain tr:nth-child(even) td { background: #fafafa; }
 #root.sheet { display: flex; flex-direction: column; overflow: hidden; }
 .grid { flex: 1; min-height: 0; overflow: auto; outline: none; }
 .grid table { border-collapse: collapse; font: 12px "Segoe UI", Calibri, Arial, sans-serif; }
-.grid td, .grid th { border: 1px solid #ddd; padding: 2px 8px; white-space: nowrap; }
-.grid th { background: #f0f0f0; color: #555; font-weight: 400; text-align: center; position: sticky; top: 0; z-index: 1; }
+.grid td, .grid th { border: 1px solid var(--line); padding: 2px 8px; white-space: nowrap; }
+.grid th { background: var(--bg2); color: var(--fg2); font-weight: 400; text-align: center; position: sticky; top: 0; z-index: 1; }
 .grid th.rn { position: sticky; left: 0; min-width: 34px; text-align: right; z-index: 2; }
 .grid thead th.rn { z-index: 3; }
 .grid td { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
 .grid td.num { text-align: right; }
-.tabs { display: flex; gap: 2px; padding: 4px 6px 6px; background: #f0f0f0; border-top: 1px solid #ccc; overflow-x: auto; flex: none; }
+.tabs { display: flex; gap: 2px; padding: 4px 6px 6px; background: var(--bg2); border-top: 1px solid var(--line); overflow-x: auto; flex: none; }
 .tabs.hidden { display: none; }
-.tabs button { border: 1px solid #ccc; border-top: 0; background: #e4e4e4; color: #333; padding: 3px 12px; border-radius: 0 0 4px 4px; font-size: 12px; cursor: pointer; }
-.tabs button.on { background: #fff; color: #0a6b2c; font-weight: 600; }
+.tabs button { border: 1px solid var(--line); border-top: 0; background: var(--bg3); color: var(--fg); padding: 3px 12px; border-radius: 0 0 4px 4px; font-size: 12px; cursor: pointer; }
+.tabs button.on { background: var(--bg); color: var(--accent); font-weight: 600; }
 
 /* Pages from Yahoo's converter */
 #root.pages { background: #e8e8e8; }
 .page-list { padding: 12px 0; }
 .page { background: #fff; color: #000; width: min(900px, calc(100% - 24px)); margin: 0 auto 12px; box-shadow: 0 1px 4px rgba(0,0,0,.3); overflow: auto; }
-.more { text-align: center; color: #777; font-size: 12px; padding: 10px 0 18px; }
+.more { text-align: center; color: var(--fg3); font-size: 12px; padding: 10px 0 18px; }

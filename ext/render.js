@@ -69,9 +69,11 @@
   async function renderPdf(bytes) {
     const { lib, ui } = await loadPdfjs();
     const base = new URL("vendor/pdfjs/", location.href).href;
+    // Only errors are logged: PDF.js warns about every oddity of a file (a font program, say) that
+    // it works around, and the browser would list each as an error of the extension.
     const doc = await lib.getDocument({
       data: new Uint8Array(bytes), cMapUrl: base + "cmaps/", cMapPacked: true, standardFontDataUrl: base + "standard_fonts/",
-      wasmUrl: base + "wasm/", iccUrl: base + "iccs/", enableScripting: false, isEvalSupported: false,
+      wasmUrl: base + "wasm/", iccUrl: base + "iccs/", enableScripting: false, isEvalSupported: false, verbosity: lib.VerbosityLevel.ERRORS,
     }).promise;
     root.className = "pdf";
     root.innerHTML = `<div class="pdfViewer"></div>`;
@@ -238,6 +240,17 @@
         `<tr><td>${esc(e.name)}</td><td>${e.dir ? "" : sizeStr(e.size)}</td><td>${e.dir ? "" : sizeStr(e.packed)}</td><td>${esc(e.date)}</td></tr>`).join("")}</table>`;
   }
 
+  // ---------- colours ----------
+  // In a dark theme the viewer sends the app's palette: the text, tables and notes drawn here take
+  // its colours and a document's pages lie on its background (render.css). Without one, everything
+  // is on white paper.
+  const ROLES = ["bg", "bg2", "bg3", "fg", "fg2", "fg3", "line", "accent"];
+  function setPalette(p) {
+    if (!p) return;
+    for (const k of ROLES) if (/^#[0-9a-f]{6}$/i.test(p[k])) document.documentElement.style.setProperty(`--${k}`, p[k]);
+    document.documentElement.classList.add("dark");
+  }
+
   // ---------- messages from the viewer ----------
   const RENDER = { pdf: m => renderPdf(m.bytes), docx: m => renderDocx(m.bytes), sheet: m => renderSheet(m.bytes),
     pages: m => renderPages(m), text: m => renderText(m), zip: m => renderZip(m.bytes) };
@@ -249,6 +262,7 @@
     if (m.type === "pages") { morePages(m); return; }
     if (m.type !== "render" || !RENDER[m.kind]) return;
     mode = m.kind;
+    setPalette(m.palette);
     try { await RENDER[m.kind](m); post({ type: "done" }); }
     catch (err) { post({ type: "error", message: String(err?.message || err) }); }
   });
