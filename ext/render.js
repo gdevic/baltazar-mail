@@ -206,7 +206,8 @@
         `<table class="plain">${shown.map((r, i) => `<tr>${r.map(c => i === 0 ? `<th>${esc(c)}</th>` : `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</table>`;
       return;
     }
-    if (ext === "json") { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {} }
+    // laid out again, each number kept as the file writes it (a long id is not rounded)
+    if (ext === "json") { try { text = JSON.stringify(JSON.parse(text, (k, v, at) => typeof v === "number" && at?.source ? JSON.rawJSON(at.source) : v), null, 2); } catch {} }
     const label = source === "extracted" ? `Text extracted by ${provider}; layout, images and formatting are not shown. Download for the original.`
       : source === "stored" ? `Text as stored by ${provider}.`
       : source === "hex" ? `${Number(size) || 0} bytes, shown as offset, hex and ASCII.` : "";

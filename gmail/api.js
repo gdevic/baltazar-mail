@@ -702,7 +702,11 @@ function decodeText(p, bytes) {
 // Plain text as HTML: escaped, links made clickable, line breaks kept.
 const textAsHtml = t => `<div style="white-space:pre-wrap">${esc(t).replace(/\bhttps?:\/\/[^\s<>"']+/g, u => `<a href="${u}">${u}</a>`)}</div>`;
 const partKey = (msgId, partId) => `${msgId}/${partId}`;
-const partRefs = new Map();        // msgId/partId -> { attachmentId, data, type, filename }
+// msgId/partId -> { attachmentId, data, type, filename }: where each part's bytes are. A part's own
+// data is kept only for a named part (an attachment) that came with the message, as the text that
+// body() decodes is not asked for again; a part known without either is fetched afresh.
+const partRefs = new Map(), PART_REFS = 5000;
+const notePart = (msgId, p, keep) => remember(partRefs, partKey(msgId, p.partId), { attachmentId: p.body?.attachmentId, data: keep ? p.body?.data : undefined, type: p.mimeType, filename: p.filename || "" }, PART_REFS);
 const BODY_FIELDS = "id,threadId,labelIds,snippet,internalDate,sizeEstimate,payload";
 
 // The parts that make up the text a reader shows, in order: an alternative gives its preferred
@@ -734,7 +738,7 @@ export async function body(msgId) {
   const t0 = performance.now();
   const m = await call("GET", `/messages/${msgId}`, { query: { format: "full", fields: BODY_FIELDS }, units: 5 });
   const parts = leaves(m.payload);
-  for (const p of parts) if (p.partId != null) partRefs.set(partKey(msgId, p.partId), { attachmentId: p.body?.attachmentId, data: p.body?.size <= 1 << 20 ? p.body?.data : undefined, type: p.mimeType, filename: p.filename || "" });
+  for (const p of parts) if (p.partId != null) notePart(msgId, p, !!p.filename && p.body?.size <= 1 << 20);
   const forHtml = textParts(m.payload, true), forText = textParts(m.payload, false);
   const decoded = new Map();
   for (const p of new Set([...forHtml, ...forText])) decoded.set(p, decodeText(p, await partData(msgId, p)));
@@ -757,7 +761,8 @@ export async function body(msgId) {
       if (orig) message.inReplyTo = { messageReference: { id: orig }, replied: !fwd, forwarded: fwd };
     }
   }
-  return { message, html, text, attachments, ms: Math.round(performance.now() - t0) };
+  // hasHtml: whether the message has an HTML part of its own (html is made from text otherwise)
+  return { message, html, text, hasHtml: forHtml.some(p => p.mimeType === "text/html"), attachments, ms: Math.round(performance.now() - t0) };
 }
 
 // { bytes, type, filename } of one attachment: Gmail's attachments.get by the part's attachment
@@ -772,9 +777,9 @@ export async function partBytes(msgId, a) {
   const key = partKey(msgId, a.partId);
   if (bytesCache.has(key)) return bytesCache.get(key);
   let ref = partRefs.get(key);
-  if (!ref) {
+  if (!ref || (ref.data == null && !ref.attachmentId)) {
     const m = await call("GET", `/messages/${msgId}`, { query: { format: "full", fields: "payload" }, units: 5 });
-    for (const p of leaves(m.payload)) if (p.partId != null) partRefs.set(partKey(msgId, p.partId), { attachmentId: p.body?.attachmentId, data: p.body?.data, type: p.mimeType, filename: p.filename || "" });
+    for (const p of leaves(m.payload)) if (p.partId != null) notePart(msgId, p, true);
     ref = partRefs.get(key) || [...partRefs.entries()].find(([k, v]) => k.startsWith(msgId + "/") && a.filename && v.filename === a.filename)?.[1];
     if (!ref) throw new ApiError("attachment not found in the message");
   }
@@ -838,9 +843,16 @@ async function modify(ids, add, remove) {
     ids.forEach((id, i) => { if (got[i].status === 200 && got[i].json?.labelIds) labelsOf.set(id, got[i].json.labelIds); });
     return { ms: Math.round(performance.now() - t0), ok, failed };
   }
-  for (let i = 0; i < ids.length; i += 1000) await call("POST", "/messages/batchModify", { json: { ids: ids.slice(i, i + 1000), addLabelIds: add, removeLabelIds: remove }, units: 50 });
-  for (const id of ids) { const l = labelsOf.get(id); if (l) labelsOf.set(id, [...new Set([...l.filter(x => !remove.includes(x)), ...add])]); }
-  return { ms: Math.round(performance.now() - t0), ok: ids.slice(), failed: [] };
+  // each thousand is answered as a whole; those done before one fails are reported as done
+  const ok = [];
+  for (let i = 0; i < ids.length; i += 1000) {
+    const part = ids.slice(i, i + 1000);
+    try { await call("POST", "/messages/batchModify", { json: { ids: part, addLabelIds: add, removeLabelIds: remove }, units: 50 }); }
+    catch (e) { if (!ok.length) throw e; return { ms: Math.round(performance.now() - t0), ok, failed: ids.slice(i) }; }
+    for (const id of part) { const l = labelsOf.get(id); if (l) labelsOf.set(id, [...new Set([...l.filter(x => !remove.includes(x)), ...add])]); }
+    ok.push(...part);
+  }
+  return { ms: Math.round(performance.now() - t0), ok, failed: [] };
 }
 export function setRead(ids, read) { return modify(ids, read ? [] : ["UNREAD"], read ? ["UNREAD"] : []); }
 export function setStarred(ids, flagged) { return modify(ids, flagged ? ["STARRED"] : [], flagged ? [] : ["STARRED"]); }
@@ -915,8 +927,11 @@ export async function deleteForever(ids) {
     catch (e) { if (isGone(e)) ok.push(id); else failed.push(id); }
   }
   if (others.length) {
-    try { for (let i = 0; i < others.length; i += 1000) await call("POST", "/messages/batchDelete", { json: { ids: others.slice(i, i + 1000) }, units: 50 }); ok.push(...others); }
-    catch (e) { if (!ok.length) throw e; failed.push(...others); }
+    for (let i = 0; i < others.length; i += 1000) {
+      const part = others.slice(i, i + 1000);
+      try { await call("POST", "/messages/batchDelete", { json: { ids: part }, units: 50 }); ok.push(...part); }
+      catch (e) { if (!ok.length) throw e; failed.push(...others.slice(i)); break; }
+    }
   }
   for (const id of ok) { labelsOf.delete(id); rowCache.delete(id); }
   if (!ok.length) throw new ApiError(`delete: all ${ids.length} failed`);

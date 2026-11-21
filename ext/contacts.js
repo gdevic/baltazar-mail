@@ -441,7 +441,7 @@ export function forget(emails) {
     const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE), out = [];
     for (const k of keys) {
       const r = s.get(k);
-      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && !e.copied && e.hidden !== true && !e.given && !e.added && !e.deleted) { s.delete(k); out.push(e); } };
+      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && !e.copied && e.hidden === undefined && !e.given && !e.added && !e.deleted) { s.delete(k); out.push(e); } };
     }
     t.oncomplete = () => { for (const row of out) cache?.delete(row.email); changed(); ok(out); };
     t.onerror = () => no(t.error);

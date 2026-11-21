@@ -28,7 +28,7 @@ class AddrField {
     this.input.onkeydown = e => this.onKey(e);
     // the one list of suggestions is closed only if this field opened it
     this.input.onblur = () => setTimeout(() => { if (document.activeElement !== this.input) { this.commit(false); if (suggestField === this) hideSuggest(); } }, 150);
-    this.input.onpaste = e => { const t = e.clipboardData.getData("text"); if (/[,;<]/.test(t)) { e.preventDefault(); this.addText(t); } };
+    this.input.onpaste = e => { const t = e.clipboardData.getData("text"); if (/[,;<\n]|\S\s+\S+@/.test(t.trim())) { e.preventDefault(); this.addText(t); } };
   }
   set(list) { this.list = (list || []).map(a => ({ name: a.name || "", email: a.email })); this.render(); }
   get() { this.commit(false); return this.list.slice(); }
@@ -236,6 +236,7 @@ export async function draftIsHtml(message, body) {
   if (rec) return rec === "html";
   const type = String(message?.headers?.mimeType || "").toLowerCase();
   if (type.startsWith("text/plain")) return false;
+  if (body?.hasHtml === false) return false;
   if (!body?.html?.trim() && body?.text) return false;
   return true;
 }
@@ -984,8 +985,8 @@ function renderFiles() {
 }
 
 // ---------- addresses ----------
-// Commas and semicolons separate addresses except inside a quoted name or <...>. A mailto: link
-// gives its address.
+// Commas, semicolons and line breaks separate addresses except inside a quoted name or <...>, and
+// so does white space between bare addresses. A mailto: link gives its address, without its query.
 const ADDR = /^[^\s@<>()",;:\\]+@[^\s@<>()",;:\\]+\.[^\s@<>()",;:\\]+$/;
 function splitAddrs(s) {
   const out = []; let cur = "", q = false, angle = false;
@@ -993,17 +994,18 @@ function splitAddrs(s) {
     if (ch === '"' && !angle) q = !q;
     else if (ch === "<" && !q) angle = true;
     else if (ch === ">" && !q) angle = false;
-    if ((ch === "," || ch === ";") && !q && !angle) { out.push(cur); cur = ""; } else cur += ch;
+    if ((ch === "," || ch === ";" || ch === "\n" || ch === "\r") && !q && !angle) { out.push(cur); cur = ""; } else cur += ch;
   }
   out.push(cur);
   return out;
 }
 export function parseAddrs(s) {
   const out = [];
-  for (const part of splitAddrs(String(s || ""))) {
+  const parts = splitAddrs(String(s || "")).flatMap(part => /[<"]/.test(part) || !/\S\s+\S/.test(part.trim()) ? [part] : part.trim().split(/\s+/));
+  for (const part of parts) {
     const p = part.trim(); if (!p) continue;
     const m = p.match(/^(?:"([^"]*)"|([^"<]*?))\s*<([^>]+)>$/);
-    const email = (m ? m[3] : p).trim().replace(/^mailto:/i, "");
+    const email = (m ? m[3] : p).trim().replace(/^mailto:([^?]*).*$/is, (x, a) => { try { return decodeURIComponent(a); } catch { return a; } });
     if (!ADDR.test(email)) throw new Error(`Not an address: ${p}`);
     const name = (m?.[1] ?? m?.[2] ?? "").trim();
     out.push(name ? { name, email } : { email });

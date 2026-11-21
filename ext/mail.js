@@ -1568,17 +1568,21 @@ async function printMessages() {
   const ids = state.marked.size ? targetIds() : (currentBody ? [currentBody.message.id] : []);
   if (!ids.length) { status("open or select a message to print"); return; }
   status(`preparing ${plural(ids.length, "message")} for printing...`);
-  const messages = [];
+  const bodies = [];
   for (const id of ids) {
     let r;
     if (currentBody && currentBody.message.id === id) r = currentBody;
     else { try { r = await api.body(id); r.html = cleanHtml(r.html); } catch (e) { handleError(e, "print"); return; } }
-    const images = imagesFor(r.message);
-    messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html: printableImages(await inlineImages(r.html, r), images), images });
+    bodies.push(r);
   }
+  // The printed page has one rule for images: they load only if every message's may, and a
+  // message whose images may load keeps them only then, so none prints as a broken image.
+  const images = bodies.every(r => imagesFor(r.message));
+  const messages = [];
+  for (const r of bodies) messages.push({ headers: r.message.headers, attachments: r.attachments.filter(a => a.disposition !== "inline").map(a => a.filename), html: printableImages(await inlineImages(r.html, r), images), images });
   const key = `print:${Date.now()}`;
   // The hand-off goes through session storage, whose quota a large selection with images can pass.
-  try { await chrome.storage.session.set({ [key]: { messages, images: messages.every(m => m.images), auto: true } }); }
+  try { await chrome.storage.session.set({ [key]: { messages, images, auto: true } }); }
   catch (e) { notify(`Could not print ${plural(messages.length, "message")}: too much to hand to the print page at once. Try fewer.`, { detail: e.message, err: e, what: "print" }); return; }
   await chrome.tabs.create({ url: chrome.runtime.getURL(`print.html?job=${encodeURIComponent(key)}`) });
   status(`print: ${plural(messages.length, "message")}`);
@@ -2701,9 +2705,11 @@ async function startUp() {
   try { chrome.tabs.getCurrent().then(t => t && chrome.tabs.update(t.id, { autoDiscardable: false })).catch(() => {}); } catch { /* not in a tab */ }
   await loadSettings();
   applyLayout(); syncSettingsForm();
-  $("signin").classList.add("hidden");
+  // a failure page of an earlier try stays up while this one waits, until it succeeds
+  if (!startFailed()) $("signin").classList.add("hidden");
   try {
     const s = await api.bootstrap();
+    $("signin").classList.add("hidden");
     $("account").textContent = s.email;
     // the address book belongs to one account; another one signed in starts it afresh
     if (s.email) await contacts.useAccount(s.email).catch(() => {});

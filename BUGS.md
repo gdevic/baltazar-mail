@@ -8,9 +8,6 @@ No critical, high or medium finding is open. What is left is low: rare cases, sm
 
 ## Low
 
-### COMP-7. Addresses pasted one per line are refused; a mailto: link keeps its query
-`ext/compose.js:30`, `958-980`. `ann@x.org` and `bob@y.com` on two lines, or separated by a space, give "Not an address"; `mailto:info@shop.example?subject=Order%2012` becomes a chip holding all of that, written to To. Fix: also split on line breaks and on white space between bare addresses, and strip and decode the query of a mailto: link. Reproduced.
-
 ### COMP-10. Switching a reply to plain text drops the quote markers
 `ext/compose.js:888-903` (`toText`) writes a blockquote's text without `> ` and keeps the HTML source's line breaks and indentation, whereas a reply opened in plain text quotes properly (`ext/compose.js:258`). Fix: prefix quoted lines for each level, and collapse white space outside pre. Confirmed.
 
@@ -20,23 +17,14 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 ### COMP-12. rfc822.js writes header lines over 998 characters and encoded words over 76
 `gmail/rfc822.js:75-79`, `94-96`, `123`, `47`. A 127-character Russian file name gives a Content-Disposition line of 1,076 characters, an ASCII subject is never folded, a non-ASCII subject's first line is 81 characters, and multipart/related lacks the `type` parameter of RFC 2387. Fix: RFC 2231 continuations on folded lines, fold the fallback encoded words and ASCII subjects, size the first encoded word after the header name, and add `type="text/html"`. Reproduced.
 
-### COMP-13. A plain-text Gmail draft with an attachment reopens as HTML
-`ext/compose.js:224-231` (`draftIsHtml`) falls back, when this browser has no record of the format, to a body test that never holds on Gmail, whose `body()` always fills `html` from the text parts (`gmail/api.js:717`, `559`). Fix: have `body()` say whether a text/html part exists. Confirmed.
-
 ### CORE-9. While a message's inline images load, its header sits over the previous message's body
 `ext/mail.js:1322-1340` (`renderMessage`) fills the header and shows the old frame before it awaits `inlineImages`. Fix: show a blank frame, or the body without its inline images, first. Confirmed.
 
-### CORE-10. The start-failure page disappears during each retry
-`ext/mail.js:2657` hides the panel before `api.bootstrap()` (`ext/mail.js:2627-2639`), leaving a blank tab for as long as the service takes to answer, up to 60 s. Fix: keep the panel until start-up succeeds or the sign-in panel is needed. Confirmed.
-
 ### VIEWER-6. Esc and the arrows stop once an HTML attachment has focus
-`ext/viewer.js:284`: its frame (`sandbox=""`) runs no script and its keys never reach the viewer. Fix: `allow-same-origin` (its CSP still blocks script) and forward keydown from the frame on load, as the reader does. Confirmed.
+Left as it is: `ext/viewer.js` shows an HTML attachment in a frame with an empty sandbox, which runs no script and so cannot pass its keys on; letting it would take `allow-same-origin`, which the attachment's frame is kept without. A click on the viewer's bar gives the keys back. Confirmed.
 
-### RENDER-1. The JSON preview shows numbers that are not in the file
-`ext/render.js:208` parses and writes the JSON again, which rounds `1234567890123456789` and drops duplicate keys. Fix: keep each number's source text with `JSON.rawJSON` in a reviver. Reproduced.
-
-### PRINT-1. Printing messages with different image permissions gives broken images
-`ext/mail.js:1539` keeps a permitted message's https images, while `ext/mail.js:1543` makes the page's `img-src` `data:` unless every message is permitted (`ext/print.js:19-21`). Fix: decide the page's permission first and pass it to `printableImages` for every message. Confirmed.
+### RENDER-1. The JSON preview shows one value of a key the file gives twice
+`ext/render.js` lays a .json file out again through `JSON.parse`, which keeps the last of two equal keys. Fix: lay it out from the text itself. Confirmed.
 
 ### ADPT-4. Gmail: a draft save answered 5xx after Gmail stored it can leave a second draft
 `gmail/api.js` (`saveDraft` through `call`, which asks again after a server error). When Gmail stores a new draft and its answer is a 5xx, the save is asked again and a second draft is made. Fix: ask a first save again only for a rate limit, and look for the draft by its Message-ID before making another. Likely.
@@ -50,9 +38,6 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 ### CONT-5. Mail filed out of Inbox during the first build, before Contacts reads it, is never learned
 Left as it is: catching it would take a pass over all mail after the first build, which costs requests. The refresh after a poll reads Sent and Inbox down to its bookmark (`ext/contacts.js`, `sync`), and the build's last pass skips Inbox rows, so a new correspondent's message that arrives after the Inbox pass and is archived or filed before the build ends stays out of Contacts until a Rebuild. Reproduced.
 
-### ADPT-6. Gmail keeps every opened message's text part data until sign-out
-`gmail/api.js:680`, `712`, `748` (`partRefs`): reading 200 messages of 494 KB keeps about 130 MB. Fix: keep only the attachment id, type and name, or bound the map. Reproduced.
-
 ### ADPT-8. Gmail search: after: and before: dates are read as midnight Pacific time
 `gmail/api.js:105-109` writes `YYYY/MM/DD`, which Google™'s filtering guide reads as midnight PST. Fix: write the local midnight as epoch seconds. Likely.
 
@@ -62,23 +47,14 @@ Left as it is: catching it would take a pass over all mail after the first build
 ### ADPT-10. Yahoo: a save answered 206 still sends, without the forwarded attachments it dropped
 `yahoo/api.js:604-610`, `637`: SendMessage is chained under SaveMessage and `partial` is ignored. Fix: report the attachments left out, or send only after a whole save. Likely.
 
-### ADPT-11. Gmail: a bulk change of more than 1,000 messages reports all as failed when a later chunk fails
-`gmail/api.js:814-816`, `835`, `891-892`: flags are not applied and no undo is pushed for the chunks that did change. Fix: return those as ok and the rest as failed. Confirmed.
-
 ### CONT-8. A name the file cannot carry is renamed by the round trip
 `ext/contacts.js:153` cuts a name at 100 UTF-16 units, which can split an emoji, and keeps control characters; `ext/contactsfile.js:17` writes those as spaces, and the file's encoding turns a lone surrogate into U+FFFD, so a Merge of the unchanged file renames the contact. Fix: store names as the file writes them, and cut on code points. Reproduced.
-
-### CONT-9. Deleting a message and undoing it puts an unhidden address back under Hidden
-`ext/contacts.js:436` (forget spares only `hidden === true`, while `chosen` at `ext/contacts.js:133` counts `hidden: false` as a choice); `ext/mail.js:1765-1767` promises that a delete undone leaves the book as it was. Fix: spare any defined `hidden`, or put the forgotten rows back on undo. Reproduced.
 
 ### CONT-11. Two mail tabs during a build or a Rebuild ask for every page twice
 A sync that finds the build under way resumes from the stored bookmark (`ext/contacts.js:254-260`, `301-305`), and the one-run guard is per tab (`ext/mail.js:2703`); on Gmail this spends twice the paced quota. Fix: one tab claims the build, for example with `navigator.locks`. Reproduced.
 
 ### TOOL-1. tools/review.js passes a scenario whatever the Content Security Policy blocked
 `tools/review.js:1903-1904` fails a scenario on a request to the real network or a console error, but the harness files every CSP violation under `cspViolations` (`tools/harness.js:303-305`), which the runner never reads, so a scenario whose page the policy broke can still pass. Fix: fail on a violation the scenario does not expect, with a pattern per scenario for those it provokes on purpose. Confirmed.
-
-### TOOL-5. tools/themeshots.js has been broken since 1 November
-It copies smoke.js up to its first `page.goto`, which since 79f94de includes a route that refuses every host but 127.0.0.1, and then opens `localhost`; it also reads smoke.js relative to the working directory. Fix: use 127.0.0.1 and `__dirname`, or delete it. Confirmed.
 
 ### TOOL-6. The Contacts page's own zoom has no test
 `settings.contactZoom` (`ext/mail.js:73`, `1228-1231`): Ctrl+wheel and + - 0 over a contact's recent messages. Confirmed.

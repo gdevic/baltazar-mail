@@ -1,9 +1,9 @@
 const fs = require("fs"), path = require("path");
-const src = fs.readFileSync("smoke.js", "utf8");
+const src = fs.readFileSync(path.join(__dirname, "smoke.js"), "utf8");
 // Reuse smoke.js setup up to the first page.goto, then loop themes.
 const head = src.split("await page.goto(")[0];
 const tail = `
-  await page.goto(\`http://localhost:\${port}/mail.html\`);
+  await page.goto(\`http://127.0.0.1:\${port}/mail.html\`);
   await page.waitForSelector("#rows .row");
   await page.keyboard.press("j"); await page.keyboard.press("Enter");
   await page.waitForFunction(() => document.getElementById("r-subject").textContent.length > 0);

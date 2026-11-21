@@ -655,6 +655,18 @@ const lastMod = () => modsOf().at(-1);
     ok(/may still have been sent/.test(got.e?.message || "") && sentCopies(subject) === 1, `a send answered 503 (${via}.send) is not sent again: ` + JSON.stringify({ error: got.e?.message, copies: sentCopies(subject) }));
   }
 }
+// A change of more than a thousand messages goes a thousand at a time; when a later thousand
+// fails, those done before it are reported as done.
+{
+  const ids = Array.from({ length: 1500 }, (_, i) => `bk${i}`);
+  for (const id of ids) mock.addMessage({ id, labels: ["Label_bk", "UNREAD"], subject: id, from: "b <b@x.com>", cc: "", html: "<p>b</p>" });
+  let n = 0;
+  before = (method, url) => url.includes("/messages/batchModify") && ++n === 2 ? { status: 400, json: { error: { code: 400, message: "Invalid ids" } } } : null;
+  const r = await outcome(api.setRead(ids, true));
+  before = null;
+  ok(r.value?.ok.length === 1000 && r.value.failed.length === 500 && r.value.failed[0] === "bk1000", "a later thousand that fails leaves the first reported done: " + JSON.stringify({ ok: r.value?.ok.length, failed: r.value?.failed.length, e: r.e?.message }));
+  for (const id of ids) mock.messages.delete(id);
+}
 // A full row cache: a list keeps the rows it already had when fetching its new ones makes room.
 // Last, as it runs on a clock of its own, so that filling the cache waits on no quota.
 {
