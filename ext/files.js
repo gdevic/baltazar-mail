@@ -76,7 +76,7 @@ export function clear() { mine = {}; return store(); }
 //   subfolder a row is in, or "", date(epoch), openRow(row, how), isOpen(msgId) -> whether the
 //   reader shows that message, menu(x, y, items, onPick), goTo(row), status(msg, ms), fail(e) }
 let hooks = null;
-const st = { folderId: null, items: [], rows: 0, more: false, loading: false, token: 0, selected: -1, seen: new Map(), shown: false };
+const st = { folderId: null, items: [], rows: 0, more: false, loading: false, failed: false, token: 0, selected: -1, seen: new Map(), shown: false };
 const memory = new Map();        // folder id -> key of the entry last selected there, this session
 
 export function init(h) {
@@ -126,11 +126,12 @@ async function load(mode, told = mode !== "reload") {
   let r;
   try { r = await hooks.search(sc.ids, count, offset); } catch (e) {
     if (token !== st.token) return;
-    st.loading = false; render(); hooks.fail(e);
+    // a fresh load that failed says so, rather than that the folder has no attachments
+    st.loading = false; if (mode === "fresh") st.failed = true; render(); hooks.fail(e);
     return;
   }
   if (token !== st.token || !st.shown) return;
-  st.loading = false;
+  st.loading = false; st.failed = false;
   const rows = r.messages || [];
   if (mode === "more") { st.items = st.items.concat(filesOf(rows, { seen: st.seen, listed: hooks.listed })); st.rows += rows.length; }
   else { st.seen = new Map(); st.items = filesOf(rows, { seen: st.seen, listed: hooks.listed }); st.rows = rows.length; }
@@ -146,14 +147,14 @@ function render() {
   const name = noBidi(sc?.full || "");
   $("f-title").textContent = `Attachments in ${noBidi(sc?.name || "")}`;
   $("f-title").title = `Attachments in the mail of ${name}${withSubs(st.folderId) && sc?.subs ? ` and its ${plural(sc.subs, "subfolder")}` : ""}; Esc goes back to its messages`;
-  $("f-count").textContent = st.loading && !st.items.length ? "" : counted();
+  $("f-count").textContent = (st.loading || st.failed) && !st.items.length ? "" : counted();
   $("f-subs").classList.toggle("hidden", !sc?.subs);
   $("f-subs-box").checked = withSubs(st.folderId);
   $("f-subs").title = `List the attachments of its ${plural(sc?.subs || 0, "subfolder")} too; the folder keeps this choice`;
   const box = $("f-rows"), top = box.scrollTop;
   box.setAttribute("aria-label", `Attachments in ${name}`);
   if (st.items.length) box.innerHTML = st.items.map(rowHtml).join("");
-  else box.innerHTML = `<div class="list-empty">${st.loading ? "<div>Loading attachments...</div>" : emptyHtml(sc, name)}</div>`;
+  else box.innerHTML = `<div class="list-empty">${st.loading ? "<div>Loading attachments...</div>" : st.failed ? "<div>The attachments could not be loaded.</div>" : emptyHtml(sc, name)}</div>`;
   box.scrollTop = top;
   $("f-more").classList.toggle("hidden", !st.more);
   syncAria();

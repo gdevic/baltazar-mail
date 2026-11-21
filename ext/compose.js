@@ -26,7 +26,8 @@ class AddrField {
     this.input.onclick = () => this.suggest(true);
     this.input.oninput = () => { dirty = true; if (this.input.value.trim()) this.suggest(); else hideSuggest(); };
     this.input.onkeydown = e => this.onKey(e);
-    this.input.onblur = () => setTimeout(() => { if (document.activeElement !== this.input) { this.commit(false); hideSuggest(); } }, 150);
+    // the one list of suggestions is closed only if this field opened it
+    this.input.onblur = () => setTimeout(() => { if (document.activeElement !== this.input) { this.commit(false); if (suggestField === this) hideSuggest(); } }, 150);
     this.input.onpaste = e => { const t = e.clipboardData.getData("text"); if (/[,;<]/.test(t)) { e.preventDefault(); this.addText(t); } };
   }
   set(list) { this.list = (list || []).map(a => ({ name: a.name || "", email: a.email })); this.render(); }
@@ -61,7 +62,8 @@ class AddrField {
   onKey(e) {
     const sg = $("c-suggest"), open = !sg.classList.contains("hidden");
     if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); moveSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
+    // Esc closes the suggestions; with none open it goes on to close the composer
+    if (e.key === "Escape") { if (!open) return; e.preventDefault(); e.stopPropagation(); hideSuggest(); return; }
     if (e.key === "Enter" || e.key === "Tab" || e.key === "," || e.key === ";") {
       // Ctrl+Enter sends what was typed, never a suggestion
       const sending = e.key === "Enter" && (e.ctrlKey || e.metaKey);
@@ -1134,7 +1136,7 @@ async function send() {
   hooks.clearNotice("compose");
   hooks.onClose();
   hooks.scheduleSend({
-    label: `send "${d.subject || "(no subject)"}" to ${d.to.map(a => a.email).join(", ")}`,
+    label: `send "${d.subject || "(no subject)"}" to ${[...d.to, ...d.cc, ...d.bcc].map(a => a.email).join(", ")}`,
     run: async () => { await settle(); const r = await api.send(d, sentId).catch(e => { if (e.savedId) mine.savedId = snapshot.savedId = e.savedId; throw e; }); forgetFormat(d.csid); contacts.noteSent([...d.to, ...d.cc, ...d.bcc]).catch(() => {}); return r; },
     restore: async () => { await settle(); return oneAtATime(() => reopenFrom(snapshot)); },
   });

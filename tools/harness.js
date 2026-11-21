@@ -159,8 +159,8 @@ async function launch(opts = {}) {
         `<svg><a id="h-svga" href="https://evil.example/" target="_self"><text y="9">x</text></a></svg>` +
         `<meta http-equiv="refresh" content="0;url=https://evil.example/"><iframe id="h-frame" src="https://evil.example/"></iframe>` +
         `<object id="h-obj" data="https://evil.example/x"></object><svg id="h-svg" onload="parent.pwned = 1"><circle r="1"/></svg>` : "";
-      // Every message tries to hide or cover the printed header.
-      const forge = id.startsWith("MSG3_") ? "" : `<style>.hdr, .hdr * { display: none !important }</style>` +
+      // Every message tries to hide or cover the printed header, also by moving its own box (:host).
+      const forge = id.startsWith("MSG3_") ? "" : `<style>.hdr, .hdr * { display: none !important }</style><style>:host{position:relative!important;top:-150px!important;z-index:9!important;background:#fff!important;display:block!important}</style>` +
         `<div id="forge" style="position:fixed;top:0;left:0;width:100%;height:160px;background:#fff;z-index:9">Fake header</div>`;
       const hostile = id.startsWith("MSG3_") ? `<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:#f00">Session expired</div>` +
         `<img src="data:text/html;base64,PGgxPmhpPC9oMT4=">` + `<img src="data:image/png;base64,@@not base64@@">` : "";

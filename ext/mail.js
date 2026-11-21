@@ -564,14 +564,14 @@ function askName(title, value, check) {
     input.onkeydown = e => {
       if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); ok(); }
       else if (e.key === "Escape") { e.preventDefault(); finish(null); }
-      e.stopPropagation();
+      if (e.key !== "Tab") e.stopPropagation();          // Tab goes on to the dialog's focus trap
     };
     $("prompt-ok").onclick = ok;
     $("prompt-cancel").onclick = () => finish(null);
     backdropCloses($("promptbox"), () => finish(null));
-    trapFocus($("promptbox-box"));
   });
 }
+trapFocus($("promptbox-box"));
 
 // Patch counts in place so the tree (and any focus in its filter) is not rebuilt for a flag change.
 function updateFolderCounts() {
@@ -1021,8 +1021,10 @@ purify.addHook("afterSanitizeAttributes", node => {
 // so with images loading, a rule under either can fetch an address picked by the content and so
 // tell a server what the message says. A provider may hand over the sender's CSS as written, so
 // every sheet is read by the browser's own parser and loses the rules such a selector applies or
-// sits in the condition of. A sheet with none of them keeps its text as written.
-const READS_CONTENT = /\[|:has\(/i;
+// sits in the condition of. A rule for :host goes too: in a printed copy, where each message is
+// in a shadow root, it would style the message's own box and could move it over the header. A
+// sheet with none of them keeps its text as written.
+const READS_CONTENT = /\[|:has\(|:host/i;
 function pruneRules(owner) {
   let cut = 0;
   for (let i = owner.cssRules.length - 1; i >= 0; i--) {

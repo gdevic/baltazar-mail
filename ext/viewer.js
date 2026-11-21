@@ -20,19 +20,23 @@ const OFFICE_SHEET = new Set(["xls", "xlsx", "ods", "numbers"]);
 const OFFICE_SLIDE = new Set(["ppt", "pptx", "odp", "key"]);
 const ZIP = new Set(["zip", "jar", "apk", "docm"]);
 
+// A file's kind by its extension, and by the type the sender gave only when the extension says
+// nothing: senders often give a generic type (a .docx sent as application/zip).
 export function kindOf(a) {
   const ext = extOf(a.filename), sub = (a.subtype || "").toLowerCase(), type = (a.type || "").toLowerCase();
-  if (ext === "pdf" || sub === "pdf") return "pdf";
-  if (IMAGE.has(ext) || type === "image") return "image";
-  if (ext === "html" || ext === "htm" || sub === "html") return "html";
-  if (AUDIO.has(ext) || type === "audio") return "audio";
-  if (VIDEO.has(ext) || type === "video") return "video";
-  if (ZIP.has(ext) || sub === "zip" || sub === "x-zip-compressed") return "zip";
-  if (OFFICE_DOC.has(ext) || /wordprocessing|msword/.test(sub)) return "doc";
-  if (OFFICE_SHEET.has(ext) || /spreadsheet|excel/.test(sub)) return "sheet";
-  if (OFFICE_SLIDE.has(ext) || /presentation|powerpoint/.test(sub)) return "slide";
-  if (CODE.has(ext)) return "code";
-  if (TEXT.has(ext) || type === "text") return "text";
+  const byExt = ext === "pdf" ? "pdf" : IMAGE.has(ext) ? "image" : ext === "html" || ext === "htm" ? "html" : AUDIO.has(ext) ? "audio" : VIDEO.has(ext) ? "video"
+    : ZIP.has(ext) ? "zip" : OFFICE_DOC.has(ext) ? "doc" : OFFICE_SHEET.has(ext) ? "sheet" : OFFICE_SLIDE.has(ext) ? "slide" : CODE.has(ext) ? "code" : TEXT.has(ext) ? "text" : null;
+  if (byExt) return byExt;
+  if (sub === "pdf") return "pdf";
+  if (type === "image") return "image";
+  if (sub === "html") return "html";
+  if (type === "audio") return "audio";
+  if (type === "video") return "video";
+  if (sub === "zip" || sub === "x-zip-compressed") return "zip";
+  if (/wordprocessing|msword/.test(sub)) return "doc";
+  if (/spreadsheet|excel/.test(sub)) return "sheet";
+  if (/presentation|powerpoint/.test(sub)) return "slide";
+  if (type === "text") return "text";
   return "other";
 }
 const LABEL = { pdf: "PDF", image: "IMG", html: "HTML", audio: "AUD", video: "VID", zip: "ZIP", doc: "DOC", sheet: "XLS", slide: "PPT", code: "CODE", text: "TXT", other: "FILE" };
@@ -267,11 +271,12 @@ async function show(i) {
   const stale = () => seq !== shown || !isOpen();
   const ctx = { a, k, body, stale, meta };
   const bytes = async () => (await fetchBlob(a)).arrayBuffer();
+  let converted = false;     // the provider's converter was tried already, so a failure does not ask it again
   try {
     if (k === "pdf") return await sandboxed(ctx, { kind: "pdf", bytes: await bytes() });
     if (k === "doc" && isDocx(a)) return await sandboxed(ctx, { kind: "docx", bytes: await bytes() });
     if (k === "sheet" && isSheet(a)) return await sandboxed(ctx, { kind: "sheet", bytes: await bytes() });
-    if (k === "doc" || k === "sheet" || k === "slide" || k === "other") return await showConverted(ctx);
+    if (k === "doc" || k === "sheet" || k === "slide" || k === "other") { converted = true; return await showConverted(ctx); }
     const blob = await fetchBlob(a);
     if (stale()) return;
     const ext = extOf(a.filename);
@@ -304,7 +309,7 @@ async function show(i) {
   } catch (e) {
     if (stale()) return;
     // The renderer or the bytes failed: the provider's converter, then its plain text, then give up.
-    try { if (k !== "image" && k !== "audio" && k !== "video" && k !== "zip") return await showConverted(ctx); } catch {}
+    try { if (!converted && k !== "image" && k !== "audio" && k !== "video" && k !== "zip") return await showConverted(ctx); } catch {}
     if (stale()) return;
     // A small file nothing could preview can still be read: as text when it looks like text,
     // otherwise as a hex dump.

@@ -79,7 +79,8 @@
     root.innerHTML = `<div class="pdfViewer"></div>`;
     const eventBus = new ui.EventBus();
     const linkService = new ui.PDFLinkService({ eventBus, externalLinkTarget: ui.LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
-    const viewer = new ui.PDFViewer({ container: root, eventBus, linkService, textLayerMode: 1, annotationMode: lib.AnnotationMode.ENABLE, removePageBorders: false });
+    // imageResourcesPath: where the icons of a PDF's notes are, which PDF.js names relative to it
+    const viewer = new ui.PDFViewer({ container: root, eventBus, linkService, textLayerMode: 1, annotationMode: lib.AnnotationMode.ENABLE, removePageBorders: false, imageResourcesPath: base + "images/" });
     linkService.setViewer(viewer);
     eventBus.on("pagesinit", () => { viewer.currentScaleValue = "page-width"; root.focus(); });
     const pageInfo = () => post({ type: "meta", text: `page ${viewer.currentPageNumber} of ${doc.numPages}` });

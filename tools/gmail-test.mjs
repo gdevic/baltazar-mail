@@ -175,6 +175,9 @@ const lastMod = () => modsOf().at(-1);
   ok(nq("alex (picture OR photo) -spam from:bob after:2026-01-05 is:unread -has:attachment") === "alex (picture OR photo) -spam from:bob after:2026/01/05 is:unread -has:attachment", "compiled query: " + nq("alex (picture OR photo) -spam from:bob after:2026-01-05 is:unread -has:attachment"));
   ok(nq("-(a OR b) c") === "-a -b c" && nq("NOT (a b)") === "-a OR -b" && nq("(a b) OR c") === "(a b) OR c" && nq('"quarterly review" subject:"x y"') === '"quarterly review" subject:"x y"', "De Morgan, grouping and phrases: " + JSON.stringify([nq("-(a OR b) c"), nq("NOT (a b)"), nq("(a b) OR c"), nq('"quarterly review" subject:"x y"')]));
   ok(nq('"Alex" AND "Picture"') === "Alex Picture" && nq("-is:unread -after:2026-02-01") === "is:read before:2026/02/01", "AND of words needs no evaluation; negations flip: " + JSON.stringify([nq('"Alex" AND "Picture"'), nq("-is:unread -after:2026-02-01")]));
+  // a quoted word that Gmail would read as an operator is written quoted
+  const literal = ['"-v2"', 'apple "OR" pie', 'from:"-x"', '"{a}"'].map(nq);
+  ok(JSON.stringify(literal) === JSON.stringify(['"-v2"', 'apple "OR" pie', 'from:"-x"', '"{a}"']), "quoted operators stay words: " + JSON.stringify(literal));
   let err = ""; try { check(parse("is:important"), api.dialect); } catch (e) { err = e.message; }
   ok(/is:important/.test(err), "unknown is: refused: " + err);
   ok(api.queries.starred(true) === "is:starred is:unread" && api.queries.person('a@x.com") OR x') === "(from:a@x.comORx OR to:a@x.comORx OR cc:a@x.comORx)", "named queries, with only address characters: " + api.queries.person('a@x.com") OR x'));

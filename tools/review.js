@@ -169,6 +169,50 @@ scenario("the viewer lets go of a picture's bytes when it moves on", async ({ pa
   expect(r.blob && r.let, "the picture's object URL is revoked when the next file shows: " + JSON.stringify(r));
 });
 
+// A file's kind comes from its name; the sender's type decides only where the name says nothing.
+scenario("a file's kind follows its name before the type its sender gave", async ({ page }, expect) => {
+  const kinds = await page.evaluate(async () => {
+    const { kindOf } = await import("./viewer.js");
+    return [["contract.docx", "application", "zip"], ["budget.xlsx", "application", "x-zip-compressed"], ["notes.txt", "text", "html"], ["photo", "image", "jpeg"], ["blob", "application", "zip"]]
+      .map(([filename, type, subtype]) => kindOf({ filename, type, subtype }));
+  });
+  expect(JSON.stringify(kinds) === JSON.stringify(["doc", "sheet", "text", "image", "zip"]), "kinds: " + JSON.stringify(kinds));
+});
+
+// Esc in an address field with no suggestions open closes the composer, as anywhere in it.
+scenario("Esc in To closes the composer", async ({ page }, expect) => {
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  const inTo = await page.evaluate(() => document.activeElement === document.querySelector("#c-to input"));
+  await page.keyboard.press("Escape");
+  await composerHidden(page);
+  expect(inTo && await page.locator("#compose").evaluate(c => c.classList.contains("hidden")), "the composer closed from To: " + inTo);
+});
+
+// A folder whose attachments cannot be listed says so, and not that it has none.
+scenario("the Files view says when a folder's attachments could not be loaded", async (h, expect) => {
+  const { page } = h, prev = h.mock.handler;
+  h.mock.handler = a => /has:attachment/.test(decodeURIComponent(a.top?.uri || "")) ? { error: { code: "EC-5000", description: "down" } } : prev?.(a);
+  await menuOf(page, folderRow(page, "Projects")); await pickMenu(page, "Show attachments");
+  await page.waitForFunction(() => /could not|No attachments/.test(document.getElementById("f-rows")?.textContent || ""), null, { timeout: 8000 }).catch(() => {});
+  const r = { rows: await page.locator("#f-rows").textContent(), count: await page.locator("#f-count").textContent() };
+  expect(/could not be loaded/.test(r.rows) && !/No attachments/.test(r.rows) && !r.count, "a failure, not an empty folder: " + JSON.stringify(r));
+}, { allow: /EC-5000|status of 5/ });
+
+// The name dialog keeps Tab inside itself however many times it opens.
+scenario("the folder name dialog keeps Tab inside itself", async ({ page }, expect) => {
+  const where = () => page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName);
+  const r = [];
+  for (let n = 0; n < 3; n++) {
+    await menuOf(page, page.locator(".folders-head")); await pickMenu(page, "New folder...");
+    await page.waitForSelector("#promptbox:not(.hidden)");
+    const steps = [await where()];
+    for (const key of ["Tab", "Tab", "Tab", "Shift+Tab"]) { await page.keyboard.press(key); steps.push(await where()); }
+    r.push(steps.join(">"));
+    await page.locator("#prompt-cancel").click(); await page.waitForTimeout(150);
+  }
+  expect(r.every(x => x === r[0]) && r[0].split(">").every(id => /^prompt-/.test(id)), "the same Tab order each time, always in the dialog: " + JSON.stringify(r));
+});
+
 scenario("a previewed file's type comes from its name, not the sender", async ({ page, mock }, expect) => {
   mock.patchBody = (id, m) => { if (id.startsWith("MSG1_")) { m.attachments[3].filename = "pic.avif"; m.attachments[3].subtype = "avif"; } };
   mock.patchRaw = raw => raw.replace('Content-Type: image/png; name="photo.png"', 'Content-Type: text/html; name="pic.avif"');

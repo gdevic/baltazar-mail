@@ -11,12 +11,6 @@ No critical, high or medium finding is open. What is left is low: rare cases, sm
 ### COMP-7. Addresses pasted one per line are refused; a mailto: link keeps its query
 `ext/compose.js:30`, `958-980`. `ann@x.org` and `bob@y.com` on two lines, or separated by a space, give "Not an address"; `mailto:info@shop.example?subject=Order%2012` becomes a chip holding all of that, written to To. Fix: also split on line breaks and on white space between bare addresses, and strip and decode the query of a mailto: link. Reproduced.
 
-### COMP-8. Esc in To, Cc or Bcc never closes the composer
-`ext/compose.js:64` stops every Escape, so the composer's handler (`ext/compose.js:182`) never sees it, and a new message starts in To. Fix: stop it only when the suggestion list is open. Confirmed.
-
-### COMP-9. Clicking from To into Cc or Bcc, the recent-addresses list flashes and goes
-`ext/compose.js:29`: To's blur timer hides the one shared list whichever field opened it. Fix: hide only when `suggestField` is this field. Confirmed.
-
 ### COMP-10. Switching a reply to plain text drops the quote markers
 `ext/compose.js:888-903` (`toText`) writes a blockquote's text without `> ` and keeps the HTML source's line breaks and indentation, whereas a reply opened in plain text quotes properly (`ext/compose.js:258`). Fix: prefix quoted lines for each level, and collapse white space outside pre. Confirmed.
 
@@ -29,23 +23,11 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 ### COMP-13. A plain-text Gmail draft with an attachment reopens as HTML
 `ext/compose.js:224-231` (`draftIsHtml`) falls back, when this browser has no record of the format, to a body test that never holds on Gmail, whose `body()` always fills `html` from the text parts (`gmail/api.js:717`, `559`). Fix: have `body()` say whether a text/html part exists. Confirmed.
 
-### COMP-14. A message only to Cc or Bcc is announced as "to " with no one
-`ext/compose.js:1094` names only To. Fix: name To, Cc and Bcc together. Confirmed.
-
-### CORE-8. Each folder dialog adds another Tab handler
-`ext/mail.js:565` calls `trapFocus` on every open of the name dialog (`ext/mail.js:532-541`), and the name box stops every key (`ext/mail.js:557-561`): after the second dialog of a session Tab from Cancel skips OK, and Shift+Tab from the name box always leaves the dialog. Fix: trap once at start-up and let Tab through in the name box. Reproduced.
-
 ### CORE-9. While a message's inline images load, its header sits over the previous message's body
 `ext/mail.js:1322-1340` (`renderMessage`) fills the header and shows the old frame before it awaits `inlineImages`. Fix: show a blank frame, or the body without its inline images, first. Confirmed.
 
 ### CORE-10. The start-failure page disappears during each retry
 `ext/mail.js:2657` hides the panel before `api.bootstrap()` (`ext/mail.js:2627-2639`), leaving a blank tab for as long as the service takes to answer, up to 60 s. Fix: keep the panel until start-up succeeds or the sign-in panel is needed. Confirmed.
-
-### VIEWER-4. An Office file typed application/zip previews as a ZIP listing
-`ext/viewer.js:27-33` (`kindOf`) tests the sender's subtype before the extension, so `contract.docx` sent as `application/zip` shows its XML parts. Fix: decide by extension first. Reproduced.
-
-### VIEWER-5. A file the converter cannot convert is waited on twice
-`ext/viewer.js:265` sends doc, sheet, slide and other to `showConverted`, and the catch at `ext/viewer.js:298` calls it again: about 50 s of "Loading..." and twice the requests before "No preview available". Fix: call it in the catch only when the try did not. Reproduced.
 
 ### VIEWER-6. Esc and the arrows stop once an HTML attachment has focus
 `ext/viewer.js:284`: its frame (`sandbox=""`) runs no script and its keys never reach the viewer. Fix: `allow-same-origin` (its CSP still blocks script) and forward keydown from the frame on load, as the reader does. Confirmed.
@@ -53,14 +35,8 @@ Pictures in the text (10 MB each, no total, `ext/compose.js:629`) and forwarded 
 ### RENDER-1. The JSON preview shows numbers that are not in the file
 `ext/render.js:208` parses and writes the JSON again, which rounds `1234567890123456789` and drops duplicate keys. Fix: keep each number's source text with `JSON.rawJSON` in a reviver. Reproduced.
 
-### FILES-1. A folder's attachments that fail to load are shown as "No attachments"
-`ext/files.js:124-130`, `156`. Fix: render a failure note after a failed fresh load. Reproduced.
-
 ### PRINT-1. Printing messages with different image permissions gives broken images
 `ext/mail.js:1539` keeps a permitted message's https images, while `ext/mail.js:1543` makes the page's `img-src` `data:` unless every message is permitted (`ext/print.js:19-21`). Fix: decide the page's permission first and pass it to `printableImages` for every message. Confirmed.
-
-### TOOL-4. PDF note icons point at files that are not there
-`ext/render.js:82` gives PDFViewer no `imageResourcesPath`, so annotation icons resolve to the extension's root. Fix: `imageResourcesPath: base + "images/"`. Confirmed.
 
 ### ADPT-4. Gmail: a draft save answered 5xx after Gmail stored it can leave a second draft
 `gmail/api.js` (`saveDraft` through `call`, which asks again after a server error). When Gmail stores a new draft and its answer is a 5xx, the save is asked again and a second draft is made. Fix: ask a first save again only for a rate limit, and look for the draft by its Message-ID before making another. Likely.
@@ -76,9 +52,6 @@ Left as it is: catching it would take a pass over all mail after the first build
 
 ### ADPT-6. Gmail keeps every opened message's text part data until sign-out
 `gmail/api.js:680`, `712`, `748` (`partRefs`): reading 200 messages of 494 KB keeps about 130 MB. Fix: keep only the attachment id, type and name, or bound the map. Reproduced.
-
-### ADPT-7. Gmail search: a quoted "-word", "OR" or "AND" acts as an operator
-`gmail/api.js:91` (`quoted`) quotes only white space, colons and parentheses, so `"-v2"` excludes v2 and `apple "OR" pie` is an OR. Fix: also quote a value that starts with `-` or `+`, holds `{` or `}`, or is OR or AND. Reproduced.
 
 ### ADPT-8. Gmail search: after: and before: dates are read as midnight Pacific time
 `gmail/api.js:105-109` writes `YYYY/MM/DD`, which Google™'s filtering guide reads as midnight PST. Fix: write the local midnight as epoch seconds. Likely.
@@ -98,14 +71,8 @@ Left as it is: catching it would take a pass over all mail after the first build
 ### CONT-9. Deleting a message and undoing it puts an unhidden address back under Hidden
 `ext/contacts.js:436` (forget spares only `hidden === true`, while `chosen` at `ext/contacts.js:133` counts `hidden: false` as a choice); `ext/mail.js:1765-1767` promises that a delete undone leaves the book as it was. Fix: spare any defined `hidden`, or put the forgotten rows back on undo. Reproduced.
 
-### CONT-10. The selection page's Delete tooltip promises that an export lists deleted contacts
-`ext/people.js:599` says "an export lists them under Deleted"; the export has no such section. Fix: use `DELETE_TIP`'s wording. Confirmed.
-
 ### CONT-11. Two mail tabs during a build or a Rebuild ask for every page twice
 A sync that finds the build under way resumes from the stored bookmark (`ext/contacts.js:254-260`, `301-305`), and the one-run guard is per tab (`ext/mail.js:2703`); on Gmail this spends twice the paced quota. Fix: one tab claims the build, for example with `navigator.locks`. Reproduced.
-
-### SY-2. A message's style sheet can replace the printed header
-`ext/print.js:37-38` puts each message in a shadow root, where `:host{position:relative!important;top:-139px!important;z-index:9!important;background:#fff!important}` moves the whole message box over the header above it, so a forged From, To, Date and Subject print; `contain: paint` (`ext/print.css:14`) clips only what is inside the box. It breaks SECURITY.md's "their styles cannot change the printed header". Fix: drop `:host` and `:host-context` rules in `contentBlindCss`, and pin the position of `.body` in print.css. Reproduced in the real extension.
 
 ### TOOL-1. tools/review.js passes a scenario whatever the Content Security Policy blocked
 `tools/review.js:1903-1904` fails a scenario on a request to the real network or a console error, but the harness files every CSP violation under `cspViolations` (`tools/harness.js:303-305`), which the runner never reads, so a scenario whose page the policy broke can still pass. Fix: fail on a violation the scenario does not expect, with a pattern per scenario for those it provokes on purpose. Confirmed.

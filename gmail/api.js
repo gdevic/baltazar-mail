@@ -88,7 +88,9 @@ export const queries = {
 // ---------- search terms ----------
 // Gmail's search takes any boolean query, so the whole parsed search is written out (compile);
 // atom writes one term, and refuses a value its field does not know.
-const quoted = v => /[\s:()]/.test(v) ? `"${v}"` : v;
+// A value is quoted where Gmail would read it as more than a word: with white space, a colon or a
+// bracket in it, a leading - or +, braces, or the operators OR and AND.
+const quoted = v => /[\s:(){}]|^[-+]|^(OR|AND)$/.test(v) ? `"${v}"` : v;
 function atom(term, neg = false) {
   const v = clean(term.value), lv = v.toLowerCase(), n = neg ? "-" : "";
   switch (term.field) {

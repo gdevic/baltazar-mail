@@ -32,7 +32,7 @@ const UNSAFE = `<script>parent.pwned = 1</script><img id="h-img" src="data:," on
   `<svg><a id="h-svga" href="https://evil.example/" target="_self"><text y="9">x</text></a></svg>` +
   `<meta http-equiv="refresh" content="0;url=https://evil.example/"><iframe id="h-frame" src="https://evil.example/"></iframe>` +
   `<object id="h-obj" data="https://evil.example/x"></object><svg id="h-svg" onload="parent.pwned = 1"><circle r="1"/></svg>`;
-const FORGE = `<style>.hdr, .hdr * { display: none !important }</style><div id="forge" style="position:fixed;top:0;left:0;width:100%;height:160px;background:#fff;z-index:9">Fake header</div>`;
+const FORGE = `<style>.hdr, .hdr * { display: none !important }</style><style>:host{position:relative!important;top:-150px!important;z-index:9!important;background:#fff!important;display:block!important}</style><div id="forge" style="position:fixed;top:0;left:0;width:100%;height:160px;background:#fff;z-index:9">Fake header</div>`;
 const OVERLAY = `<div id="overlay" style="position:fixed;inset:0;z-index:2147483647;background:#f00">Session expired</div><img src="data:text/html;base64,PGgxPmhpPC9oMT4="><img src="data:image/png;base64,@@not base64@@">`;
 const CARD = `<div id="paper" style="background-color:#ffffff;color:#333333">Card</div>`;
 const SPACER = `<img id="spacer" style="min-width:640px;min-height:1px" width="640" height="1" src="data:image/png;base64,${PNG.toString("base64")}">` +
