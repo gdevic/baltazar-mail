@@ -8,7 +8,11 @@
 // counts what it has of the matches. A pile is listed latest first, by its date (when the user
 // last wrote, for People; the last mail, for the other two); the people the user pinned come
 // first in People, in the order they were pinned, under a heading of their own. The pin and the
-// eye on a row pin and hide it; a pinned address cannot be hidden, nor a hidden one pinned.
+// eye on a row pin and hide it, or everyone selected when the row is one of them; a pinned address
+// cannot be hidden, nor a hidden one pinned. The trash bin that floats before a row's date, as on
+// a message row, deletes for good, in any pile (as do Delete on a page, and Del): the contact
+// leaves every list and stays out whatever mail names it later. A pinned contact has no bin and
+// cannot be deleted.
 // Contacts mirrors the mail that is kept: a person whose page finds no mail left is forgotten
 // there and then (see forgetIfGone), which undo takes back; someone mail was copied to (Cc or Bcc)
 // stays, since a search cannot be relied on for all such mail. And a person whose page shows a
@@ -21,7 +25,10 @@
 // (Ctrl+wheel over them, or + - 0); the heading above them does not zoom.
 // What is selected is the marked people (Ctrl-click, Shift-click, x, Ctrl+A), or the row under the
 // cursor when none is marked. Marks are kept by address, so they stay while the filter changes.
-// Hiding, unhiding, pinning and unpinning can be undone (hooks.undoable).
+// Rename (F2) changes the name a person is shown under: it is typed in place of the one on their
+// page, and is shown before any name the mail gives. Nothing else about a contact can be edited,
+// the address being what the contact is.
+// Hiding, unhiding, pinning, unpinning, renaming and deleting can be undone (hooks.undoable).
 // The view is left and come back to as it was: its tab, filter, cursor, selection and place in
 // the list last for the session.
 
@@ -55,14 +62,18 @@ const PILES = {
 };
 const HIDE_TIP = "Hide: move this address to Hidden, where it is never suggested";
 const UNHIDE_TIP = "Unhide: list this address with the others again, and suggest it";
+const DELETE_TIP = "Delete: take this address out of Contacts for good, whatever mail names it later";
+const NO_DELETE = "Unpin it first: a pinned address cannot be deleted";
 const PIN_TIP = "Pin: list this address first in People";
 const UNPIN_TIP = "Unpin: stop listing this address first";
+const RENAME_TIP = "Rename: change the name this contact is shown under";
 const NO_HIDE = "Unpin it first: a pinned address cannot be hidden";
 const NO_PIN = "Unhide it first: a hidden address cannot be pinned";
 
 // hooks: { write(list of { name, email }), mailWith(email, openId) -> all mail with the
 //   person (openId: the message to open there), find(emails, "from" | "to"), recent(email, count)
-//   -> { messages }, draft(row) -> whether it is a draft, subject(row) -> its subject as text,
+//   -> { messages }, draft(row) -> whether it is a draft, trash: the trash bin a message row
+//   shows, as markup, subject(row) -> its subject as text,
 //   date(epoch), menu(x, y, items, onPick), status(msg), leave() -> back to the view Contacts was
 //   opened from, undoable({ label, count, undo(), redo() }) -> a change the app's undo can take
 //   back, note() -> what to say above the list while the book is still being built, or "" }
@@ -91,9 +102,16 @@ export function init(h) {
     const other = e.target.closest("a[data-pile]");
     if (other) { e.preventDefault(); openPile(other.dataset.pile); return; }
     const i = at(e); if (i < 0) return;
-    // the eye hides or unhides its own row, and the pin pins or unpins it, whatever is selected
-    if (e.target.closest(".pe:not(.none)")) { change(st.rows[i].hidden ? "unhide" : "hide", [st.rows[i]], i); return; }
-    if (e.target.closest(".pk:not(.none)")) { change(st.rows[i].pinned ? "unpin" : "pin", [st.rows[i]], i); return; }
+    // the eye hides or unhides and the pin pins or unpins: everyone selected when the row is one
+    // of them, and otherwise the row's own contact, the selection left as it is
+    // The trash bin, as a message row's, deletes for good in the same way.
+    const eye = e.target.closest(".pe:not(.none)"), pin = !eye && e.target.closest(".pk:not(.none)"), bin = e.target.closest(".tr");
+    if (eye || pin || bin) {
+      const r = st.rows[i], whom = st.marked.has(r.email) ? targets() : [r];
+      if (bin) remove(whom, i);
+      else change(eye ? (r.hidden ? "unhide" : "hide") : (r.pinned ? "unpin" : "pin"), whom, i);
+      return;
+    }
     if (e.shiftKey) { markRange(st.anchor < 0 ? i : st.anchor, i); select(i, false); return; }
     // Ctrl/⌘-click adds a row to the selection, which starts with the row under the cursor
     if (e.ctrlKey || e.metaKey) {
@@ -214,15 +232,24 @@ function emptyHtml(q) {
 }
 
 const fullDate = t => t ? new Date(t * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }) : "";
+// What the pin and the eye of a row say they do: to its own contact, or to everyone selected when
+// the row is one of several (many: how many are selected with it).
+const iconTips = (r, many) => ({
+  pin: many > 1 ? `${r.pinned ? "Unpin" : "Pin"} the ${many} selected contacts` : r.pinned ? UNPIN_TIP : PIN_TIP,
+  eye: many > 1 ? `${r.hidden ? "Unhide" : "Hide"} the ${many} selected contacts` : r.hidden ? UNHIDE_TIP : HIDE_TIP,
+  bin: `${many > 1 ? `Delete the ${many} selected contacts for good` : DELETE_TIP} (Del)`,
+});
 function rowHtml(r, i) {
-  const marked = st.marked.has(r.email), when = r[PILES[st.pile].field];
+  const marked = st.marked.has(r.email), when = r[PILES[st.pile].field], tip = iconTips(r, marked ? st.marked.size : 1);
   const label = [r.name, r.email, r.pinned ? "pinned" : "", r.hidden ? "hidden" : "", when ? `${PILES[st.pile].date.toLowerCase()} ${fullDate(when)}` : ""].filter(Boolean).map(noBidi).join(", ");
   return `<div class="prow${i === st.cursor ? " sel" : ""}${marked ? " marked" : ""}${r.hidden ? " off" : ""}" id="prow-${i}" data-i="${i}" data-email="${esc(r.email)}" role="option" aria-selected="${st.marked.size ? marked : i === st.cursor}" aria-label="${esc(label)}">` +
-    (r.hidden ? `<span class="pk none"></span>` : `<span class="pk${r.pinned ? " on" : ""}" role="button" title="${r.pinned ? UNPIN_TIP : PIN_TIP}" aria-label="${r.pinned ? "Unpin" : "Pin"}">${PIN}</span>`) +
-    `<span class="pn">${esc(r.name || r.email)}</span>` +
-    `<span class="pm">${r.name ? esc(r.email) : ""}</span>` +
-    `<span class="dt"${when ? ` title="${PILES[st.pile].date} ${esc(fullDate(when))}"` : ""}>${when ? esc(hooks.date(when)) : ""}</span>` +
-    (r.pinned ? `<span class="pe none"></span>` : `<span class="pe" role="button" title="${r.hidden ? UNHIDE_TIP : HIDE_TIP}" aria-label="${r.hidden ? "Unhide" : "Hide"}">${r.hidden ? EYE_OFF : EYE}</span>`) + "</div>";
+    (r.hidden ? `<span class="pk none"></span>` : `<span class="pk${r.pinned ? " on" : ""}" role="button" title="${tip.pin}" aria-label="${r.pinned ? "Unpin" : "Pin"}">${PIN}</span>`) +
+    // a column each for the name and the address: with no name known, the name's is left empty
+    `<span class="pn">${esc(r.name)}</span>` +
+    `<span class="pm">${esc(r.email)}</span>` +
+    // the trash bin floats before the date, as on a message row; a pinned contact, which cannot be deleted, has none
+    `<span class="dt">${r.pinned ? "" : `<span class="tr" role="button" title="${tip.bin}" aria-label="Delete">${hooks.trash}</span>`}<span${when ? ` title="${PILES[st.pile].date} ${esc(fullDate(when))}"` : ""}>${when ? esc(hooks.date(when)) : ""}</span></span>` +
+    (r.pinned ? `<span class="pe none"></span>` : `<span class="pe" role="button" title="${tip.eye}" aria-label="${r.hidden ? "Unhide" : "Hide"}">${r.hidden ? EYE_OFF : EYE}</span>`) + "</div>";
 }
 
 function syncAria() {
@@ -250,6 +277,8 @@ function paint() {
     const on = st.marked.has(el.dataset.email);
     el.classList.toggle("marked", on);
     el.setAttribute("aria-selected", String(st.marked.size ? on : Number(el.dataset.i) === st.cursor));
+    const r = st.rows[Number(el.dataset.i)], tip = r && iconTips(r, on ? st.marked.size : 1);
+    if (tip) { el.querySelector(".pk:not(.none)")?.setAttribute("title", tip.pin); el.querySelector(".pe:not(.none)")?.setAttribute("title", tip.eye); el.querySelector(".tr")?.setAttribute("title", tip.bin); }
   }
   syncAria();
 }
@@ -316,8 +345,48 @@ async function act(what, button) {
       break;
     }
     case "pin": case "unpin": case "hide": case "unhide": await change(what, t, st.cursor); break;
+    case "delete": await remove(t, st.cursor); break;
+    case "rename": if (n === 1) startRename(t[0]); else hooks.status("one contact is renamed at a time"); break;
     case "clear": clearMarks(); break;
   }
+}
+
+// The name on a person's page becomes a box to type their name in. Enter, or leaving the box,
+// keeps what it says; Esc leaves the name as it was. An empty box takes the user's name back, so
+// that the name the mail gives shows again. The keys typed there are the box's alone.
+let renaming = null;             // the address whose name is being typed
+function startRename(r) {
+  const el = $("person").querySelector("div.p-name");
+  if (!el || pageFor !== r.email) return;
+  const box = Object.assign(document.createElement("input"), { className: "p-name", value: r.name, placeholder: r.given ? "Name (empty: the one from the mail)" : "Name", maxLength: 100, spellcheck: false, autocomplete: "off" });
+  box.setAttribute("aria-label", `Name for ${r.email}`);
+  const end = async (keep, key) => {
+    if (renaming !== r.email) return;
+    renaming = null;
+    const name = box.value.trim();
+    // nothing to do where the name is the one shown, or is emptied with no name of the user's to take back
+    if (keep && name !== r.name && (name || r.given)) await rename(r, name); else page();
+    if (key) $("list").focus();
+  };
+  box.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); end(true, true); }
+    else if (e.key === "Escape") { e.preventDefault(); end(false, true); }
+  };
+  box.onblur = () => end(true, false);
+  renaming = r.email;
+  el.replaceWith(box);
+  box.focus(); box.select();
+}
+// The user's own name for a person, in a way the app's undo takes back.
+async function rename(r, name) {
+  const was = await contacts.choices([r.email]);
+  const apply = () => contacts.rename(r.email, name);
+  await apply();
+  hooks.undoable({ label: `rename ${name || r.email}`, count: 1, undo: () => contacts.restoreChoices(was), redo: apply });
+  await load();
+  const now = st.byEmail.get(r.email);
+  hooks.status(name ? `renamed ${r.name || r.email} to ${name}` : `${r.email} has the name the mail gives it${now?.name ? `, ${now.name}` : " (none)"}`);
 }
 
 // Hide, unhide, pin or unpin people, in a way the app's undo takes back: each address gets back
@@ -334,14 +403,35 @@ async function change(what, t, at = -1) {
     return;
   }
   const emails = t.map(r => r.email), n = t.length, who = n === 1 ? showName(t[0]) : plural(n, "contact");
+  // the ones asked for that the rule kept out, which the status line owns up to
+  const barred = what === "hide" ? asked.filter(r => r.pinned).length : what === "pin" ? asked.filter(r => r.hidden).length : 0;
   const mine = !!st.cur && emails.includes(st.cur);      // the cursor's own row is one of them
   const was = await contacts.choices(emails);
   const apply = () => what === "hide" || what === "unhide" ? contacts.hideMany(emails, what === "hide") : contacts.pinMany(emails, what === "pin");
   await apply();
   hooks.undoable({ label: `${words[0]} ${who}`, count: n, undo: () => contacts.restoreChoices(was), redo: apply });
-  hooks.status(`${words[1]} ${who}${what === "hide" ? `; Hidden has ${n === 1 ? "it" : "them"}` : ""}`);
+  hooks.status(`${words[1]} ${who}${what === "hide" ? `; Hidden has ${n === 1 ? "it" : "them"}` : ""}${barred ? `; ${barred} ${what === "hide" ? "pinned" : "hidden"} left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
   // people who left the pile are no longer selected; the cursor takes the row that moved up
   for (const e of emails) if (contacts.pileOf({ ...st.byEmail.get(e), ...after(what) }) !== st.pile) st.marked.delete(e);
+  await load();
+  if (mine && st.cursor < 0 && at >= 0 && st.rows.length) select(Math.min(at, st.rows.length - 1));
+}
+// Contacts deleted for good (the trash bin on a row, Delete on a page, or Del): they leave every
+// list, and stay out whatever mail names them later (contacts.deleteMany). A pinned one cannot be
+// deleted: it is left, as it is by hiding, and the status line says so. Undo brings them back as they were. at: where the cursor goes when
+// its own row is one of them.
+async function remove(t, at = -1) {
+  const barred = t.filter(r => r.pinned).length;
+  t = t.filter(r => !r.pinned);
+  if (!t.length) { hooks.status(NO_DELETE.toLowerCase()); return; }
+  const emails = t.map(r => r.email), n = t.length, who = n === 1 ? showName(t[0]) : plural(n, "contact");
+  const mine = !!st.cur && emails.includes(st.cur);
+  const was = await contacts.choices(emails);
+  const apply = () => contacts.deleteMany(emails);
+  await apply();
+  hooks.undoable({ label: `delete ${who}`, count: n, undo: () => contacts.restoreChoices(was), redo: apply });
+  hooks.status(`deleted ${who} for good${barred ? `; ${barred} pinned left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
+  for (const e of emails) { st.marked.delete(e); recent.delete(e); ways.delete(e); }
   await load();
   if (mine && st.cursor < 0 && at >= 0 && st.rows.length) select(Math.min(at, st.rows.length - 1));
 }
@@ -359,6 +449,8 @@ function rowMenu(x, y) {
     ...(one ? [["mail", "All mail", "Enter", none("mail"), !!none("mail")]] : []),
     ["from", one ? "Mail from" : `Mail from any${k}`, "", tooMany || none("from"), !!(tooMany || none("from"))], ["to", one ? "Mail to" : `Mail to any${k}`, "", tooMany || none("to"), !!(tooMany || none("to"))], null,
     ["copy", one ? "Copy address" : `Copy addresses${k}`], null,
+    ...(one ? [["rename", "Rename", "F2", RENAME_TIP]] : []),
+    ["delete", `Delete${k}`, "Del", t.some(r => !r.pinned) ? DELETE_TIP : NO_DELETE, t.every(r => r.pinned)],
     ...(anyPinned && !canPin ? [] : [["pin", `Pin${k}`, "s", canPin ? PIN_TIP : NO_PIN, !canPin]]), ...(anyPinned ? [["unpin", `Unpin${k}`, canPin ? "" : "s", UNPIN_TIP]] : []),
     ...(anyHidden && !canHide ? [] : [["hide", `Hide${k}`, "h", canHide ? HIDE_TIP : NO_HIDE, !canHide]]), ...(anyHidden ? [["unhide", `Unhide${k}`, canHide ? "" : "h", UNHIDE_TIP]] : []),
   ], a => act(a));
@@ -379,13 +471,14 @@ function page() {
   }
   if (t.length > 1) { pageFor = null; box.innerHTML = groupHtml(t); return; }
   const r = t[0];
+  if (renaming === r.email && box.querySelector("input.p-name")) return;      // a name being typed is not drawn over
   pageFor = r.email;
   const also = r.name ? st.all.filter(x => x.email !== r.email && x.name.toLowerCase() === r.name.toLowerCase()).slice(0, 6) : [];
   const who = esc(showName(r));
   box.innerHTML = `<div class="p-card"><div class="p-name">${who}</div>
     <div class="p-mail">${esc(r.email)}</div>
     <div class="p-stats">${r.last ? `Last mail ${fullDate(r.last)}` : "No mail yet"} · ${r.lastSent ? `you last wrote ${fullDate(r.lastSent)}` : "you have not written to this address"}</div>
-    <div class="p-actions"><button data-p="write" title="New message to ${who} (c)">Write</button><button data-p="mail">All mail</button><button data-p="from">Mail from</button><button data-p="to">Mail to</button><button data-p="copy">Copy address</button><span class="sep"></span><button data-p="${r.pinned ? "unpin" : "pin"}"${r.hidden ? ` disabled title="${NO_PIN}"` : ` title="${r.pinned ? UNPIN_TIP : PIN_TIP} (s)"`}>${r.pinned ? "Unpin" : "Pin"}</button><button data-p="${r.hidden ? "unhide" : "hide"}"${r.pinned ? ` disabled title="${NO_HIDE}"` : ` title="${r.hidden ? UNHIDE_TIP : HIDE_TIP} (h)"`}>${r.hidden ? "Unhide" : "Hide"}</button></div>
+    <div class="p-actions"><button data-p="write" title="New message to ${who} (c)">Write</button><button data-p="mail">All mail</button><button data-p="from">Mail from</button><button data-p="to">Mail to</button><button data-p="copy">Copy address</button><span class="sep"></span><button data-p="rename" title="${RENAME_TIP} (F2)">Rename</button><button data-p="${r.pinned ? "unpin" : "pin"}"${r.hidden ? ` disabled title="${NO_PIN}"` : ` title="${r.pinned ? UNPIN_TIP : PIN_TIP} (s)"`}>${r.pinned ? "Unpin" : "Pin"}</button><button data-p="${r.hidden ? "unhide" : "hide"}"${r.pinned ? ` disabled title="${NO_HIDE}"` : ` title="${r.hidden ? UNHIDE_TIP : HIDE_TIP} (h)"`}>${r.hidden ? "Unhide" : "Hide"}</button><button data-p="delete"${r.pinned ? ` disabled title="${NO_DELETE}"` : ` title="${DELETE_TIP} (Del)"`}>Delete</button></div>
     ${also.length ? `<div class="p-also">Same name: ${also.map(x => `<a href="#" data-also="${esc(x.email)}">${esc(x.email)}</a>`).join(", ")}</div>` : ""}</div>
     <div class="p-recent"><i>loading recent messages...</i></div>`;
   const got = recent.get(r.email);
@@ -458,9 +551,10 @@ function paintWays(email) {
 const spared = new Set();        // addresses whose forgetting was undone, left alone for the session
 async function forgetIfGone(email) {
   const r = st.byEmail.get(email);
-  if (!r || r.pinned || r.copied || spared.has(email) || Date.now() / 1000 - Math.max(r.last, r.lastSent) < FRESH) return false;
+  if (!r || r.pinned || r.copied || r.given || r.added || spared.has(email) || Date.now() / 1000 - Math.max(r.last, r.lastSent) < FRESH) return false;
   const rows = await contacts.forget([email]);
-  if (!rows.length) return false;
+  // kept after all: what the list knew of the entry was out of date (another tab changed it), so it is read again
+  if (!rows.length) { if (!r.hidden) await load(); return false; }
   recent.delete(email); ways.delete(email);
   hooks.undoable({ label: `forget ${showName(r)}`, count: 1, undo: () => { spared.add(email); return contacts.putBack(rows); }, redo: () => contacts.forget([email]) });
   const here = st.shown && st.cur === email;
@@ -477,6 +571,8 @@ const COPIED_NONE = "No mail with this address was found. It stays in Contacts b
 // Why someone with no mail left is still listed.
 function keptWhy(r) {
   if (r.pinned) return " It stays in Contacts because you pinned it.";
+  if (r.given) return " It stays in Contacts because you named it.";
+  if (r.added) return " It stays in Contacts because you added it.";
   if (spared.has(r.email)) return " It was brought back; pin it to keep it after today.";
   if (r.hidden) return " It stays hidden, so that it is not suggested if it writes again.";
   return "";
@@ -500,7 +596,7 @@ function groupHtml(t) {
   const find = off(FIND_MAX, `A search can name ${FIND_MAX} addresses at most`);
   return `<div class="p-card"><div class="p-name">${plural(n, "contact")} selected</div>
     <div class="p-actions"><button data-p="write"${off(WRITE_MAX, `A message can be started to ${WRITE_MAX} people at most`) || ' title="New message to all of them (c)"'}>Write to all</button><button data-p="from"${find || ' title="Mail any of these addresses sent (Enter)"'}>Mail from any</button><button data-p="to"${find || ' title="Mail sent to any of these addresses"'}>Mail to any</button><button data-p="copy">Copy addresses</button></div>
-    <div class="p-actions">${anyLoose ? `<button data-p="pin" title="List these addresses first in People (s)">Pin</button>` : ""}${anyPinned ? `<button data-p="unpin" title="Stop listing these addresses first in People">Unpin</button>` : ""}${anyShown ? `<button data-p="hide" title="${HIDE_TIP.replace("this address", "these addresses").replace("it is", "they are")} (h)">Hide</button>` : ""}${anyHidden ? `<button data-p="unhide" title="${UNHIDE_TIP.replace("this address", "these addresses").replace("suggest it", "suggest them")}">Unhide</button>` : ""}<span class="sep"></span><button data-p="clear" title="Select nobody (Esc)">Clear selection</button></div>
+    <div class="p-actions">${anyLoose ? `<button data-p="pin" title="List these addresses first in People (s)">Pin</button>` : ""}${anyPinned ? `<button data-p="unpin" title="Stop listing these addresses first in People">Unpin</button>` : ""}${anyShown ? `<button data-p="hide" title="${HIDE_TIP.replace("this address", "these addresses").replace("it is", "they are")} (h)">Hide</button>` : ""}${anyHidden ? `<button data-p="unhide" title="${UNHIDE_TIP.replace("this address", "these addresses").replace("suggest it", "suggest them")}">Unhide</button>` : ""}${t.some(r => !r.pinned) ? `<button data-p="delete" title="Delete these addresses from Contacts for good, whatever mail names them later (Del)">Delete</button>` : ""}<span class="sep"></span><button data-p="clear" title="Select nobody (Esc)">Clear selection</button></div>
     <div class="p-chips">${t.slice(0, SHOWN_MAX).map(r => `<span class="chip" title="${esc(r.name ? `${r.name} <${r.email}>` : r.email)}"><span>${r.name ? `<b>${esc(r.name)}</b>` : esc(r.email)}</span><a data-unmark="${esc(r.email)}" title="Take out of the selection">×</a></span>`).join("")}${n > SHOWN_MAX ? `<span class="p-rest">and ${(n - SHOWN_MAX).toLocaleString()} more</span>` : ""}</div></div>`;
 }
 
@@ -541,6 +637,8 @@ export function onKey(e) {
     case "Enter": case "o": if (!targets().length) return false; act("mail"); return true;
     case "c": if (!targets().length) return false; e.preventDefault(); act("write"); return true;
     case "x": if (st.cursor >= 0) mark(st.rows[st.cursor].email); return true;
+    case "F2": if (!targets().length) return false; e.preventDefault(); act("rename"); return true;
+    case "#": case "Delete": if (!targets().length) return false; e.preventDefault(); act("delete"); return true;
     case "s": { const t = targets(); if (t.length) act(t.some(r => !r.pinned && !r.hidden) || !t.some(r => r.pinned) ? "pin" : "unpin"); return true; }
     case "h": { const t = targets(); if (t.length) act(t.some(r => !r.hidden) ? "hide" : "unhide"); return true; }
   }

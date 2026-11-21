@@ -2,7 +2,8 @@
 import { createRequire } from "node:module";
 // ext/contacts.js imports the adapter beside it, so it is tested in the built Yahoo extension.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const { machineAddress, isHidden, scanStep, noteName, bestName, paceWait, pileOf, pinnedFirst, matchOf, sortRows, record, setOwnAddresses, planImport } = await import("../dist/baltazar-mail-yahoo/contacts.js");
+const file = await import("../dist/baltazar-mail-yahoo/contactsfile.js");
 
 const machine = [
   "noreply@example.com", "no-reply@shop.example", "do_not_reply@example.com", "donotreply@mail.example.com",
@@ -11,6 +12,7 @@ const machine = [
   "info@example.com", "support@example.com", "sales@example.com", "survey@example.com",
   "a1b2c3d4e5f6a7b8c9d0e1f2@example.com",
   "store@email.example.com", "deals@t.example.com", "brand@appmail.example.com", "x@info6.example.com",
+  "unsubscribe@example.com", "acme-unsubscribe@example.com", "unsubscribe.4711@example.com",
   "NOREPLY@example.com", "acme-auto-reply@example.com", "acme.newsletter@example.com", "acme_automated@example.com",
   "acme-info@example.com", "info.us@example.com", "deals@email.shop.co.uk", "x@news.example.com.br", "x@example-info.com", "x@infos-example.com", "x@shopemail.com", "x@example.email",
 ];
@@ -112,6 +114,75 @@ for (const [e, want] of cases) if (isHidden(e) !== want) { fail++; console.log("
   const sent = new Map();
   record({ headers: { date: "1700000900", from: [who("alias@elsewhere.example")], to: [who("pat@x.example")], bcc: [who("quiet@x.example")] } }, sent, true);
   check(sent.size === 2 && sent.get("pat@x.example").lastSent === 1700000900 && sent.get("quiet@x.example").copied && !sent.has("alias@elsewhere.example"), "whatever is read from Sent is the user's, whichever address it was sent from: " + JSON.stringify([...sent.values()]));
+  setOwnAddresses([]);
+}
+// An address named for a role is a machine's wherever it is seen; only the guess from the domain
+// is dropped for an address mail was copied to.
+{
+  const seen = (email, copied) => isHidden({ email, lastSent: 0, copied });
+  check(seen("info@firm.example", true) && seen("info@firm.example", false) && seen("noreply@firm.example", true) && seen("support.eu@firm.example", true), "info@, noreply@ and the like are hidden though mail was copied to them");
+  check(!seen("iva@email.isp-net.example", true) && seen("iva@email.isp-net.example", false) && !isHidden({ email: "info@firm.example", lastSent: 5, copied: true }), "a bulk-mail domain hides only an address never copied on mail, and nothing hides one written to");
+}
+// The user's own name for a contact is shown before any name the mail gives.
+{
+  const e = { nameBy: { self: { MS: 1 }, others: { "Mislav Sabolic": 20 } } };
+  check(bestName(e) === "MS" && bestName({ ...e, given: "Mislav" }) === "Mislav" && bestName({ ...e, given: "" }) === "MS", "the name the user gave wins, and without one the person's own does");
+}
+// The contacts file: a contact a line as mail writes it, the pinned first in their order and then
+// the people, the others and the hidden by address; what is written is read back the same.
+{
+  const rows = [
+    { name: "Maya Chen", email: "maya.chen@x.example", pinned: 20, hidden: false, lastSent: 5 },
+    { name: "Kos, Ana", email: "ana.kos@x.example", pinned: 10, hidden: false, lastSent: 0 },
+    { name: "Robin Hale", email: "robin.hale@x.example", pinned: 0, hidden: false, lastSent: 9 },
+    { name: "", email: "ana@mac.example", pinned: 0, hidden: false, lastSent: 0 },
+    { name: '#1 "Deals" <now>', email: "deals@shop.example", pinned: 0, hidden: true, lastSent: 0 },
+  ];
+  const text = file.format(rows, { account: "me@yahoo.com", date: "2026-11-20" });
+  const body = text.split("\n").filter(l => l && !l.startsWith("# ")).join("|");
+  check(text.startsWith("# Baltazar Mail contacts of me@yahoo.com, 2026-11-20\n") && text.endsWith("\n") && ["# Pinned", "# People", "# Others", "# Hidden"].every(h => text.includes(`\n\n${h}\n`)), "the file starts with what it is and how it is written, and heads each group: " + JSON.stringify(text.slice(0, 80)));
+  check(body === '"Kos, Ana" <ana.kos@x.example> pinned|Maya Chen <maya.chen@x.example> pinned|Robin Hale <robin.hale@x.example>|ana@mac.example|"#1 \\"Deals\\" <now>" <deals@shop.example> hidden', "a contact a line, quoted only where the name needs it: " + body);
+  check(file.format([{ name: "Two\nLines\tHere", email: "two@x.example", pinned: 0, hidden: false, lastSent: 0 }]).includes("\nTwo Lines Here <two@x.example>\n"), "a name is written on one line, whatever line breaks it has");
+  const back = file.parse(file.format(rows, { eol: "\r\n" }));
+  check(!back.errors.length && JSON.stringify(back.entries.map(e => [e.name, e.email, e.pinned, e.hidden])) === JSON.stringify([rows[1], rows[0], rows[2], rows[3], rows[4]].map(r => [r.name, r.email, !!r.pinned, r.hidden])), "what is written is read back the same, with either line ending: " + JSON.stringify(back));
+  const odd = file.parse("\uFEFFAna <A@B.example> Pinned\nBob b@c.example\n<c@d.example>\nx@y.example pined\nq@r.example pinned hidden\n# a note\n\nAna Two <a@b.example>\na@x.example, b@x.example\nEve <not an address>\n");
+  check(JSON.stringify(odd.entries.map(e => [e.email, e.name, e.pinned, e.line])) === '[["c@d.example","",false,3],["a@b.example","Ana Two",false,8]]', "an address is read without regard to case, once, as its last line has it: " + JSON.stringify(odd.entries));
+  check(JSON.stringify(odd.errors.map(e => e.line)) === "[2,4,5,9,10]" && /neither pinned nor hidden/.test(odd.errors[1].why) && /several addresses/.test(odd.errors[3].why), "the lines that are not a contact are told apart, with the reason: " + JSON.stringify(odd.errors));
+}
+// What an import makes of the book: merging takes what the file says and leaves the rest;
+// replacing makes the book what the file says; and a file written from the book changes nothing.
+{
+  setOwnAddresses(["me@yahoo.com"]);
+  const book = () => new Map([
+    { email: "maya@x.example", name: "Maya Chen", nameBy: { self: { "Maya Chen": 3 } }, last: 50, lastSent: 40, pinned: 100 },
+    { email: "robin@x.example", name: "Robin Hale", nameBy: { self: { "Robin Hale": 1 } }, last: 30, lastSent: 20, pinned: 200 },
+    { email: "ms@x.example", name: "MS", nameBy: { self: { MS: 1 }, others: { "Mislav Sabolic": 5 } }, last: 10, lastSent: 0 },
+    { email: "noreply@shop.example", name: "Shop", nameBy: { self: { Shop: 2 } }, last: 5, lastSent: 0 },
+    { email: "bare@x.example", name: "", nameBy: {}, last: 4, lastSent: 0 },
+  ].map(e => [e.email, e]));
+  const listed = b => [...b.values()].map(e => ({ name: e.name, email: e.email, pinned: e.pinned || 0, hidden: isHidden(e), lastSent: e.lastSent }));
+  const written = file.parse(file.format(listed(book()))).entries;
+  for (const replace of [false, true]) { const p = planImport(book(), written, { replace, now: 1000 }); check(!p.put.length && !p.drop.length, `the book's own file changes nothing (${replace ? "replacing" : "merging"}): ` + JSON.stringify(p)); }
+  const x = (email, name = "", word = "") => ({ email, name, pinned: word === "pinned", hidden: word === "hidden" });
+  const merged = planImport(book(), [x("ms@x.example", "Mislav Sabolic"), x("new@y.example", "New One", "pinned"), x("robin@x.example", "Robin Hale", "hidden"), x("me@yahoo.com", "Me")], { now: 1000 });
+  const got = Object.fromEntries(merged.put.map(e => [e.email, e]));
+  check(merged.put.length === 3 && !merged.drop.length && got["ms@x.example"].given === "Mislav Sabolic" && got["ms@x.example"].name === "Mislav Sabolic" && got["ms@x.example"].last === 10 &&
+    got["new@y.example"].added && got["new@y.example"].given === "New One" && got["new@y.example"].pinned === 1000 && got["robin@x.example"].hidden === true && !got["robin@x.example"].pinned,
+    "merging names a contact, adds a new one and hides one, and touches nobody else: " + JSON.stringify(merged.put));
+  check(JSON.stringify(merged.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":1,"hidden":1,"shown":0,"removed":0}', "and counts what it did: " + JSON.stringify(merged.counts));
+  const replaced = planImport(book(), [x("robin@x.example", "Robin Hale", "pinned"), x("maya@x.example", "Maya", "pinned"), x("ms@x.example", "MS"), x("noreply@shop.example", "Shop"), x("new@y.example")], { replace: true, now: 1000 });
+  const now = Object.fromEntries(replaced.put.map(e => [e.email, e]));
+  check(JSON.stringify(replaced.drop) === '["bare@x.example"]' && now["robin@x.example"].pinned === 1000 && now["maya@x.example"].pinned === 1001 && now["maya@x.example"].given === "Maya" && !("ms@x.example" in now) &&
+    now["noreply@shop.example"].hidden === false && now["new@y.example"].added && now["new@y.example"].name === "",
+    "replacing puts the pins in the file's order, shows what the file does not hide, and takes out who is not in it: " + JSON.stringify(replaced));
+  check(JSON.stringify(replaced.counts) === '{"added":1,"renamed":1,"pinned":0,"unpinned":0,"hidden":0,"shown":1,"removed":1}', "and counts what it did: " + JSON.stringify(replaced.counts));
+  // a contact the user deleted is in no list: replacing does not count or touch it, and a line that names it adds it again
+  const gone = () => new Map([...book(), ["dead@x.example", { email: "dead@x.example", name: "Dead One", nameBy: { self: { "Dead One": 1 } }, last: 3, lastSent: 0, deleted: true }]]);
+  const kept = planImport(gone(), written, { replace: true, now: 1000 }), again = planImport(gone(), [x("dead@x.example", "Dead One")], { now: 1000 });
+  check(!kept.put.length && !kept.drop.length && kept.counts.removed === 0 && again.put.length === 1 && !("deleted" in again.put[0]) && again.put[0].added && again.counts.added === 1,
+    "a deleted contact is neither taken out by a replacement nor counted, and its line in a file brings it back: " + JSON.stringify([kept, again]));
+  const back = planImport(new Map([["ms@x.example", { ...book().get("ms@x.example"), given: "Mislav" }]]), [x("ms@x.example")], { replace: true, now: 1000 });
+  check(back.put.length === 1 && !("given" in back.put[0]) && back.put[0].name === "MS", "replacing with a line that has no name takes the user's name back: " + JSON.stringify(back.put));
   setOwnAddresses([]);
 }
 // The Contacts filter and the two orders.

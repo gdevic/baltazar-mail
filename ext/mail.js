@@ -5,6 +5,7 @@ import * as contacts from "./contacts.js";
 import * as viewer from "./viewer.js";
 import * as files from "./files.js";
 import * as people from "./people.js";
+import * as contactsFile from "./contactsfile.js";
 import { parse, check, nativeQuery, evaluate, describe, CAP } from "./query.js";
 import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
@@ -1782,7 +1783,7 @@ async function checkContacts() {
       const email = toCheck.values().next().value;
       toCheck.delete(email);
       const known = await contacts.lookup(email);
-      if (!known || known.copied) continue;                 // not in the book, or kept whatever a search says: nothing to ask
+      if (!known || known.copied || known.given || known.added) continue;     // not in the book, or kept whatever a search says: nothing to ask
       let left;
       try { left = (await api.search(api.queries.person(email), null, 1, 0, true)).messages?.length > 0; } catch { continue; }   // not known: it stays
       if (!left && !toCheck.has(email)) forgot += (await contacts.forget([email])).length;
@@ -2094,6 +2095,7 @@ const peopleHooks = {
   find: (emails, field) => findFrom(emails, field),
   recent: (email, count) => api.search(api.queries.person(email), null, count, 0, true),
   draft: m => folderType(state.byId.get(String(m.folder?.id))) === "DRAFT",
+  trash: TRASH_ICON,
   subject: m => plainSubject(m.headers?.subject),
   date: fmtDate,
   menu: openMenu,
@@ -2349,7 +2351,7 @@ function toggleTheme() {
 
 function openSettings(show) {
   $("settings").classList.toggle("hidden", !show);
-  if (show) { showAwakeSteps(false); renderAwake(); }
+  if (show) { showAwakeSteps(false); renderAwake(); renderContactsRow(); }
 }
 
 function wireSettings() {
@@ -2370,6 +2372,7 @@ function wireSettings() {
   $("poll").onchange = () => { settings.pollSec = Math.max(5, Number($("poll").value) || 20); applySettings(); saveSettings(); };
   $("awake").onchange = () => { settings.awake = $("awake").checked; applyAwake(); saveSettings(); renderAwake(); };
   $("awake-how").onclick = () => showAwakeSteps($("awake-steps").classList.contains("hidden"));
+  $("ct-rebuild").onclick = () => rebuildContacts();
   $("composeFont").onchange = () => { settings.composeFont = $("composeFont").value; saveSettings(); };
   $("composeSize").onchange = () => { settings.composeSize = Number($("composeSize").value) || 13; saveSettings(); };
   $("undosend").onchange = () => { settings.undoSendSec = Math.min(60, Math.max(0, Number($("undosend").value) || 0)); saveSettings(); };
@@ -2684,10 +2687,15 @@ async function untilIdle() {
     await new Promise(ok => setTimeout(ok, Math.min(wait, 30e3) + 50));
   }
 }
-let contactsBusy = false;
-async function syncContacts(full = false) {
-  if (contactsBusy) return;
-  contactsBusy = true;
+// What the build has to read, for its progress and for saying beforehand how long it takes: Sent,
+// Inbox, and the mail in neither (nor in Drafts).
+function buildTotals() {
+  const sent = folderByType("SENT"), inbox = state.byId.get(inboxId()), drafts = folderByType("DRAFT");
+  return { sent: sent?.total || 0, inbox: inbox?.total || 0, rest: api.countAll(state.folders, [sent?.id, inbox?.id, drafts?.id].filter(Boolean)) };
+}
+let contactsRun = null;          // the sync under way; one at a time, and a rebuild waits for it
+function syncContacts(full = false) { return contactsRun ||= runContactsSync(full).finally(() => { contactsRun = null; }); }
+async function runContactsSync(full) {
   try {
     const own = [$("account").textContent];
     try { own.push(...(await api.accounts()).accounts.map(a => a.email)); } catch {}
@@ -2696,15 +2704,12 @@ async function syncContacts(full = false) {
     const slow = first && !!api.LIMITS.scanAfter;
     if (slow && !(await chrome.storage.local.get(CONTACTS_AFTER))[CONTACTS_AFTER]) await chrome.storage.local.set({ [CONTACTS_AFTER]: Date.now() + api.LIMITS.scanAfter });
     let shownAt = 0;
-    const sent = folderByType("SENT"), inbox = state.byId.get(inboxId()), drafts = folderByType("DRAFT");
-    // what the build has to read, for its progress: Sent, Inbox, and the mail in neither (nor in Drafts)
-    const totals = { sent: sent?.total, inbox: inbox?.total, rest: api.countAll(state.folders, [sent?.id, inbox?.id, drafts?.id].filter(Boolean)) };
-    const n = await contacts.sync({ inbox: inboxId(), sent: sent?.id, drafts: drafts?.id, totals, full, pace: slow ? untilIdle : null,
+    const n = await contacts.sync({ inbox: inboxId(), sent: folderByType("SENT")?.id, drafts: folderByType("DRAFT")?.id, totals: buildTotals(), full, pace: slow ? untilIdle : null,
       progress: first ? ({ read, total }) => {
         building = { read, total, from: building?.from ?? read, at: building?.at ?? Date.now() };
         statusQuietly(`building Contacts: ${buildProgress()}`);
-        // Contacts, when it is open, lists what has been learned so far, every few seconds
-        if (people.isShown() && Date.now() - shownAt > 3000) { shownAt = Date.now(); people.refresh(); }
+        // Contacts and Settings, when open, say what has been learned so far, every few seconds
+        if (Date.now() - shownAt > 3000) { shownAt = Date.now(); if (people.isShown()) people.refresh(); renderContactsRow(); }
       } : null });
     building = null;
     // The routine learn after a poll says nothing: a status would cover one the user is reading,
@@ -2712,8 +2717,90 @@ async function syncContacts(full = false) {
     if (first) status(`Contacts: ${(await contacts.count()).toLocaleString()} addresses${n ? ` (${n.toLocaleString()} message headers read)` : ""}`);
     if ((n || first) && people.isShown()) people.reload();
   } catch (e) { status(`Contacts: ${e.message}`); }
-  finally { contactsBusy = false; building = null; }
+  finally { building = null; renderContactsRow(); }
 }
+
+// ---------- Settings › Contacts ----------
+// How many contacts there are, or how far their build has come, and Rebuild, which reads the
+// headers of all the mail again: minutes of requests, so it asks first and says how long, and is
+// greyed out while a build is under way. It unmarks the build and lets the first build's own path
+// do the rest, so a rebuild cut short carries on the next time, and what the user chose is kept.
+const STEP_MS = 400;             // what a step of the build takes at the provider, besides its pause
+async function renderContactsRow() {
+  if ($("settings").classList.contains("hidden")) return;
+  const [built, n] = await Promise.all([contacts.isBuilt().catch(() => true), contacts.count().catch(() => 0)]);
+  const count = `${n.toLocaleString()} contact${n === 1 ? "" : "s"}`;
+  $("ct-count").textContent = built ? `${count}, learned from your message headers.` : `Being built: ${buildProgress() || "about to start"}. ${count} so far.`;
+  $("ct-rebuild").disabled = !built;
+}
+function rebuildTakes() {
+  if (api.LIMITS.scanAfter) return ", a little at a time while you are not using the app";
+  const page = api.LIMITS.scanPage || 100, t = buildTotals();
+  const secs = [t.sent, t.inbox, t.rest].reduce((s, n) => s + Math.ceil(n / page), 0) * (STEP_MS + (api.LIMITS.scanGap || 0)) / 1000;
+  return `, which takes ${secs < 90 ? "about a minute" : `about ${Math.round(secs / 60)} minutes`}`;
+}
+async function rebuildContacts() {
+  if (!confirm(`Rebuild Contacts? The headers of all your mail are read again${rebuildTakes()}. Until that is done the list is incomplete. What you hid, pinned, named and added is kept.`)) return;
+  $("ct-rebuild").disabled = true;
+  try {
+    await contactsRun?.catch(() => {});      // a refresh under way ends first
+    await contacts.unbuild();
+  } catch (e) { handleError(e, "rebuild"); }
+  renderContactsRow();
+  syncContacts();
+}
+
+// ---------- Contacts to a file and from one ----------
+// The sidebar's Contacts row has a menu of its own: Export writes every contact to a text file
+// (contactsfile.js), and the two imports read one back. Import and merge takes what the file says
+// and leaves the rest; Import and replace makes the list what the file says, taking out every
+// contact that is not in it, so it asks first and refuses a file with a line it cannot read, which
+// would take that line's contact out. Both can be undone as one step.
+const IMPORT_MAX = 8 * 1048576;
+async function exportContacts() {
+  try {
+    const rows = await contacts.all(), day = new Date();
+    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`, name = `baltazar-contacts-${date}.txt`;
+    const text = contactsFile.format(rows, { account: $("account").textContent, date, eol: /win/i.test(navigator.platform) ? "\r\n" : "\n" });
+    const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" })), download: name });
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    status(`exported ${rows.length.toLocaleString()} contact${rows.length === 1 ? "" : "s"} to ${name}`);
+  } catch (e) { handleError(e, "export"); }
+}
+function importContacts(replace) {
+  const pick = Object.assign(document.createElement("input"), { type: "file", accept: ".txt,text/plain" });
+  pick.onchange = async () => {
+    const file = pick.files[0]; if (!file) return;
+    const named = noBidi(file.name);
+    try {
+      if (file.size > IMPORT_MAX) { notify(`${named} is too large to be a list of contacts.`, { info: true }); return; }
+      const { entries, errors } = contactsFile.parse(await file.text());
+      const unread = errors.length ? `${plural(errors.length, "line")} could not be read: ${errors.slice(0, 3).map(x => `line ${x.line}, ${x.why}`).join("; ")}${errors.length > 3 ? `; and ${errors.length - 3} more` : ""}.` : "";
+      if (!entries.length) { notify(`No contacts were found in ${named}. ${unread}`.trim(), { info: true }); return; }
+      if (replace && errors.length) { notify(`Contacts were not replaced, since a line that cannot be read would take its contact out: in ${named}, ${unread}`, { info: true }); return; }
+      // a build under way would put back, one by one, what a replacement has just taken out
+      if (replace && !(await contacts.isBuilt())) { notify("Contacts are still being built from your mail; replace them once that is done.", { info: true }); return; }
+      if (replace && !confirm(`Replace Contacts with the ${plural(entries.length, "contact")} in ${named}? Every contact that is not in the file is removed; the mail brings one back when it names it again. Undo (z) puts the list back as it is now.`)) return;
+      const opts = { replace };
+      let done = await contacts.importList(entries, opts);
+      const c = done.counts, said = [[c.removed, "removed"], [c.added, "added"], [c.renamed, "renamed"], [c.pinned, "pinned"], [c.unpinned, "unpinned"], [c.hidden, "hidden"], [c.shown, "unhidden"]].filter(x => x[0]).map(x => `${x[0].toLocaleString()} ${x[1]}`).join(", ");
+      if (done.changed) pushUndo({ label: `${replace ? "replace Contacts with" : "merge"} ${named}`, count: done.changed, undo: () => contacts.undoImport(done.undo), redo: async () => { done = await contacts.importList(entries, opts); } });
+      const what = `${replace ? "replaced Contacts with" : "merged"} ${named}: ${said || "nothing to change, Contacts already say what it says"}`;
+      if (errors.length) notify(`${what[0].toUpperCase()}${what.slice(1)}. ${unread}`, { info: true }); else status(what);
+      if (people.isShown()) people.reload();
+      renderContactsRow();
+    } catch (e) { handleError(e, "import"); }
+  };
+  pick.click();
+}
+$("contacts-link").oncontextmenu = e => {
+  e.preventDefault();
+  openMenu(e.clientX, e.clientY, [["export", "Export...", "", "Write every contact to a text file, a contact a line"], null,
+    ["merge", "Import and merge...", "", "Take the names, pins and hides a file says, and add its new addresses"],
+    ["replace", "Import and replace...", "", "Make the list what a file says: contacts that are not in it are removed"]],
+  a => a === "export" ? exportContacts() : importContacts(a === "replace"));
+};
 
 document.addEventListener("keydown", onKey);
 macLabels();

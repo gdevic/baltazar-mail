@@ -18,7 +18,7 @@ import { noBidi } from "./text.js";
 // and every such book is invalidated, once, the first time the new version opens it:
 //  - a book of a lower version has its build unmarked (the meta store, with the scan's bookmarks,
 //    is emptied), so it is built anew as a first build is, keeping only what the user chose for an
-//    address (hidden, pinned), as every full build does (resetRows);
+//    address (CHOICES), as every full build does (resetRows);
 //  - a book of a higher version, which a newer copy of the extension made, cannot be opened as
 //    this one at all: it is dropped whole, the user's choices with it, and a new one begun.
 // A book of this version is kept as built, however often it is opened.
@@ -90,38 +90,50 @@ export function setOwnAddresses(list) { own = new Set(list.map(e => e.toLowerCas
 
 // Machine senders, recognized from the address alone (no network, no headers):
 //  1. the local part says noreply anywhere, has an unambiguous machine word anywhere
-//     (auto-reply, automated, newsletter, info...), or its first word names a role (news,
-//     receipts, support...)
+//     (auto-reply, automated, newsletter, unsubscribe, info...), or its first word names a
+//     role (news, receipts, support...)
 //  2. the local part is a generated token: 20+ characters with 6+ digits (bounce/VERP ids)
 //  3. the domain is a bulk-mail subdomain (email.x.com, t.x.com, appmail.x.com), a sending
 //     domain (x-mail.com, infos-x.com, xemail.com) or under the .email TLD
-// Only applied to addresses never written to and never copied on mail (see guessed), so a wrong
-// guess costs one unsuggested stranger.
+// Only applied to addresses never written to, and rule 3 only to those never copied on mail (see
+// guessed), so a wrong guess costs one unsuggested stranger.
 const NO_REPLY = /no-?reply|do-?not-?reply|dont-?reply/;
-const MACHINE_WORD = /-(auto-?reply|auto-?responder|automated|newsletters?|mailer-?daemon|notifications?|bounces?|info)\d*(?=-)/;
+const MACHINE_WORD = /-(auto-?reply|auto-?responder|automated|newsletters?|mailer-?daemon|notifications?|bounces?|unsubscribe|info)\d*(?=-)/;
 const ROLE_WORD = /^(bounces?|notifications?|notify|notices?|alerts?|automated|newsletters?|news|marketing|updates?|mailer|mail|sendmail|reply|postmaster|promo(tions?)?|offers?|deals|messages?|messenger|receipts?|transactions?|orders?|invoices?|billing|statements?|accounts?|edelivery|surveys?|websurvey|membership|rewards|tickets?|info|information|sales|support|service|services|hello|team)\d*$/;
 const BULK_LABEL = /mail|^([etom]|em|ma|m\d|msg|txn|news|newsletter|info|infos|update|updates|mkt|marketing|send|bounces?|notify|notifications?|notice|alerts?|reply|promo|offers?|campaign|comms|communications|comunicaciones|messaging|orders?|print)\d*$/;
 const BULK_WORD = /^(e?mails?|info|infos|news|notice|notify|surveys?|alerts?|promo|offers?)$/;
 const SECOND_LEVEL = /^(co|com|net|org|gov|edu|ac|ne|or|go|gob|gen|ltd|plc|nic|mil)$/;
-export function machineAddress(email) {
+// Which part of an address says machine: its local part (rules 1 and 2) or its domain (rule 3).
+function machineParts(email) {
   email = email.toLowerCase();
   const at = email.lastIndexOf("@"), local = email.slice(0, at), labels = email.slice(at + 1).split(".");
   // The registrable domain is two labels, or three under a country's second level (hotmail.co.uk)
   const n = labels.length, sld = n >= 3 && labels[n - 1].length === 2 && SECOND_LEVEL.test(labels[n - 2]) ? 3 : 2;
   const dashed = `-${local.replace(/[._+]/g, "-")}-`;
-  if (NO_REPLY.test(dashed) || MACHINE_WORD.test(dashed) || ROLE_WORD.test(local.split(/[._+-]/)[0])) return true;
-  if (local.length >= 20 && (local.match(/\d/g) || []).length >= 6) return true;
+  const byLocal = NO_REPLY.test(dashed) || MACHINE_WORD.test(dashed) || ROLE_WORD.test(local.split(/[._+-]/)[0]) || (local.length >= 20 && (local.match(/\d/g) || []).length >= 6);
   const name = labels[n - sld] || "";
   const academic = labels[n - 1] === "edu" || labels.includes("ac");  // mail.uni.edu is a person
-  return labels[n - 1] === "email" || (!academic && labels.slice(0, -sld).some(l => BULK_LABEL.test(l))) ||
+  const byDomain = labels[n - 1] === "email" || (!academic && labels.slice(0, -sld).some(l => BULK_LABEL.test(l))) ||
     (name.includes("-") && name.split("-").some(w => BULK_WORD.test(w))) || (name.length > 5 && name.endsWith("email"));
+  return { local: byLocal, domain: byDomain };
 }
+export function machineAddress(email) { const m = machineParts(email); return m.local || m.domain; }
 const machineMemo = new Map();
-const isMachine = email => { let m = machineMemo.get(email); if (m === undefined) machineMemo.set(email, m = machineAddress(email)); return m; };
+const machineOf = email => { let m = machineMemo.get(email); if (m === undefined) machineMemo.set(email, m = machineParts(email)); return m; };
 
-// The guess is not made for an address mail was copied to: whoever wrote that mail named it as one
-// of its readers, which a machine sender is not.
-const guessed = e => !e.copied && isMachine(e.email);
+// What the user chose for an entry, which no mail tells and every build keeps: hidden (true or
+// false; unset while the user has not said), pinned (when), given (the user's own name for it),
+// added (the user put the address in the book, where it stays though no mail names it) and
+// deleted (the user deleted the contact for good: the entry stays stored, so that the address is
+// known to be unwanted whatever mail names it later, and is in no list, count or suggestion).
+const CHOICES = ["hidden", "pinned", "given", "added", "deleted"];
+const chosen = e => e.hidden !== undefined || !!e.pinned || !!e.given || !!e.added || !!e.deleted;
+
+// The guess about an entry. An address named for a role or a machine (info@, noreply@) is one
+// wherever it is seen. A domain that looks like a bulk sender's says nothing of an address mail
+// was copied to: whoever wrote that mail named it as one of its readers, and a person's mailbox
+// at a provider's email. subdomain is the likelier one.
+const guessed = e => { const m = machineOf(e.email); return m.local || (m.domain && !e.copied); };
 
 // hidden: true or false once the user decides; unset, a machine sender never written to is hidden.
 export const isHidden = e => e.hidden ?? (!e.lastSent && guessed(e));
@@ -129,7 +141,8 @@ export const isHidden = e => e.hidden ?? (!e.lastSent && guessed(e));
 // A display name is only as good as whoever wrote it. Names are kept by source, best first: the
 // user's own (recipients of mail they sent), the person's own (the From of mail they sent), and
 // anyone else's (other recipients of received mail, which any sender can label as they like).
-// The shown name is the most frequent of the best source that has one. names holds names recorded
+// The shown name is the most frequent of the best source that has one, unless the user gave the
+// entry a name of their own (given), which is shown before any of them. names holds names recorded
 // before sources were kept, and counts as anyone else's.
 const SOURCES = ["mine", "self", "others"];
 const NAMES_KEPT = 8, NAME_MAX = 100;
@@ -142,6 +155,7 @@ export function noteName(e, raw, source) {
   if (keys.length > NAMES_KEPT) delete m[keys.reduce((lo, k) => m[k] < m[lo] ? k : lo)];
 }
 export function bestName(e) {
+  if (e.given) return e.given;
   for (const s of SOURCES) {
     const m = { ...(s === "others" ? e.names : null), ...e.nameBy?.[s] };
     const top = Object.entries(m).sort((a, b) => b[1] - a[1])[0];
@@ -189,16 +203,17 @@ async function flush(pending) {
 }
 
 // A full build reads every message again, so it starts from nothing: every entry goes, but for the
-// ones the user hid, unhid or pinned, which stay as that choice alone until the build names them.
+// ones the user chose something for (CHOICES), which stay as those choices alone until the build
+// names them.
 function resetRows() {
   return openDb().then(d => new Promise((ok, no) => {
     const t = d.transaction(STORE, "readwrite");
     t.objectStore(STORE).openCursor().onsuccess = e => {
       const c = e.target.result; if (!c) return;
       const r = c.value, kept = { email: r.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false };
-      if (r.hidden !== undefined) kept.hidden = r.hidden;
-      if (r.pinned) kept.pinned = r.pinned;
-      if ("hidden" in kept || kept.pinned) c.update(kept); else c.delete();
+      for (const k of CHOICES) if (r[k] !== undefined) kept[k] = r[k];
+      kept.name = bestName(kept);
+      if (chosen(kept)) c.update(kept); else c.delete();
       c.continue();
     };
     t.oncomplete = () => { cache = null; changed(); ok(); };
@@ -341,14 +356,15 @@ function score(e, now) {
   return fade(e.last) + (e.lastSent ? 0.5 + 2 * fade(e.lastSent) : 0) - (e.hidden === undefined && guessed(e) ? 1e6 : 0);
 }
 
-// An entry as the Contacts view lists it: pinned is when the user pinned it (0: not pinned), and
-// copied whether mail was copied to it.
-const row = e => ({ name: e.name || "", email: e.email, last: e.last || 0, lastSent: e.lastSent || 0, hidden: isHidden(e), pinned: e.pinned || 0, copied: !!e.copied });
+// An entry as the Contacts view lists it: pinned is when the user pinned it (0: not pinned),
+// copied whether mail was copied to it, given the user's own name for it ("": none, and name is
+// the one the mail gives), and added whether the user put it in the book.
+const row = e => ({ name: e.name || "", email: e.email, last: e.last || 0, lastSent: e.lastSent || 0, hidden: isHidden(e), pinned: e.pinned || 0, copied: !!e.copied, given: e.given || "", added: !!e.added });
 
-// Every entry, for the Contacts view.
+// Every contact, for the Contacts view: every entry the user has not deleted.
 export async function all() {
   await loadAll();
-  return [...cache.values()].map(row);
+  return [...cache.values()].filter(e => !e.deleted).map(row);
 }
 
 // Contacts lists every entry in one of three piles: "hidden" (never suggested: what the user hid,
@@ -385,28 +401,36 @@ export async function pinMany(emails, pinned = true) {
   const at = Math.floor(Date.now() / 1000);
   await setFlags(emails, e => { if (!pinned) delete e.pinned; else if (!isHidden(e)) e.pinned ||= at; });
 }
-// The user's choices about entries as they are stored (hidden: true, false, or undefined while
-// the user has not said; pinned: when, or undefined), and the same put back (undo).
+// The user's own name for an entry; "" takes it back, and the name the mail gives shows again.
+export async function rename(email, name) {
+  const given = noBidi(name).trim().slice(0, NAME_MAX);
+  await setFlags([email], e => { if (given) e.given = given; else delete e.given; e.name = bestName(e); });
+}
+// Contacts deleted for good: out of every list, and kept out whatever mail names them later, a
+// rebuild included. Importing a file that lists one brings it back (planImport), as undo does.
+export async function deleteMany(emails) { await setFlags(emails, e => { e.deleted = true; }); }
+// The user's choices about entries as they are stored (CHOICES, each undefined while the user has
+// not said), and the same put back (undo).
 export async function choices(emails) {
   const c = await loadAll();
-  return emails.map(x => c.get(String(x).toLowerCase())).filter(Boolean).map(e => ({ email: e.email, hidden: e.hidden, pinned: e.pinned }));
+  return emails.map(x => c.get(String(x).toLowerCase())).filter(Boolean).map(e => ({ email: e.email, ...Object.fromEntries(CHOICES.map(k => [k, e[k]])) }));
 }
 export async function restoreChoices(list) {
   const was = new Map(list.map(x => [x.email, x]));
-  await setFlags([...was.keys()], e => { for (const k of ["hidden", "pinned"]) if (was.get(e.email)[k] === undefined) delete e[k]; else e[k] = was.get(e.email)[k]; });
+  await setFlags([...was.keys()], e => { for (const k of CHOICES) if (was.get(e.email)[k] === undefined) delete e[k]; else e[k] = was.get(e.email)[k]; e.name = bestName(e); });
 }
 
-// Entries with no mail left are forgotten: all of emails but the ones the user pinned or hid, and
-// the ones mail was copied to. That no mail is left is a search's word, and a search cannot be
-// relied on for every message an address was copied on (Yahoo's finds none it was a Bcc of), so
-// for such an address it proves nothing. Gives the rows taken out, as they were stored.
+// Entries with no mail left are forgotten: all of emails but the ones the user pinned, hid, named,
+// added or deleted (whose entry is what keeps them out), and the ones mail was copied to. That no mail is left is a search's word, and a search
+// cannot be relied on for every message an address was copied on (Yahoo's finds none it was a Bcc
+// of), so for such an address it proves nothing. Gives the rows taken out, as they were stored.
 export function forget(emails) {
   const keys = emails.map(x => String(x).toLowerCase());
   return openDb().then(d => new Promise((ok, no) => {
     const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE), out = [];
     for (const k of keys) {
       const r = s.get(k);
-      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && !e.copied && e.hidden !== true) { s.delete(k); out.push(e); } };
+      r.onsuccess = () => { const e = r.result; if (e && !e.pinned && !e.copied && e.hidden !== true && !e.given && !e.added && !e.deleted) { s.delete(k); out.push(e); } };
     }
     t.oncomplete = () => { for (const row of out) cache?.delete(row.email); changed(); ok(out); };
     t.onerror = () => no(t.error);
@@ -437,13 +461,106 @@ export async function wrote(email, messages) {
   return true;
 }
 
+// The build unmarked, as a book of a lower version has it when it is opened (see DB_VERSION): the
+// next sync builds the book anew from the mail, as a first build is, keeping what the user chose.
+// The account the book belongs to stays noted.
+export async function unbuild() {
+  const who = await getMeta("account");
+  await tx(META, "readwrite", s => { s.clear(); if (who) s.put({ key: "account", value: who }); });
+}
+
+// What an import makes of the book. rows: the stored entries, by address; entries: the contacts a
+// file names ({ email, name, pinned, hidden }, see contactsfile.js).
+// Merging takes what the file says and leaves the rest: a name that is not the one shown becomes
+// the user's own name for the contact, the word pinned pins it and hidden hides it, and an address
+// the book lacks is added.
+// Replacing makes the book what the file says: a name is the user's own where the mail does not
+// give it, and the user's own name goes where the file has none; a contact is pinned or hidden
+// exactly when its line says so, the pinned ones in the order of their lines; and every contact the
+// file does not list is taken out.
+// An entry is written only where the file differs from it, so a file exported and imported
+// unchanged changes nothing. Gives { put: the entries to store, drop: the addresses to take out,
+// counts: { added, renamed, pinned, unpinned, hidden, shown, removed } }.
+export function planImport(rows, entries, { replace = false, now = Math.floor(Date.now() / 1000) } = {}) {
+  const put = [], listed = new Set(), counts = { added: 0, renamed: 0, pinned: 0, unpinned: 0, hidden: 0, shown: 0, removed: 0 };
+  const mine = entries.filter(x => !own.has(x.email));
+  // replacing puts the pins in the file's order, unless they are in it already
+  const pins = mine.filter(x => x.pinned).map(x => rows.get(x.email)?.pinned || 0);
+  const reorder = replace && pins.some((p, i) => !p || (i && p <= pins[i - 1]));
+  let pin = 0;
+  for (const x of mine) {
+    listed.add(x.email);
+    // a contact the user deleted is one the book lacks: its line adds it again
+    const stored = rows.get(x.email), was = stored?.deleted ? null : stored;
+    const e = stored ? structuredClone(stored) : { email: x.email, name: "", nameBy: {}, last: 0, lastSent: 0, copied: false, added: true };
+    if (stored?.deleted) { delete e.deleted; e.added = true; }
+    if (replace) { const learned = bestName({ ...e, given: "" }); if (x.name && x.name !== learned) e.given = x.name; else delete e.given; }
+    else if (x.name && x.name !== bestName(e)) e.given = x.name;
+    // hidden and shown are written as a choice only where the guess about the address says otherwise
+    const guess = isHidden({ ...e, hidden: undefined });
+    const set = hidden => { if (hidden === guess) delete e.hidden; else e.hidden = hidden; };
+    if (x.hidden) { set(true); delete e.pinned; }
+    else if (x.pinned) { set(false); if (reorder || !e.pinned) e.pinned = now + pin; pin++; }
+    else if (replace) { set(false); delete e.pinned; }
+    e.name = bestName(e);
+    const a = { name: e.name, pinned: !!e.pinned, hidden: isHidden(e) }, b = was && { name: bestName(was), pinned: !!was.pinned, hidden: isHidden(was) };
+    if (!was) counts.added++;
+    else {
+      if (a.name !== b.name) counts.renamed++;
+      if (a.pinned !== b.pinned) counts[a.pinned ? "pinned" : "unpinned"]++;
+      if (a.hidden !== b.hidden) counts[a.hidden ? "hidden" : "shown"]++;
+    }
+    if (!was || CHOICES.some(k => e[k] !== was[k])) put.push(e);
+  }
+  // what the user deleted is in no list to be taken out of, and stays known as unwanted
+  const drop = replace ? [...rows.keys()].filter(k => !listed.has(k) && !rows.get(k).deleted) : [];
+  counts.removed = drop.length;
+  return { put, drop, counts };
+}
+
+// Entries stored and addresses taken out in one go.
+const write = (put, drop) => openDb().then(d => new Promise((ok, no) => {
+  const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE);
+  for (const e of put) s.put(e);
+  for (const k of drop) s.delete(k);
+  t.oncomplete = () => { for (const e of put) cache?.set(e.email, e); for (const k of drop) cache?.delete(k); changed(); ok(); };
+  t.onerror = () => no(t.error);
+}));
+
+// An import carried out (see planImport). Gives its counts, how many entries it changed, and
+// undo: what undoImport takes to put the book back as it was.
+export async function importList(entries, opts = {}) {
+  const c = await loadAll(), plan = planImport(c, entries, opts);
+  const before = [...plan.put.map(e => c.get(e.email)), ...plan.drop.map(k => c.get(k))].filter(Boolean).map(e => structuredClone(e));
+  const created = plan.put.filter(e => !c.has(e.email)).map(e => e.email);
+  await write(plan.put, plan.drop);
+  return { counts: plan.counts, changed: plan.put.length + plan.drop.length, undo: { before, created } };
+}
+// An import taken back: the entries it added go, the ones it took out come back as they were, and
+// the ones it changed get back what the user had chosen for them, keeping what the mail has taught
+// about them since.
+export const undoImport = undo => openDb().then(d => new Promise((ok, no) => {
+  const t = d.transaction(STORE, "readwrite"), s = t.objectStore(STORE), out = [];
+  for (const was of undo.before) {
+    const r = s.get(was.email);
+    r.onsuccess = () => {
+      const e = r.result || was;
+      if (r.result) { for (const k of CHOICES) if (was[k] === undefined) delete e[k]; else e[k] = was[k]; e.name = bestName(e); }
+      s.put(e); out.push(e);
+    };
+  }
+  for (const k of undo.created) s.delete(k);
+  t.oncomplete = () => { for (const e of out) cache?.set(e.email, e); for (const k of undo.created) cache?.delete(k); changed(); ok(); };
+  t.onerror = () => no(t.error);
+}));
+
 export async function suggest(query, limit = 8, exclude = new Set()) {
   await loadAll();
   const q = (query || "").trim().toLowerCase();
   const now = Math.floor(Date.now() / 1000);
   const rows = [];
   for (const e of cache.values()) {
-    if (exclude.has(e.email) || isHidden(e)) continue;
+    if (exclude.has(e.email) || e.deleted || isHidden(e)) continue;
     if (q) {
       const name = e.name.toLowerCase();
       const words = name.split(/\s+/);
@@ -456,10 +573,11 @@ export async function suggest(query, limit = 8, exclude = new Set()) {
   return rows.slice(0, limit).map(e => ({ name: e.name, email: e.email }));
 }
 
-export async function count() { await loadAll(); return cache.size; }
+// How many contacts there are, and one of them by its address: neither knows of a deleted one.
+export async function count() { await loadAll(); return [...cache.values()].filter(e => !e.deleted).length; }
 
 export async function lookup(email) {
   await loadAll();
   const e = cache.get(String(email || "").toLowerCase());
-  return e ? row(e) : null;
+  return e && !e.deleted ? row(e) : null;
 }

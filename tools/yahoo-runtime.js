@@ -920,7 +920,7 @@ const { launch } = require("./harness");
     expect(ab.cursor.row === ab.cursor.someone && ab.cursor.page === ab.cursor.someone && ab.cursor.focus === "p-filter" && ab.recent.rows >= 1 && ab.recent.arrows === ab.recent.rows && ab.recent.head === "Recent messages",
       "the arrows move the cursor from the filter box and the person's page follows, with their mail: " + JSON.stringify([ab.cursor, ab.recent]));
     expect(ab.kept.on === "others" && ab.kept.filter === ab.cursor.someone && ab.kept.row === ab.cursor.someone && ab.kept.page === ab.cursor.someone && ab.kept.focus === "p-filter", "Contacts is come back to as it was left: " + JSON.stringify(ab.kept));
-    expect(ab.filterCleared === "" && ab.stillOpen === 1 && ab.selected === `${n.others} contacts selected` && ab.groupButtons === "Write to all|Mail from any|Mail to any|Copy addresses|Pin|Hide|Clear selection" &&
+    expect(ab.filterCleared === "" && ab.stillOpen === 1 && ab.selected === `${n.others} contacts selected` && ab.groupButtons === "Write to all|Mail from any|Mail to any|Copy addresses|Pin|Hide|Delete|Clear selection" &&
       ab.hid.tabs.others === 0 && ab.hid.tabs.hidden === n.hidden + n.others && ab.hid.empty === 1 && ab.hid.undo === `Undo: hide ${n.others} contacts (z)` && same(ab.undone, n),
       "Ctrl+A selects the whole tab, Hide moves it to Hidden, and z takes that back: " + JSON.stringify(ab));
     expect(ab.eye.tabs.hidden === n.hidden + 1 && ab.eye.listed === 1 && ab.eye.noPin === 1 && same(ab.eye.back, n), "the eye on a row hides it, and unhides it under Hidden, where it has no pin: " + JSON.stringify(ab.eye));

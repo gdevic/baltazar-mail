@@ -157,11 +157,11 @@ body.dragging iframe { pointer-events: none; }
 .row .sb { color: var(--fg); }
 .row .sb em { font-style: normal; color: var(--fg2); font-size: calc(11 * var(--fu)); margin-left: 6px; }
 /* the clickable area reaches half the icon's width past each side, and the row's full height */
-.row .tr { display: flex; align-items: center; align-self: stretch; padding: 0 calc(6.5 * var(--fu)); visibility: hidden; color: var(--fg3); cursor: pointer; }
-.row .tr svg { width: calc(13 * var(--fu)); height: calc(13 * var(--fu)); }
-.row .tr path { stroke-width: 1.4; }
-.row:hover .tr, .row.sel .tr, .row.marked .tr { visibility: visible; }
-.row .tr:hover { color: var(--accent); }
+.row .tr, .prow .tr { display: flex; align-items: center; align-self: stretch; padding: 0 calc(6.5 * var(--fu)); visibility: hidden; color: var(--fg3); cursor: pointer; }
+.row .tr svg, .prow .tr svg { width: calc(13 * var(--fu)); height: calc(13 * var(--fu)); }
+.row .tr path, .prow .tr path { stroke-width: 1.4; }
+.row:hover .tr, .row.sel .tr, .row.marked .tr, .prow:hover .tr, .prow.sel .tr, .prow.marked .tr { visibility: visible; }
+.row .tr:hover, .prow .tr:hover { color: var(--accent); }
 .row .dt { display: flex; align-items: center; justify-content: flex-end; align-self: stretch; gap: calc(5.5 * var(--fu)); color: var(--fg3); font-family: var(--mono); font-size: calc(11 * var(--fu)); }
 .row.unread .fr, .row.unread .sb { color: var(--unread); font-weight: 600; }
 .row .sb mark { background: none; color: var(--accent); }
@@ -206,7 +206,7 @@ body.dragging iframe { pointer-events: none; }
 #p-filter { flex: 1 1 100%; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; font: inherit; }
 #p-filter:focus { outline: none; border-color: var(--sel-line); }
 #p-rule { flex: 1 1 100%; color: var(--fg3); font-size: calc(11 * var(--fu)); }
-.prow { display: grid; grid-template-columns: calc(14 * var(--fu)) minmax(0, 2fr) minmax(0, 3fr) calc(76 * var(--fu)) calc(18 * var(--fu)); gap: 8px; align-items: center; padding: 0 8px; white-space: nowrap; }
+.prow { display: grid; grid-template-columns: calc(14 * var(--fu)) minmax(0, 2fr) minmax(0, 3fr) calc(99 * var(--fu)) calc(18 * var(--fu)); gap: 8px; align-items: center; padding: 0 8px; white-space: nowrap; }
 /* A choice among a few, as buttons side by side */
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; flex: none; }
 .seg button { background: var(--bg); color: var(--fg2); border: 0; border-radius: 0; padding: 1px 9px; font: inherit; font-size: calc(12 * var(--fu)); cursor: pointer; }
@@ -228,7 +228,8 @@ body.dragging iframe { pointer-events: none; }
 .prow .pk svg { width: calc(12 * var(--fu)); height: calc(12 * var(--fu)); }
 .prow .pn { color: var(--fg); }
 .prow .pm { color: var(--fg2); }
-.prow .dt { color: var(--fg3); font-family: var(--mono); font-size: calc(11 * var(--fu)); text-align: right; }
+/* the date with the trash bin before it, laid out as a message row's */
+.prow .dt { display: flex; align-items: center; justify-content: flex-end; align-self: stretch; gap: calc(5.5 * var(--fu)); color: var(--fg3); font-family: var(--mono); font-size: calc(11 * var(--fu)); }
 /* the eye hides its row, or unhides it in Hidden, where it is always shown */
 .prow .pe { display: flex; align-items: center; justify-content: center; align-self: stretch; visibility: hidden; color: var(--fg3); }
 .prow:hover .pe, .prow.sel .pe, .prow.off .pe { visibility: visible; }
@@ -240,6 +241,7 @@ body.dragging iframe { pointer-events: none; }
 .p-none { margin: auto; max-width: 440px; padding: 24px; text-align: center; color: var(--fg3); }
 .p-card { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 10px; border-bottom: 1px solid var(--line); background: var(--bg2); }
 .p-name { font-size: calc(16 * var(--fu)); font-weight: 600; color: var(--unread); overflow-wrap: anywhere; }
+input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px); margin: -3px -5px; padding: 2px 4px; border: 1px solid var(--accent); border-radius: 3px; background: var(--bg); font-family: inherit; outline: none; }
 .p-mail { color: var(--fg2); overflow-wrap: anywhere; }
 .p-stats, .p-also { color: var(--fg3); font-size: calc(12 * var(--fu)); }
 .p-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
