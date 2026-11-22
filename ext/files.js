@@ -6,8 +6,10 @@
 // PAGE messages at a time. List rows already name each message's files, so no message is fetched
 // to build the list; a file's bytes are fetched only to preview or save it, and selecting a file
 // shows the message it came with in the reader.
+// Files are selected for a ZIP download as messages are in their list (Ctrl-click, Shift-click, x,
+// Ctrl+A for every file listed so far), and kept by key while the list is loaded again or longer.
 
-import { tile, sizeStr, open as preview, download } from "./viewer.js";
+import { tile, sizeStr, open as preview, download, downloadZip } from "./viewer.js";
 import { esc, noBidi, plural } from "./text.js";
 import { norm } from "./mime.js";
 
@@ -16,6 +18,7 @@ const PAGE = 100;
 const KEY = "folderFiles";
 // "2 attachments", or "100+ attachments" while more pages remain
 const counted = () => `${st.items.length}${st.more ? "+" : ""} attachment${st.items.length === 1 && !st.more ? "" : "s"}`;
+const countText = () => counted() + (st.marked.size ? ` · ${st.marked.size} selected` : "");
 
 // ---------- what is listed ----------
 // Images built into a message's text (disposition inline) are not files, and neither is a picture
@@ -75,7 +78,8 @@ export function clear() { mine = {}; return store(); }
 //   subfolder a row is in, or "", date(epoch), openRow(row, how), isOpen(msgId) -> whether the
 //   reader shows that message, menu(x, y, items, onPick), goTo(row), status(msg, ms), fail(e) }
 let hooks = null;
-const st = { folderId: null, items: [], rows: 0, more: false, loading: false, failed: false, token: 0, selected: -1, seen: new Map(), shown: false };
+// selected: the cursor's entry; marked: the keys of the selected entries; anchor: where a Shift-click range starts
+const st = { folderId: null, items: [], rows: 0, more: false, loading: false, failed: false, token: 0, selected: -1, marked: new Set(), anchor: -1, seen: new Map(), shown: false };
 const memory = new Map();        // folder id -> key of the entry last selected there, this session
 
 export function init(h) {
@@ -84,9 +88,24 @@ export function init(h) {
   $("f-more-btn").onclick = () => load("more");
   const rows = $("f-rows");
   const at = e => { const el = e.target.closest(".frow"); return el ? Number(el.dataset.i) : -1; };
-  rows.onclick = e => { const i = at(e); if (i >= 0) (e.target.closest(".ft") ? previewAt : pick)(i); };
-  rows.ondblclick = e => { const i = at(e); if (i >= 0 && !e.target.closest(".ft")) previewAt(i); };
-  rows.oncontextmenu = e => { const i = at(e); if (i < 0) return; e.preventDefault(); select(i); rowMenu(e.clientX, e.clientY); };
+  rows.onclick = e => {
+    const i = at(e); if (i < 0) return;
+    if (e.shiftKey) { markRange(st.anchor < 0 ? i : st.anchor, i); select(i, false); return; }
+    // Ctrl/⌘-click adds an entry to the selection, which starts with the cursor's entry
+    if (e.ctrlKey || e.metaKey) {
+      if (!st.marked.size && st.selected >= 0 && st.selected !== i) mark(st.selected);
+      mark(i); select(i); return;
+    }
+    clearMarks();
+    (e.target.closest(".ft") ? previewAt : pick)(i);
+  };
+  rows.ondblclick = e => { const i = at(e); if (i >= 0 && !e.target.closest(".ft") && !e.shiftKey && !e.ctrlKey && !e.metaKey) previewAt(i); };
+  rows.oncontextmenu = e => {
+    const i = at(e); if (i < 0) return;
+    e.preventDefault();
+    if (!st.marked.has(st.items[i].key)) clearMarks();
+    select(i, false); rowMenu(e.clientX, e.clientY);
+  };
 }
 
 // The folders the list covers, to refresh it when one of them changes.
@@ -118,7 +137,7 @@ async function load(mode, told = mode !== "reload") {
   const count = mode === "reload" ? Math.max(PAGE, st.rows) : PAGE, offset = mode === "more" ? st.rows : 0;
   const keep = mode === "reload" ? st.items[st.selected]?.key : mode === "fresh" ? memory.get(id) : null;
   st.loading = true;
-  if (mode === "fresh") { st.items = []; st.rows = 0; st.more = false; st.selected = -1; render(); }
+  if (mode === "fresh") { st.items = []; st.rows = 0; st.more = false; st.selected = st.anchor = -1; st.marked.clear(); render(); }
   if (told) hooks.status(mode === "more" ? "loading more attachments..." : "loading attachments...");
   let r;
   try { r = await hooks.search(sc.ids, count, offset); } catch (e) {
@@ -133,7 +152,8 @@ async function load(mode, told = mode !== "reload") {
   if (mode === "more") { st.items = st.items.concat(filesOf(rows, { seen: st.seen, listed: hooks.listed })); st.rows += rows.length; }
   else { st.seen = new Map(); st.items = filesOf(rows, { seen: st.seen, listed: hooks.listed }); st.rows = rows.length; }
   st.more = rows.length >= count;
-  if (keep) st.selected = st.items.findIndex(x => x.key === keep);
+  if (keep) st.selected = st.anchor = st.items.findIndex(x => x.key === keep);
+  if (st.marked.size) { const keys = new Set(st.items.map(x => x.key)); for (const k of [...st.marked]) if (!keys.has(k)) st.marked.delete(k); }
   render();
   if (mode === "fresh" && st.selected >= 0) hooks.openRow(st.items[st.selected].row, "auto");
   if (told) hooks.status(`${sc.name}: ${counted()} from ${plural(new Set(st.items.map(x => x.msgId)).size, "message")}`, r.ms);
@@ -144,7 +164,7 @@ function render() {
   const name = noBidi(sc?.full || "");
   $("f-title").textContent = `Attachments in ${noBidi(sc?.name || "")}`;
   $("f-title").title = `Attachments in the mail of ${name}${withSubs(st.folderId) && sc?.subs ? ` and its ${plural(sc.subs, "subfolder")}` : ""}; Esc goes back to its messages`;
-  $("f-count").textContent = (st.loading || st.failed) && !st.items.length ? "" : counted();
+  $("f-count").textContent = (st.loading || st.failed) && !st.items.length ? "" : countText();
   $("f-subs").classList.toggle("hidden", !sc?.subs);
   $("f-subs-box").checked = withSubs(st.folderId);
   $("f-subs").title = `List the attachments of its ${plural(sc?.subs || 0, "subfolder")} too; the folder keeps this choice`;
@@ -169,7 +189,8 @@ function rowHtml(a, i) {
   const subject = noBidi(a.row.headers?.subject || "(no subject)").replace(/\^_/g, "");
   const tip = [name, `${person ? `From ${person}: ` : ""}${subject}`, ...(a.copies > 1 ? [`Also in ${plural(a.copies - 1, "older message")}`] : []), "Click to see its message; click its badge, press Enter or double-click to open the attachment as well"].map(noBidi).join("\n");
   const label = [name, t.text, a.size ? sizeStr(a.size) : "", person, date, where ? `in ${where}` : ""].filter(Boolean).join(", ");
-  return `<div class="frow${i === st.selected ? " sel" : ""}" id="frow-${i}" data-i="${i}" role="option" aria-selected="${i === st.selected}" aria-label="${esc(label)}" title="${esc(tip)}">` +
+  const marked = st.marked.has(a.key);
+  return `<div class="frow${i === st.selected ? " sel" : ""}${marked ? " marked" : ""}" id="frow-${i}" data-i="${i}" role="option" aria-selected="${st.marked.size ? marked : i === st.selected}" aria-label="${esc(label)}" title="${esc(tip)}">` +
     `<span class="ft ${t.cls}" title="${esc(`${noBidi(name)}\nClick to open the attachment and show its message (Enter)`)}">${esc(t.text)}</span>` +
     `<span class="fn">${esc(name)}${where ? `<em>${esc(where)}</em>` : ""}</span>` +
     `<span class="fw">${esc(person)}</span>` +
@@ -182,15 +203,52 @@ function syncAria() {
   else $("list").removeAttribute("aria-activedescendant");
 }
 
-function select(i) {
+function select(i, resetAnchor = true) {
   if (i < 0 || i >= st.items.length) return;
   $(`frow-${st.selected}`)?.classList.remove("sel");
-  $(`frow-${st.selected}`)?.setAttribute("aria-selected", "false");
   st.selected = i;
+  if (resetAnchor) st.anchor = i;
   memory.set(st.folderId, st.items[i].key);
   const el = $(`frow-${i}`);
-  if (el) { el.classList.add("sel"); el.setAttribute("aria-selected", "true"); el.scrollIntoView({ block: "nearest" }); }
+  if (el) { el.classList.add("sel"); el.scrollIntoView({ block: "nearest" }); }
+  paint();
+}
+
+// The rows as the selection has them: what is selected is the marked entries, or the cursor's
+// entry when none is marked.
+function paint() {
+  for (const el of $("f-rows").querySelectorAll(".frow")) {
+    const i = Number(el.dataset.i), on = st.marked.has(st.items[i]?.key);
+    el.classList.toggle("marked", on);
+    el.setAttribute("aria-selected", String(st.marked.size ? on : i === st.selected));
+  }
+  if (st.items.length) $("f-count").textContent = countText();
   syncAria();
+}
+function mark(i) {
+  const key = st.items[i]?.key; if (!key) return;
+  if (st.marked.has(key)) st.marked.delete(key); else st.marked.add(key);
+  st.anchor = i;
+  paint();
+}
+function markRange(a, b) {
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  for (let i = Math.max(0, lo); i <= Math.min(st.items.length - 1, hi); i++) st.marked.add(st.items[i].key);
+  paint();
+}
+// Esc: true when there was a selection to clear.
+export function clearMarks() {
+  if (!st.shown || !st.marked.size) return false;
+  st.marked.clear();
+  paint();
+  return true;
+}
+// Ctrl+A: every entry listed so far.
+export function markAll() {
+  if (!st.shown || !st.items.length) return;
+  for (const a of st.items) st.marked.add(a.key);
+  paint();
+  hooks.status(`${plural(st.marked.size, "attachment")} selected`);
 }
 
 // A click selects a file and shows its message in the reader; a click on its type badge, Enter or
@@ -208,13 +266,25 @@ function previewAt(i) {
   preview(st.items, i);
 }
 
+// Download all is every entry listed so far, and Download selected the marked ones when they are
+// some but not all; both save one ZIP file named after the folder.
 function rowMenu(x, y) {
   const a = st.items[st.selected]; if (!a) return;
-  hooks.menu(x, y, [["preview", "Preview", "Enter"], ["download", "Download"], null, ["message", "Show the message in its folder"]], act => {
+  const n = st.items.length, k = st.marked.size;
+  hooks.menu(x, y, [["preview", "Preview", "Enter"], ["download", "Download"],
+    ["all", "Download all", "", n > 1 ? `${st.more ? "The attachments listed so far, in" : "In"} one ZIP file` : ""],
+    ...(k && k < n ? [["marked", `Download selected (${k})`, "", k > 1 ? "In one ZIP file" : ""]] : []),
+    null, ["message", "Show the message in its folder"]], act => {
     if (act === "preview") previewAt(st.selected);
     else if (act === "download") download(a);
+    else if (act === "all") zip(st.items);
+    else if (act === "marked") zip(st.items.filter(x => st.marked.has(x.key)));
     else if (act === "message") hooks.goTo(a.row);
   });
+}
+function zip(list) {
+  const sc = hooks.scope(st.folderId, withSubs(st.folderId));
+  downloadZip(list.map(a => ({ ...a, date: a.row.headers?.date })), `${sc?.name || "Folder"} attachments`);
 }
 
 // Keys for the list while it is shown; true when the key was the list's.
@@ -226,6 +296,7 @@ export function onKey(e) {
     case "Home": e.preventDefault(); select(0); return true;
     case "End": e.preventDefault(); select(st.items.length - 1); return true;
     case "Enter": case "o": previewAt(st.selected); return true;
+    case "x": if (st.selected >= 0) mark(st.selected); return true;
     case "n": load("more"); return true;
     case "R": reload(true); return true;
   }

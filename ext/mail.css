@@ -116,7 +116,7 @@ body.dragging iframe { pointer-events: none; }
 #rows > .list-empty, #f-rows > .list-empty, #p-rows > .list-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--fg3); }
 #rows > .list-empty .sub, #f-rows > .list-empty .sub, #p-rows > .list-empty .sub { font-size: calc(11 * var(--fu)); }
 /* Selected rows are a lighter wash with a focus-coloured bar; the cursor row is solid with the accent bar. */
-.row.marked, .prow.marked { background: color-mix(in srgb, var(--sel) 55%, var(--bg)); box-shadow: inset 3px 0 var(--sel-line); }
+.row.marked, .prow.marked, .frow.marked { background: color-mix(in srgb, var(--sel) 55%, var(--bg)); box-shadow: inset 3px 0 var(--sel-line); }
 
 .row.dragging { opacity: .5; }
 .folder.drop { background: var(--sel); box-shadow: inset 0 0 0 1px var(--sel-line); }
@@ -468,6 +468,7 @@ input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px);
 #r-attach .att-head b { color: var(--fg2); font-weight: 600; font-size: calc(12 * var(--fu)); }
 .att-card { flex: none; display: flex; align-items: center; gap: 8px; width: 210px; padding: 4px; text-decoration: none; color: var(--fg2); border: 1px solid var(--line); border-radius: 4px; background: var(--bg); cursor: pointer; }
 .att-card:hover { border-color: var(--sel-line); background: var(--bg3); }
+.att-card.marked { border-color: var(--sel-line); background: color-mix(in srgb, var(--sel) 55%, var(--bg)); box-shadow: inset 3px 0 var(--sel-line); }
 .att-thumb { flex: none; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 3px; overflow: hidden; font: 700 10px var(--mono); color: #fff; }
 .att-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .att-info { min-width: 0; display: flex; flex-direction: column; }
@@ -523,7 +524,7 @@ input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px);
    marks and the active folder are drawn; there they are outlines in the system's highlight colour. */
 @media (forced-colors: active) {
   .row.marked, .folder.drop, #ctx div:hover:not(.off), #move-list div.kb, #move-list div:hover,
-  #c-suggest div.kb, #c-suggest div:hover, #search-suggest div.kb, #search-suggest div:hover, .seg button.on, .prow.marked { outline: 1px dashed Highlight; outline-offset: -2px; }
+  #c-suggest div.kb, #c-suggest div:hover, #search-suggest div.kb, #search-suggest div:hover, .seg button.on, .prow.marked, .frow.marked, .att-card.marked { outline: 1px dashed Highlight; outline-offset: -2px; }
   .row.sel, .frow.sel, .prow.sel, .folder.active, .side-link.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .row:hover:not(.sel), .frow:hover:not(.sel), .prow:hover:not(.sel), .folder:hover:not(.active), .side-link:hover:not(.active) { outline: 1px dotted CanvasText; outline-offset: -2px; }
   #notice { border: 2px solid CanvasText; }

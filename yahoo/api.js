@@ -32,7 +32,9 @@ export const IMAGE_SRC = "https://*.yusercontent.com";
 // scanGap: the pause (ms) between its steps. The first build reads the whole mailbox, a few
 // hundred requests one after another, and Yahoo names no limit for them: the pause keeps the
 // build to less than a request a second, the pace of someone paging through folders.
-export const LIMITS = { messageBytes: 25 * 1048576, scanMax: Infinity, scanGap: 1000 };
+// fetchGap: the pause (ms) between the messages whose attachments go into one ZIP file, each a
+// fetch of the message's whole source.
+export const LIMITS = { messageBytes: 25 * 1048576, scanMax: Infinity, scanGap: 1000, fetchGap: 100 };
 
 // An image still addressed to Yahoo's mail hosts (a part that could not be inlined) would show
 // recipients the mailbox id and could not load for them anyway; outgoing mail and print drop it.

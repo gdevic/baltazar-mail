@@ -59,7 +59,7 @@
     <div id="more" class="hidden"><button id="more-btn">Load more</button></div>
     <div id="files-pane">
       <div id="f-head"><span id="f-title"></span><span id="f-count"></span><label id="f-subs" class="hidden"><input type="checkbox" id="f-subs-box"> Subfolders</label></div>
-      <div id="f-rows" role="listbox"></div>
+      <div id="f-rows" role="listbox" aria-multiselectable="true"></div>
       <div id="f-more" class="hidden"><button id="f-more-btn">Load more</button></div>
     </div>
     <div id="people-pane">
@@ -250,7 +250,7 @@
       <tr><td>r / a / f</td><td>reply / reply all / forward the open message</td></tr>
       <tr><td>Ctrl+Enter</td><td>send (held for the undo-send delay; z cancels)</td></tr>
       <tr><td>Ctrl+S</td><td>save the message being written as a draft (it is also saved by itself)</td></tr>
-      <tr><td>Esc</td><td>close the composer (its draft is kept), the viewer, a dialog, menu or card; clear the search, then the selection; leave a folder's attachments for its messages, and Contacts for where it was opened</td></tr>
+      <tr><td>Esc</td><td>close the composer (its draft is kept), the viewer, a dialog, menu or card; stop a ZIP download; clear the search, then the selection; leave a folder's attachments for its messages, and Contacts for where it was opened</td></tr>
       <tr><td>Enter, Tab, comma</td><td>in To / Cc / Bcc: complete the address (↓ / ↑ pick a suggestion; Backspace in an empty field removes the last one)</td></tr>
       <tr><td>Del, Backspace</td><td>in the message being written: remove the selected inline picture</td></tr>
       <tr><td>/</td><td>search (Esc clears). A name typed there offers the people it could mean: ↓ / ↑ and Enter, or Tab for the first, pick one; Enter alone searches for what was typed</td></tr>
@@ -262,7 +262,7 @@
       <tr><td>/ then Shift+Enter</td><td>Search all mail</td></tr>
       <tr><td colspan="2" class="help-sub">Search syntax: click <b>?</b> at the right end of the search box.</td></tr>
       <tr><td>g f</td><td>focus folder list (type to filter, Enter to open)</td></tr>
-      <tr><td>x</td><td>select / deselect message (Ctrl-click, Shift-click for ranges)</td></tr>
+      <tr><td>x</td><td>select / deselect message (Ctrl-click, Shift-click for ranges); in a folder's attachments, the attachment</td></tr>
       <tr><td>Ctrl+A</td><td>select all loaded</td></tr>
       <tr><td>e</td><td>archive</td></tr>
       <tr><td>#, Del</td><td>delete (to Trash; permanent if already in Trash); Backspace also deletes</td></tr>
@@ -283,6 +283,7 @@
     </table>
     <p>Actions apply to the selected messages, or to the highlighted one if none are selected. Right-click a message for the same actions.</p>
     <p>Right-click a folder and choose Show attachments to list every attachment of its mail in place of its messages; click an attachment to see its message, or its type badge to open the attachment as well, and press Esc to go back to the messages. Tick Subfolders to include the attachments of its subfolders; the folder keeps that choice on this computer.</p>
+    <p>Right-click the attachments under a message, or a folder's attachments, to download them all in one ZIP file, or only the selected ones: Ctrl-click to select them, and in a folder's attachments also Shift-click, x or Ctrl+A. A ZIP file holds at most 100 files and 100 MB.</p>
     <p>Contacts lists everyone in your mail under People, Others and Hidden: select people to write to them, see their mail, or pin, hide, rename or delete them; right-click Contacts to export or import the list.</p>
   </div>
 </div>

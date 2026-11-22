@@ -2303,9 +2303,11 @@ function onKey(e) {
     }
     if (inFolderFilter) { e.preventDefault(); state.kbFolder = -1; renderFolders(); $("list").focus(); return; }   // the filter's text stays
     if (!$("ctx").classList.contains("hidden")) { hideContextMenu(); return; }
+    // a ZIP being made stops, and attachments selected under the message are deselected
+    if (viewer.cancelZip() || viewer.unmarkStrip()) { e.preventDefault(); return; }
     if (state.view.kind === "contacts") { e.preventDefault(); people.escape(); return; }
     if (state.marked.size) { clearMarks(); return; }
-    if (state.view.kind === "files") { openFolder(state.view.of); return; }
+    if (state.view.kind === "files") { if (!files.clearMarks()) openFolder(state.view.of); return; }
     // a person's mail shown from Contacts gives way to Contacts again
     if (state.view.kind === "search" && state.view.back?.kind === "contacts" && document.activeElement === $("list")) { openContacts(); return; }
   }
@@ -2339,7 +2341,10 @@ function onKey(e) {
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     if (e.key === "z" || e.key === "Z") { e.preventDefault(); runAction(e.shiftKey ? "redo" : "undo"); }
     else if (e.key === "y") { e.preventDefault(); runAction("redo"); }
-    else if (e.key === "a" && document.activeElement === $("list")) { e.preventDefault(); if (state.view.kind === "contacts") people.markAll(); else markRange(0, state.messages.length - 1); }
+    else if (e.key === "a" && document.activeElement === $("list")) {
+      e.preventDefault();
+      if (state.view.kind === "contacts") people.markAll(); else if (state.view.kind === "files") files.markAll(); else markRange(0, state.messages.length - 1);
+    }
     return;
   }
   // Alt with a letter belongs to the browser and the system. A symbol command may need Option
@@ -2891,7 +2896,8 @@ wireSplitters();
 window.addEventListener("resize", () => applyLayout());
 wireMovePicker();
 wireContactCards();
-viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, attachedHtml, status, providerName: api.PROVIDER.name });
+viewer.init({ thumb: api.thumbnail, bytes: api.partBytes, docPages: api.docPages, extractText: api.extractText, originalUrl: api.originalUrl, listed: api.isListed, attachedHtml, status,
+  notify: text => notify(text), menu: openMenu, limits: api.LIMITS, providerName: api.PROVIDER.name });
 files.init(filesHooks);
 people.init(peopleHooks);
 $("contacts-link").onclick = () => openContacts();

@@ -198,6 +198,82 @@ scenario("the Files view says when a folder's attachments could not be loaded", 
   expect(/could not be loaded/.test(r.rows) && !/No attachments/.test(r.rows) && !r.count, "a failure, not an empty folder: " + JSON.stringify(r));
 }, { allow: /EC-5000|status of 5/ });
 
+// Attachments download in one ZIP file: right-click under a message offers all of them, and the
+// selected ones (Ctrl-click) once some but not all are selected; a folder's attachments offer the
+// same, with Ctrl+A, x and Esc as in the message list. Each file keeps its bytes and its name, is
+// dated with its message, a name that repeats is numbered, a file that cannot be fetched is left
+// out and named, more than the cap is refused, and one file alone is saved as itself.
+scenario("attachments download in one ZIP file, all of them or the selected ones", async (h, expect) => {
+  const { page, mock } = h, JSZip = require("../ext/vendor/jszip.min.js");
+  // deck.pptx is missing from the message source, so it cannot be fetched
+  mock.patchRaw = raw => raw.replace(/--BOUND\r\nContent-Type: application\/octet-stream; name="deck\.pptx"[\s\S]*?(?=--BOUND--)/, "");
+  const saved = async pick => {
+    const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 15000 }), pick()]);
+    return { name: dl.suggestedFilename(), bytes: fs.readFileSync(await dl.path()) };
+  };
+  const zipOf = async pick => {
+    const { name, bytes } = await saved(pick), z = await JSZip.loadAsync(bytes, { checkCRC32: true });
+    return { name, files: Object.keys(z.files), z };
+  };
+  const stamp = d => [d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()].join("-");
+  const utc = d => [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes()].join("-");   // JSZip reads the MS-DOS date as UTC
+  const card = i => page.locator("#r-attach .att-card").nth(i);
+  await page.locator("#rows .row").nth(1).click();
+  await page.waitForSelector("#r-attach .att-card");
+  // under a message: Download all alone, then Download selected for two of the seven
+  const plain = await menuOf(page, card(0));
+  expect(JSON.stringify(plain) === JSON.stringify(["Download all"]), "with nothing selected the menu has Download all alone: " + JSON.stringify(plain));
+  await page.keyboard.press("Escape");
+  await card(1).click({ modifiers: ["Control"] }); await card(3).click({ modifiers: ["Control"] });
+  const picked = { marked: await page.locator("#r-attach .att-card.marked").count(), viewer: await page.locator("#viewer").isVisible() };
+  expect(picked.marked === 2 && !picked.viewer, "Ctrl-click selects a file and does not preview it: " + JSON.stringify(picked));
+  const some = await menuOf(page, card(0));
+  expect(JSON.stringify(some) === JSON.stringify(["Download all", "Download selected (2)"]), "with some selected the menu offers them too: " + JSON.stringify(some));
+  const sel = await zipOf(() => pickMenu(page, "Download selected"));
+  const csv = await sel.z.file("data.csv")?.async("string"), when = new Date(Number(msg(2, "1").headers.date) * 1000);
+  expect(sel.name === "Subject 1-2.zip" && sel.files.join("|") === "data.csv|photo.png" && csv === "name,qty\nZ80,2\n6502,1\n",
+    "the selected files, in a ZIP named after the subject: " + JSON.stringify({ name: sel.name, files: sel.files, csv }));
+  const dated = sel.files.map(f => utc(sel.z.files[f].date));
+  expect(dated.every(d => d === stamp(when)), "each file is dated with its message: " + JSON.stringify({ dated, want: stamp(when) }));
+  await page.keyboard.press("Escape");
+  expect(!(await page.locator("#r-attach .att-card.marked").count()), "Esc deselects the files");
+  // all of them: the one missing from the source is left out and named
+  const all = await zipOf(async () => { await menuOf(page, card(0)); await pickMenu(page, "Download all"); });
+  const pdf = (await all.z.file("report.pdf")?.async("nodebuffer"))?.equals(fs.readFileSync(path.join(h.FX, "report.pdf")));
+  const left = await notice(page);
+  expect(all.files.join("|") === "report.pdf|data.csv|src.zip|photo.png|cv.docx|budget.xlsx" && pdf, "every file that could be fetched, byte for byte: " + JSON.stringify({ files: all.files, pdf }));
+  expect(/^Left out of Subject 1-2\.zip, as it could not be fetched: "deck\.pptx"\.$/.test(left), "the file left out is named: " + left);
+  // more than the cap is refused
+  await page.evaluate(async () => { (await import("./viewer.js")).ZIP_MAX.files = 3; });
+  const refused = page.waitForEvent("download", { timeout: 1500 }).then(() => true, () => false);
+  await menuOf(page, card(0)); await pickMenu(page, "Download all");
+  const capped = { downloaded: await refused, said: await notice(page) };
+  expect(!capped.downloaded && /^Too much for one ZIP file: 7 attachments, .+\. Select at most 3 attachments and 100 MB\.$/.test(capped.said), "more than the cap is refused: " + JSON.stringify(capped));
+  await page.evaluate(async () => { (await import("./viewer.js")).ZIP_MAX.files = 100; });
+  // a folder's attachments: f.pdf of two messages
+  await menuOf(page, folderRow(page, "Inbox")); await pickMenu(page, "Show attachments");
+  await page.waitForSelector("#f-rows .frow", { timeout: 8000 });
+  const row = i => page.locator("#f-rows .frow").nth(i);
+  const rowMenu = await menuOf(page, row(0));
+  expect(rowMenu.includes("Download all") && !rowMenu.some(t => t.startsWith("Download selected")), "a folder's list offers Download all: " + JSON.stringify(rowMenu));
+  await page.keyboard.press("Escape");
+  await row(0).click({ modifiers: ["Control"] });
+  const one = await menuOf(page, row(0));
+  expect(one.includes("Download selected (1)"), "one of two selected: " + JSON.stringify(one));
+  const single = await saved(() => pickMenu(page, "Download selected"));
+  expect(single.name === "f.pdf" && single.bytes.equals(fs.readFileSync(path.join(h.FX, "report.pdf"))), "one file is saved as itself: " + single.name);
+  await page.locator("#list").focus(); await page.keyboard.press("Control+a");
+  const every = { marked: await page.locator("#f-rows .frow.marked").count(), count: await page.locator("#f-count").textContent(), menu: await menuOf(page, row(1)) };
+  expect(every.marked === 2 && every.count === "2 attachments · 2 selected" && !every.menu.some(t => t.startsWith("Download selected")), "Ctrl+A selects every file listed, and all are no longer some: " + JSON.stringify(every));
+  const folderZip = await zipOf(() => pickMenu(page, "Download all"));
+  expect(folderZip.name === "Inbox attachments.zip" && folderZip.files.join("|") === "f.pdf|f (2).pdf", "a folder's ZIP is named after it, a repeated name numbered: " + JSON.stringify({ name: folderZip.name, files: folderZip.files }));
+  await page.locator("#list").focus(); await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+  const esc = { marked: await page.locator("#f-rows .frow.marked").count(), pane: await page.locator("#files-pane").isVisible() };
+  await page.keyboard.press("x");
+  esc.x = await page.locator("#f-count").textContent();
+  expect(!esc.marked && esc.pane && esc.x === "2 attachments · 1 selected", "Esc deselects and stays in the list, x selects the cursor's file: " + JSON.stringify(esc));
+});
+
 // The name dialog keeps Tab inside itself however many times it opens.
 scenario("the folder name dialog keeps Tab inside itself", async ({ page }, expect) => {
   const where = () => page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName);

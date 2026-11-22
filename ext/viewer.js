@@ -4,7 +4,8 @@
 // renderer there use the provider's document converter and extracted text, when it has them.
 
 import { asText, hexDump } from "./bytes.js";
-import { esc, noBidi } from "./text.js";
+import { esc, noBidi, plural } from "./text.js";
+import { zipWriter, flatName, uniqueName } from "./zip.js";
 
 const $ = id => document.getElementById(id);
 export const sizeStr = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
@@ -48,7 +49,8 @@ export function tile(a) {
 
 // { thumb(msgId, a) -> data URL | null, bytes(msgId, a) -> { bytes, type, filename }, docPages?(docId, start, end, retry),
 //   extractText?(a) -> string, originalUrl?(a) -> url | null, listed(a) -> whether the strip shows it,
-//   attachedHtml(html) -> { html, page: the colours of its darkened page | null }, status(msg), providerName }
+//   attachedHtml(html) -> { html, page: the colours of its darkened page | null }, status(msg), notify(text),
+//   menu(x, y, items, onPick), limits: the provider's LIMITS (fetchGap), providerName }
 let hooks = null;
 // The files the viewer steps through, each with the id of the message it belongs to (msgId).
 let items = [], index = 0;
@@ -90,27 +92,57 @@ export function onKey(e) {
 }
 
 // ---------- strip ----------
+// The files under the message, each with its message's id and date; the ones Ctrl-click selected,
+// by their place in the strip; and the subject, which names a ZIP of them.
+const strip = { items: [], marked: new Set(), subject: "" };
+const modKey = () => /^mac/i.test(navigator.userAgentData?.platform || navigator.platform || "") ? "⌘" : "Ctrl";
+
 export function renderStrip(message, attachments, isCurrent) {
-  const box = $("r-attach");
-  const strip = attachments.filter(a => a.disposition !== "inline" && hooks.listed(a)).map(a => ({ ...a, msgId: message.id }));
-  box.classList.toggle("hidden", !strip.length);
-  if (!strip.length) { box.innerHTML = ""; return; }
-  const total = strip.reduce((s, a) => s + (a.size || 0), 0);
-  box.innerHTML = `<div class="att-head"><b>${strip.length} attachment${strip.length === 1 ? "" : "s"}</b>${sizeStr(total)}</div>` +
-    strip.map((a, i) => {
+  const box = $("r-attach"), date = message.headers?.date;
+  const list = attachments.filter(a => a.disposition !== "inline" && hooks.listed(a)).map(a => ({ ...a, msgId: message.id, date }));
+  Object.assign(strip, { items: list, marked: new Set(), subject: String(message.headers?.subject || "").replace(/\^_/g, "") });
+  box.classList.toggle("hidden", !list.length);
+  if (!list.length) { box.innerHTML = ""; return; }
+  const total = list.reduce((s, a) => s + (a.size || 0), 0);
+  const how = list.length > 1 ? `click to preview, ${modKey()}-click to select; right-click to download them in one ZIP file` : "click to preview";
+  box.innerHTML = `<div class="att-head"><b>${list.length} attachment${list.length === 1 ? "" : "s"}</b>${sizeStr(total)}</div>` +
+    list.map((a, i) => {
       const t = tile(a);
-      return `<div class="att-card" data-i="${i}" title="${esc(a.filename || "attachment")}: click to preview">
+      return `<div class="att-card" data-i="${i}" title="${esc(a.filename || "attachment")}: ${how}">
         <span class="att-thumb ${t.cls}" data-i="${i}">${esc(t.text)}</span>
         <span class="att-info"><span class="att-name">${esc(a.filename || "Untitled")}</span><span class="att-size">${sizeStr(a.size)}</span></span></div>`;
     }).join("");
-  box.onclick = e => { const c = e.target.closest(".att-card"); if (c) open(strip, Number(c.dataset.i)); };
-  strip.forEach(async (a, i) => {
+  box.onclick = e => {
+    const c = e.target.closest(".att-card"); if (!c) return;
+    if (e.ctrlKey || e.metaKey) markCard(Number(c.dataset.i)); else open(list, Number(c.dataset.i));
+  };
+  box.oncontextmenu = e => { e.preventDefault(); stripMenu(e.clientX, e.clientY); };
+  list.forEach(async (a, i) => {
     if (kindOf(a) !== "image") return;
     const src = await hooks.thumb(message.id, a).catch(() => null);
     if (!src || !isCurrent(message.id)) return;
     const slot = box.querySelector(`.att-thumb[data-i="${i}"]`);
     if (slot) slot.replaceChildren(Object.assign(document.createElement("img"), { src, alt: "" }));
   });
+}
+
+function markCard(i) {
+  if (strip.marked.has(i)) strip.marked.delete(i); else strip.marked.add(i);
+  $("r-attach").querySelector(`.att-card[data-i="${i}"]`)?.classList.toggle("marked", strip.marked.has(i));
+}
+// Esc: the strip's selection goes, when it has one on screen.
+export function unmarkStrip() {
+  if (!strip.marked.size || !$("r-attach").getClientRects().length) return false;
+  strip.marked.clear();
+  $("r-attach").querySelectorAll(".att-card.marked").forEach(c => c.classList.remove("marked"));
+  return true;
+}
+// Right-click in the strip: all its files, or the selected ones when they are some but not all.
+function stripMenu(x, y) {
+  const { items, marked, subject } = strip, n = items.length, k = marked.size;
+  if (!n) return;
+  hooks.menu(x, y, [["all", "Download all", "", n > 1 ? "In one ZIP file" : ""], ...(k && k < n ? [["marked", `Download selected (${k})`, "", k > 1 ? "In one ZIP file" : ""]] : [])],
+    act => downloadZip(act === "marked" ? items.filter((_, i) => marked.has(i)) : items, subject));
 }
 
 // ---------- fetching ----------
@@ -447,18 +479,77 @@ async function showText(ctx) {
 }
 
 // ---------- download / open ----------
+function save(blob, filename) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob); link.download = filename;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+}
+
 export async function download(a) {
   try {
-    const blob = await fetchBlob(a);
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob); link.download = noBidi(a.filename || "attachment");
-    document.body.appendChild(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    save(await fetchBlob(a), noBidi(a.filename || "attachment"));
   } catch {
     // The provider's own link, when it has one: a background tab follows it and saves the original.
     const u = hooks.originalUrl?.(a);
     if (u) chrome.tabs.create({ url: u, active: false }); else hooks.status("could not fetch the attachment");
   }
+}
+
+// Several files saved as one ZIP file named after name (a subject, a folder): list holds them,
+// each with its message's id (msgId) and date (date, epoch seconds), which the file in the ZIP
+// takes. They are fetched one message at a time, with the provider's pause between messages
+// (limits.fetchGap), each file put into the archive as it comes; one that cannot be fetched is
+// left out and named afterwards. ZIP_MAX caps the files and the bytes, by the sizes the provider
+// lists; Esc stops it (cancelZip). One file alone is saved as itself.
+export const ZIP_MAX = { files: 100, bytes: 100 * 1048576 };
+let zipping = null;          // { cancelled } while a ZIP is being put together
+const dateOf = epoch => { const d = new Date(Number(epoch) * 1000); return isNaN(d) ? new Date() : d; };
+const named = (list, most = 10) => list.slice(0, most).map(a => `"${noBidi(a.filename || "attachment")}"`).join(", ") + (list.length > most ? ` and ${list.length - most} more` : "");
+
+export function cancelZip() {
+  if (!zipping) return false;
+  zipping.cancelled = true;
+  zipping = null;
+  hooks.status("ZIP download cancelled");
+  return true;
+}
+
+export async function downloadZip(list, name) {
+  if (!list.length) return;
+  if (list.length === 1) return download(list[0]);
+  if (zipping) { hooks.status("a ZIP file is still being made (Esc cancels it)"); return; }
+  const total = list.reduce((s, a) => s + (a.size || 0), 0);
+  if (list.length > ZIP_MAX.files || total > ZIP_MAX.bytes) {
+    hooks.notify(`Too much for one ZIP file: ${plural(list.length, "attachment")}, ${sizeStr(total)}. Select at most ${ZIP_MAX.files} attachments and ${Math.round(ZIP_MAX.bytes / 1048576)} MB.`);
+    return;
+  }
+  const run = zipping = { cancelled: false };
+  const zip = zipWriter(), taken = new Set(), missing = [], byMessage = new Map();
+  for (const a of list) byMessage.set(a.msgId, [...(byMessage.get(a.msgId) || []), a]);
+  let done = 0;
+  try {
+    for (const [n, files] of [...byMessage.values()].entries()) {
+      if (n && hooks.limits?.fetchGap) await sleep(hooks.limits.fetchGap);
+      for (const a of files) {
+        if (run.cancelled) return;
+        hooks.status(`downloading ${++done} of ${list.length} attachments (Esc cancels)`);
+        let got = null;
+        try { got = await hooks.bytes(a.msgId, a); } catch {}
+        if (run.cancelled) return;
+        if (got?.bytes) zip.add(uniqueName(flatName(a.filename) || "attachment", taken), got.bytes, dateOf(a.date));
+        else missing.push(a);
+      }
+    }
+  } catch (e) {
+    if (!run.cancelled) hooks.notify(`Could not make the ZIP file (${e.message}).`);
+    return;
+  } finally { if (zipping === run) zipping = null; }
+  if (!zip.count) { hooks.notify(`Could not fetch the attachments, so no ZIP file was saved: ${named(missing)}.`); return; }
+  const file = `${flatName(name) || "attachments"}.zip`, blob = new Blob(zip.finish(), { type: "application/zip" });
+  save(blob, file);
+  hooks.status(`${file}: ${plural(zip.count, "attachment")}, ${sizeStr(blob.size)}`);
+  if (missing.length) hooks.notify(`Left out of ${file}, as ${missing.length === 1 ? "it" : "they"} could not be fetched: ${named(missing)}.`);
 }
 
 // A blob opened in a tab is shown under the extension's own address, so only types the browser
