@@ -34,6 +34,8 @@ The setup guide on the Gmail extension's sign-in page links to pages of the Goog
 
 The extension's Content Security Policy (in its `manifest.json`) makes the browser block any other destination for the extension's own requests, so mail and everything else the extension sends goes only to these hosts. The Yahoo extension's pages may load images only from Yahoo's image proxy. The Gmail extension's pages may load images (including those a message's styles name) from any `https:` host, which is what lets a message's images load from their senders' servers. Such a request is made by the message's own HTML and styles, so it can tell that server what the message itself is able to: that it was opened and when, your IP address and browser, and what the message's styles can see of the page it is shown in (the window's width, a dark or light theme, the kind of pointer, where the pointer is), never what other messages or the rest of the app hold. It carries no referrer and never your Google sign-in.
 
+Both extensions take tracking pictures out of every message before it is shown, printed or quoted, whatever the image setting.
+
 ## What is stored on your computer
 
 | Data | Where | Why |

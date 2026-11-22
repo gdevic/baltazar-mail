@@ -18,7 +18,7 @@ Everything a mail client does, and:
 - **Contacts in one list:** everyone in your mail, learned from the message headers and suggested as you write. Pin, hide, rename or delete them, write to several at once, and export the list to a text file you can edit and import back.
 - **Sixteen light and dark palettes**, with a dark mode that darkens the messages to match.
 - **Undo for everything:** several levels of undo and redo for mailbox actions, and undo-send.
-- **Tracking removed from links**, when you switch it on.
+- **Tracking pictures removed** from every message, and **tracking removed from links** when you switch it on.
 - **A new-mail dot** on the tab and the toolbar button, handy for a pinned tab.
 - **Keyboard shortcuts** throughout; press `?` in the app.
 

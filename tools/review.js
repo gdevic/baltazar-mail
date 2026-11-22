@@ -155,6 +155,34 @@ scenario("links lose their tracking only when the setting asks, and the open mes
   expect(again["t-utm"]?.href === tracked && again["t-wrap"]?.href === wrapped, "back to as written, again in place: " + JSON.stringify(again));
 });
 
+// ---------- tracking pictures ----------
+// Each picture is named by its alt and its address: pix- ones are trackers, keep- ones are not.
+scenario("tracking pictures leave the message and its forward, and nothing else does", async ({ page, mock }, expect) => {
+  const proxied = u => `https://ecp.yusercontent.com/mail?url=${encodeURIComponent(u)}&amp;t=1`;
+  const own = "https://cloud-apis.mail.yahoo.com/ws/v3/mailboxes/@.id==MB1/messages/@.id==MSG1_2/content/parts/@.id==2/thumbnail&amp;appid=x&amp;pid=2";
+  const pics = [
+    ["pix-attr", proxied("https://track.example/pix-attr.gif?r=1"), 'width="1" height="1" border="0"'],
+    ["pix-style", proxied("https://track.example/pix-style.gif"), 'style="height:1px !important;width:1px !important;border-width:0 !important"'],
+    ["pix-open", proxied("https://u1.ct.sendgrid.net/wf/open?upn=pix-open"), 'width="20" height="20"'],
+    ["keep-real", proxied("https://news.example/keep-real.png"), 'width="600" height="300"'],
+    ["keep-spacer", proxied("https://news.example/keep-spacer.gif"), 'width="640" height="1"'],
+    ["keep-hidden", proxied("https://news.example/keep-hidden.png"), 'height="200" style="display:none;max-height:0;width:0;overflow:hidden"'],
+    ["keep-resized", proxied("https://news.example/keep-resized.png"), 'width="1" height="1" style="width:300px;height:100px"'],
+    ["keep-own", own, 'width="1" height="1"'],
+    ["keep-data", "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", 'width="1" height="1"'],
+  ];
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html += pics.map(([alt, src, rest]) => `<img alt="${alt}" src="${src}" ${rest}>`).join(""); };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(900);
+  const shown = await page.frameLocator("#r-body").locator("img").evaluateAll(imgs => imgs.map(i => i.alt).filter(a => /^(pix|keep)-/.test(a)));
+  expect(JSON.stringify(shown) === JSON.stringify(pics.map(p => p[0]).filter(a => a.startsWith("keep-"))), "the reader shows every picture but the trackers: " + JSON.stringify(shown));
+  const asked = mock.images.map(i => i.url);
+  expect(!asked.some(u => /pix-/.test(u)) && asked.some(u => u.includes("keep-real")), "no tracker is asked for, the real picture is: " + JSON.stringify(asked));
+  await page.locator("#list").focus(); await page.keyboard.press("f"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.waitForTimeout(800);
+  const quote = await page.locator("#c-editor").innerHTML();
+  expect(!/pix-/.test(quote) && quote.includes("keep-real") && quote.includes("keep-spacer"), "the forward's quote carries no tracker: " + quote.replace(/\s+/g, " ").slice(-900));
+});
+
 // ---------- attachments ----------
 // Each picture the viewer steps past lets go of its bytes; only the file on screen holds any.
 scenario("the viewer lets go of a picture's bytes when it moves on", async ({ page }, expect) => {

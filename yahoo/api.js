@@ -28,6 +28,17 @@ export const PROVIDER = {
 };
 // Where the reader and the print page may load message images from: Yahoo's image proxy.
 export const IMAGE_SRC = "https://*.yusercontent.com";
+// The address a picture in a message comes from, as its sender wrote it, so that the client can
+// tell a tracking picture by it (ext/pixels.js). Yahoo serves every remote picture through its
+// image proxy, which carries that address in its url parameter: <host>.yusercontent.com/mail?url=.
+// Any other address is its own.
+export function imageOrigin(src) {
+  try {
+    const u = new URL(src), v = u.searchParams.get("url");
+    if (u.protocol === "https:" && /\.yusercontent\.com$/.test(u.hostname) && u.pathname === "/mail" && /^https?:\/\//i.test(v || "")) return v;
+  } catch { /* not an address */ }
+  return src;
+}
 // messageBytes: attachments per message; scanMax: rows per folder a full address-book scan reads;
 // scanGap: the pause (ms) between its steps. The first build reads the whole mailbox, a few
 // hundred requests one after another, and Yahoo names no limit for them: the pause keeps the

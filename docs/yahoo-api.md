@@ -85,6 +85,8 @@ List rows' `attachments[]` (verified 2026-11-20) carry for each part `partId`, `
 
 Body: `simpleBody.html` (server-sanitised HTML, remote images rewritten through Yahoo's proxy), `simpleBody.htmlAnnotations[]`, `simpleBody.attachments[] {partId, filename, size, type, subtype, contentId, disposition, downloadUrl, thumbnailUrl, textExtractionUrl}`.
 
+Image proxy (verified live 2026-11-22): a remote image's address becomes `https://<host>.yusercontent.com/mail?url=<the sender's address>&...`, which keeps the sender's address in its `url` parameter. `imageOrigin()` reads it back, so the client tells a tracking picture by its sender's address (`ext/pixels.js`); any other address is given back as it is.
+
 Folder: `id` (small decimal string; 1 Inbox, 3 Sent, 4 Trash and 371 seen in this capture; the rest to be read from the folder list), `name`, `types[]` (`INBOX`, `SENT`, `TRASH`, `SYNC`, `INVISIBLE`, custom), `unread`, `total`, `size`, `uidNext`, `uidValidity`, `highestModSeq`, `acctId`. The captured mailbox reports 217 folders, most of which carry `SYNC` or `INVISIBLE` types and are filtered out of the list query.
 
 ## Folders (verified 2026-11-02, from the web client)

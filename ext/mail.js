@@ -11,6 +11,7 @@ import * as update from "./update.js";
 import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { attr, esc, noBidi, plural } from "./text.js";
 import { cleanLink } from "./links.js";
+import { isTracker } from "./pixels.js";
 import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow, copyText } from "./guide.js";
 import * as awake from "./awake.js";
 
@@ -988,16 +989,24 @@ const purify = globalThis.DOMPurify;
 // A link's target resolves against the app's page, so only absolute web, mail and phone links keep
 // theirs: a relative one would open an extension page. An in-message anchor scrolls the message
 // (see setFrame). With the links setting at "clean", a web link loses its tracking (see links.js),
-// and so does its text when that is the link written out, as in plain-text mail. Only mail is
+// and so does its text when that is the link written out, as in plain-text mail. A tracking
+// picture (see pixels.js) leaves the message whatever the settings, so it loads nowhere: not in
+// the reader, a printed copy, an HTML attachment or the quote of a reply or forward. Only mail is
 // cleaned this way (cleanHtml); HTML pasted into the composer, which shares this hook, is not.
 const LINK_OK = /^(https?:\/\/|mailto:|tel:)/i;
-let cleaningLinks = false;
+// While cleanHtml runs: whether links are cleaned, and the api.body result the HTML belongs to.
+let cleaning = null;
+// The message's own parts come from the mailbox, not from the sender, so none is a tracker.
+const trackingPicture = img => {
+  const src = (img.getAttribute("src") || "").trim();
+  return !api.isInlineRef(src, cleaning.body) && isTracker({ src: api.imageOrigin(src), width: img.getAttribute("width"), height: img.getAttribute("height"), style: img.style });
+};
 purify.addHook("afterSanitizeAttributes", node => {
   if ((node.localName === "a" || node.localName === "area") && (node.hasAttribute("href") || node.hasAttribute("xlink:href"))) {
     const href = (node.getAttribute("href") ?? node.getAttribute("xlink:href") ?? "").trim();
     if (/^#[^#]*$/.test(href) && node.localName === "a") { node.removeAttribute("target"); return; }
     if (!LINK_OK.test(href)) { node.removeAttribute("href"); node.removeAttribute("xlink:href"); node.removeAttribute("target"); return; }
-    const clean = cleaningLinks ? cleanLink(href) : href;
+    const clean = cleaning?.links ? cleanLink(href) : href;
     if (clean !== href) {
       node.setAttribute(node.hasAttribute("href") ? "href" : "xlink:href", clean);
       const t = node.firstChild;
@@ -1005,6 +1014,7 @@ purify.addHook("afterSanitizeAttributes", node => {
     }
     node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer");
   }
+  if (node.tagName === "IMG" && cleaning && trackingPicture(node)) { node.remove(); return; }
   if (node.tagName === "IMG" && !node.style.aspectRatio) {
     const w = Number(node.getAttribute("width")), h = Number(node.getAttribute("height"));
     if (w > 0 && h > 0) node.style.aspectRatio = `${w} / ${h}`;
@@ -1040,10 +1050,11 @@ function contentBlindCss(css) {
 purify.addHook("afterSanitizeAttributes", node => {
   if (node.localName === "style") node.textContent = contentBlindCss(node.textContent);
 });
-function cleanHtml(html) {
-  cleaningLinks = settings.links === "clean";
+// body: the api.body result the HTML belongs to, none for an HTML attachment.
+function cleanHtml(html, body = null) {
+  cleaning = { links: settings.links === "clean", body };
   try { return purify.sanitize(html, { FORCE_BODY: true, FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["ping"], ADD_ATTR: ["target"] }); }
-  finally { cleaningLinks = false; }
+  finally { cleaning = null; }
 }
 
 // Inline images (cid parts of the message) cannot be loaded by the sandboxed frame, which has no
@@ -1334,7 +1345,7 @@ function setFrame(doc, bg = "#fff") {
 // r.source keeps the HTML as the provider gave it, for relinkBody.
 async function renderMessage(m, r, how = "user") {
   r.source = r.html;
-  r.html = cleanHtml(r.html);
+  r.html = cleanHtml(r.html, r);
   currentBody = r; readerRow = m;
   const h = r.message.headers || {};
   $("reader-empty").classList.add("hidden");
@@ -1399,7 +1410,7 @@ async function loadImages() {
 async function relinkBody() {
   const body = currentBody;
   if (!body || !state.openId) return;
-  let html = cleanHtml(body.source);
+  let html = cleanHtml(body.source, body);
   if (bodyImages) html = await inlineImages(html, body);
   if (currentBody !== body) return;
   body.html = html;
@@ -1569,7 +1580,7 @@ async function printMessages() {
   for (const id of ids) {
     let r;
     if (currentBody && currentBody.message.id === id) r = currentBody;
-    else { try { r = await api.body(id); r.html = cleanHtml(r.html); } catch (e) { handleError(e, "print"); return; } }
+    else { try { r = await api.body(id); r.html = cleanHtml(r.html, r); } catch (e) { handleError(e, "print"); return; } }
     bodies.push(r);
   }
   // The printed page has one rule for images: they load only if every message's may, and a

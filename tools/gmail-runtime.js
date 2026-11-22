@@ -437,7 +437,7 @@ const { FX } = require("./gmail-mock.js");
     " @media screen { [data-x] .y { color: red } .kept-in-media { color: blue } } .s::after { content: \"\\3c /style>\\3c b id=broke>x\\3c /b>\" }";
   const PLAIN_SHEET = ".plain{color:#123456}/* as written */";
   gmail.addMessage({ id: "css1", labels: ["Label_5"], subject: "Styled", from: "\"Styler\" <styler@x.com>", cc: "", inline: [],
-    html: "<style>" + SHEET + "</style><style>" + PLAIN_SHEET + "</style><div><a href=\"https://site.example/reset?token=SECRET\">reset</a></div><div class=\"keep s\">kept</div><img id=\"remote\" src=\"https://img.example/pixel.png\" width=\"1\" height=\"1\">" });
+    html: "<style>" + SHEET + "</style><style>" + PLAIN_SHEET + "</style><div><a href=\"https://site.example/reset?token=SECRET\">reset</a></div><div class=\"keep s\">kept</div><img id=\"remote\" src=\"https://img.example/photo.png\" width=\"40\" height=\"30\">" });
   // More references to parts the message does not have than the 60 it may fetch, before its own picture.
   gmail.addMessage({ id: "cap1", labels: ["Label_5"], subject: "Many pictures", from: "\"Styler\" <styler@x.com>", cc: "",
     html: Array.from({ length: 70 }, (_, i) => "<img src=\"cid:none-" + i + "@x\" width=\"1\" height=\"1\">").join("") + "<img id=\"own\" src=\"cid:cap1-pic@x\">" });
@@ -615,7 +615,7 @@ const { FX } = require("./gmail-mock.js");
   const cs = results.css;
   expect(cs.sheets.length === 2 && !/\[|:has\(/.test(cs.sheets[0]) && /\.keep\b/.test(cs.sheets[0]) && /@media screen \{\s*\.kept-in-media/.test(cs.sheets[0]) && !/<\/style/i.test(cs.sheets[0]) && cs.broke === 0 && cs.kept === "rgb(1, 2, 3)" &&
     cs.sheets[1] === ".plain{color:#123456}/* as written */", "a sender's style sheet keeps only rules that do not read the message: " + JSON.stringify([cs.sheets, cs.broke, cs.kept]));
-  expect(cs.referrer === "no-referrer" && cs.page === "no-referrer" && cs.images.length === 1 && cs.images[0][0] === "https://img.example/pixel.png" && cs.images[0][1] === "about:srcdoc" && cs.images[0][2] === "" && cs.policies.length === 1 && cs.policies[0] === "no-referrer",
+  expect(cs.referrer === "no-referrer" && cs.page === "no-referrer" && cs.images.length === 1 && cs.images[0][0] === "https://img.example/photo.png" && cs.images[0][1] === "about:srcdoc" && cs.images[0][2] === "" && cs.policies.length === 1 && cs.policies[0] === "no-referrer",
     "a remote picture is asked for once, without a referrer: " + JSON.stringify([cs.referrer, cs.page, cs.images, cs.policies]));
   expect(results.cap.own === "data:image/png" && results.cap.others === 70, "references to parts a message does not have take none of its 60 inline images: " + JSON.stringify(results.cap));
   expect(results.svg.width === 40 && results.svg.height === 20 && results.svg.blob && results.svg.density && results.svg.opened === "image/png", "an SVG attachment is shown, and opens, as a bitmap: " + JSON.stringify(results.svg));

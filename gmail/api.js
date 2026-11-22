@@ -37,6 +37,9 @@ export const PROVIDER = {
 };
 // Gmail's API returns the sender's own HTML, so remote images load straight from their hosts.
 export const IMAGE_SRC = "https:";
+// The address a picture in a message comes from, as its sender wrote it (see ext/pixels.js): with
+// the sender's own HTML, the address itself.
+export const imageOrigin = src => src;
 // messageBytes: Gmail's send limit for attachments. The address book's first build reads every row
 // at a quota cost, so it is kept out of the user's way: scanMax rows per folder, scanPage rows a
 // step, the first step no sooner than scanAfter (ms) from when the mailbox was first opened, and
