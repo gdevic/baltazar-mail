@@ -199,11 +199,11 @@ const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? `${api.P
 
 // Errors that mean "no session" show the sign-in panel; others a notice, or with quiet (a
 // background check that simply runs again) only the status line. A quiet one goes to the console
-// as a warning: the browser's extension page lists console errors as the extension's own, and a
-// dropped connection or a computer waking from sleep is not one.
+// as information: the browser's extension page lists console errors and warnings as the
+// extension's own, and a dropped connection or a computer waking from sleep is neither.
 function handleError(e, what, { quiet = false } = {}) {
   if (e instanceof api.NotSignedIn) { showSignIn(e); return; }
-  if (quiet) { console.warn(what, e); status(`${what}: ${cause(e)}`); }
+  if (quiet) { console.info(what, e); status(`${what}: ${cause(e)}`); }
   else { console.error(what, e); notify(FAILED[what] || `Something went wrong (${what}).`, { detail: cause(e), err: e, what }); }
 }
 
@@ -2773,11 +2773,13 @@ function startPolling() {
 }
 
 // A background tab can be put to sleep (Edge's sleeping tabs) and then checks nothing. When it
-// wakes or comes into view, check at once instead of waiting for the next interval.
+// wakes or comes into view, check at once instead of waiting for the next interval. The same when
+// the connection comes back: a tab kept awake checks as the computer wakes, before there is one.
 let lastPoll = 0, polling = false;
 function pollNow() { if (state.signedIn && !polling && Date.now() - lastPoll > 3000) { poll(); startPolling(); } }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollNow(); });
 document.addEventListener("resume", pollNow);
+window.addEventListener("online", pollNow);
 
 // ---------- staying awake ----------
 // While signed in, the tab holds the lock that keeps a browser from putting it to sleep
