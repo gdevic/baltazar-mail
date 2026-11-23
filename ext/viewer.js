@@ -446,11 +446,14 @@ function sandboxed(ctx, request) {
 // ----- Formats with no renderer here: the provider's converter (pages load as you scroll), then its text -----
 const PENDING = new Set([605, 612, 621, 814]);
 
+// A converter that does not take the file (813) leaves no preview, which the notice says with no
+// reason to add; a password-protected file (816) is said in words.
 async function fetchPages(docId, s, e, stale) {
   for (let attempt = 0; attempt < 8; attempt++) {
     const r = await hooks.docPages(docId, s, e, attempt);
     if (r.code === 800 && r.pages.length && r.pages.every(p => p.ok)) return r;
-    if (r.code !== 800 && !PENDING.has(r.code) && r.pages.length === 0 && attempt > 0) throw new Error(`converter code ${r.code}`);
+    if (r.code !== 800 && !PENDING.has(r.code) && r.pages.length === 0 && attempt > 0)
+      throw r.code === 813 ? new NoPreview("unsupported type") : new Error(r.code === 816 ? "it is password protected" : `converter code ${r.code}`);
     if (stale()) return null;
     await sleep(700 * (attempt + 1));
   }

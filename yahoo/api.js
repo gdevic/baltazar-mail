@@ -416,13 +416,16 @@ export async function inlineSource(src, body) {
 
 // Yahoo's document converter, for formats with no renderer here. PDF pages come back as JPEG
 // images, Office documents as HTML plus CSS, spreadsheets one sheet per page. Pages are 1-based.
-// code 800 is success; a page with statuscode 700 is ready.
+// code 800 is success; a page with statuscode 700 is ready. A file the converter does not take
+// is refused with code 813, or with HTTP 400 to the request (a winmail.dat, seen 2026-11-22),
+// which is answered as 813 too.
 export async function docPages(documentId, start, end, retryCount = 0) {
   const r = await batch("document.fetch", [{
     id: "FetchDocument", method: "POST", uri: "/ws/docpreview/v2/fetch",
     payload: { start_page: start, end_page: end, retryCount },
   }], true, [], { "docs-document-id": documentId });
   const x = r[0];
+  if (x?.httpCode === 400) return { code: 813, total: 0, width: 0, height: 0, pages: [] };
   if (!x || x.httpCode < 200 || x.httpCode >= 300 || !x.response) throw new ApiError(`document.fetch: HTTP ${x?.httpCode ?? "?"}`, x);
   const res = x.response;
   const pages = Object.entries(res.pages || {})

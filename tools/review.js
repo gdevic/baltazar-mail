@@ -480,6 +480,26 @@ scenario("a preview has the keys as soon as it opens: PageDown scrolls a PDF, an
   expect(sheet.has && sheet.at === "grid", "a spreadsheet's grid has the keys at once: " + JSON.stringify(sheet));
 });
 
+// Yahoo's converter refuses a file it does not take, also with HTTP 400 to the request (as for a
+// winmail.dat): the notice says only that there is no preview. A password-protected file says so.
+scenario("a file the converter refuses has no preview, with no reason given unless it is password protected", async ({ page, mock }, expect) => {
+  let answer = null;
+  mock.handler = async ({ name, top }) => name === "document.fetch" && answer ? { responses: [answer(top)] } : undefined;
+  const notice = async refusal => {
+    answer = refusal;
+    await page.locator("#r-attach .att-card", { hasText: "deck.pptx" }).click();
+    await page.waitForSelector("#v-body .v-center #v-dl2", { timeout: 15000 });
+    const text = await page.locator("#v-body .v-center").textContent();
+    await page.click("#v-close");
+    return text;
+  };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  const refused = await notice(top => ({ id: top.id, httpCode: 400, response: { error: { code: "EC-4001" } } }));
+  const locked = await notice(top => ({ id: top.id, httpCode: 200, response: { code: 816, statuscode: 600, pages: {} } }));
+  expect(/^No preview available for this file\. View as text/.test(refused), "a refusal says only that there is no preview: " + refused);
+  expect(/^No preview available for this file \(it is password protected\)\. View as text/.test(locked), "a password-protected file says so: " + locked);
+});
+
 // ---------- address book ----------
 scenario("the address book survives a repeated full build and a second tab", async (h, expect) => {
   const { page } = h;
