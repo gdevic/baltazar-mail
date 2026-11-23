@@ -1047,7 +1047,8 @@ purify.addHook("afterSanitizeAttributes", node => {
 // every sheet is read by the browser's own parser and loses the rules such a selector applies or
 // sits in the condition of. A rule for :host goes too: in a printed copy, where each message is
 // in a shadow root, it would style the message's own box and could move it over the header. A
-// sheet with none of them keeps its text as written.
+// sheet with none of them keeps its text as written, less the @import rules it begins with
+// (withoutImports); the text read is the text kept, so no rule goes through unread.
 const READS_CONTENT = /\[|:has\(|:host/i;
 function pruneRules(owner) {
   let cut = 0;
@@ -1058,7 +1059,41 @@ function pruneRules(owner) {
   }
   return cut;
 }
+// The @import rules a sheet begins with (after its @charset and @layer statements, between
+// comments), the only ones CSS honours. A sheet made by script refuses them and the browser says
+// so in the console, as an error of the extension; what shows cleaned HTML never loads them anyway.
+// Each ends at its semicolon outside quotes, brackets and comments, as a web font's address holds
+// semicolons of its own.
+function withoutImports(css) {
+  const n = css.length;
+  // just past the statement that begins at i; -1 when a block opens first, where rules begin
+  const statementEnd = i => {
+    for (let depth = 0; i < n; i++) {
+      const c = css[i];
+      if (c === "\\") i++;
+      else if (c === '"' || c === "'") { for (i++; i < n && css[i] !== c; i++) if (css[i] === "\\") i++; }
+      else if (c === "/" && css[i + 1] === "*") { const e = css.indexOf("*/", i + 2); i = e < 0 ? n : e + 1; }
+      else if (c === "(") depth++;
+      else if (c === ")") depth = Math.max(0, depth - 1);
+      else if (!depth && c === ";") return i + 1;
+      else if (!depth && c === "{") return -1;
+    }
+    return n;
+  };
+  const blank = /\s+|\/\*[\s\S]*?(?:\*\/|$)/y, statement = /@(import|charset|layer)\b/iy;
+  let out = "", at = 0;
+  for (;;) {
+    blank.lastIndex = statement.lastIndex = at;
+    const b = blank.exec(css);
+    if (b) { out += b[0]; at = blank.lastIndex; continue; }
+    const s = statement.exec(css), stop = s ? statementEnd(at) : -1;
+    if (stop < 0) return out + css.slice(at);
+    if (s[1].toLowerCase() !== "import") out += css.slice(at, stop);
+    at = stop;
+  }
+}
 function contentBlindCss(css) {
+  css = withoutImports(css);
   const sheet = new CSSStyleSheet();
   try { sheet.replaceSync(css); } catch { return ""; }
   if (!pruneRules(sheet)) return css;

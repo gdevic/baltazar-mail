@@ -186,6 +186,27 @@ scenario("tracking pictures leave the message and its forward, and nothing else 
   expect(!/pix-/.test(quote) && quote.includes("keep-real") && quote.includes("keep-spacer"), "the forward's quote carries no tracker: " + quote.replace(/\s+/g, " ").slice(-900));
 });
 
+// ---------- style sheets ----------
+// Sheets that begin with @import rules (a web font's address holds semicolons of its own) are read
+// without them, so the browser has nothing to refuse and say in the console, and the reader nothing
+// to block. The rest stays: a sheet written back for a rule that reads the message, as written otherwise.
+scenario("a message's style sheets lose the @import rules they begin with, quietly, and keep the rest", async ({ page, mock }, expect) => {
+  const said = [];
+  page.on("console", m => { if (/@import/.test(m.text())) said.push(m.text().slice(0, 80)); });
+  const font = "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');";
+  mock.patchBody = (id, m, body) => {
+    if (id === "MSG1_2") body.html = `<style>@charset "utf-8"; /* fonts; and more */ ${font} @import "https://x.example/a;b.css" screen and (min-width: 600px);\n.lead { color: rgb(255, 0, 0) } a[href^="https://bank"] { color: blue }</style>` +
+      `<style>${font}\n.tail { color: rgb(0, 128, 0) }</style><p class="lead">Lead</p><p class="tail">Tail</p><a href="https://bank.example/">bank</a>` + body.html;
+  };
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(900);
+  const frame = page.frameLocator("#r-body");
+  const sheets = await frame.locator("style").evaluateAll(s => s.map(x => x.textContent).join("\n"));
+  const colours = { lead: await frame.locator("p.lead").evaluate(e => getComputedStyle(e).color), tail: await frame.locator("p.tail").evaluate(e => getComputedStyle(e).color) };
+  expect(!said.length, "nothing about @import in the console: " + JSON.stringify(said));
+  expect(!/@import/i.test(sheets) && /\.lead/.test(sheets) && /\.tail/.test(sheets) && !/href\^=/.test(sheets) && colours.lead === "rgb(255, 0, 0)" && colours.tail === "rgb(0, 128, 0)",
+    "the imports are gone, the rest kept but for the rule that reads the message: " + JSON.stringify({ colours, sheets: sheets.slice(0, 600) }));
+});
+
 // ---------- attachments ----------
 // Each picture the viewer steps past lets go of its bytes; only the file on screen holds any.
 scenario("the viewer lets go of a picture's bytes when it moves on", async ({ page }, expect) => {
