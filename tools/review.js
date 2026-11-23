@@ -1766,6 +1766,21 @@ scenario("the undo history cancels the older of two sends waiting, and the newer
   expect(sent.length === 1 && sent[0] === "Second", "only the newer one is sent: " + JSON.stringify(sent));
 }, { settings: { undoSendSec: 8 } });
 
+// An action shows its counts at once; undone before the next mail check, it leaves the server's
+// answer as the one last drawn, and the counts go back all the same.
+scenario("an action undone before the next mail check leaves the folder counts as they were", async ({ page }, expect) => {
+  const counts = () => page.locator("#folder-list .folder").evaluateAll(fs => Object.fromEntries(fs.map(f => [f.querySelector(".nm").textContent, f.querySelector(".ct").textContent]).filter(([n]) => n === "Inbox" || n === "Archive")));
+  const before = await counts();
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("e"); await page.waitForTimeout(600);
+  const archived = await counts();
+  await page.keyboard.press("z");
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="redo"]').title.startsWith("Redo:"), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  const undone = await counts();
+  expect(archived.Archive === "1" && archived.Inbox !== before.Inbox && JSON.stringify(undone) === JSON.stringify(before), "the counts follow the archive and its undo: " + JSON.stringify({ before, archived, undone }));
+}, { settings: { markReadSec: null } });
+
 // ---------- conversation ----------
 // Yahoo's answer to the search for a conversation id: rows() as it lists them, newest first.
 const conversationAnswer = (id, rows) => async ({ name, uri }) => name === "messageGroups.getList" && new RegExp(`conversationId%3A${id}(%20|$)`).test(uri)

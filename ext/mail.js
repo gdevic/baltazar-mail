@@ -608,6 +608,8 @@ async function actOnChanges() {
 let lastFoldersShown = "", lastStarredCount = 0;
 async function loadFolders(silent = false) {
   const r = await api.folders();
+  // the counts on screen: the last answer's, or what an action has made them since (bumpFolder)
+  const onScreen = new Map(state.folders.map(f => [f.id, `${f.total}/${f.unread}`]));
   state.folders = r.folders;
   state.byId = new Map(r.folders.map(f => [f.id, f]));
   const changed = [];
@@ -621,6 +623,9 @@ async function loadFolders(silent = false) {
   // is redone at most once a minute, or at once while Starred is open.
   const shown = JSON.stringify(r.folders.map(f => [f.id, f.name, f.unread, f.total, f.types]));
   if (shown !== lastFoldersShown) { lastFoldersShown = shown; renderFolders(); }
+  // An action shows its counts at once, and undone before the next poll it leaves the answer the
+  // same as the one last drawn: the counts are then written in place, with no new tree.
+  else if (r.folders.some(f => onScreen.get(f.id) !== `${f.total}/${f.unread}`)) updateFolderCounts();
   if (state.starredCount == null || (changed.length && (state.view.starred || Date.now() - lastStarredCount > 60000))) { lastStarredCount = Date.now(); refreshStarredCount(); }
   if (!silent) status(`${r.folders.length} folders`, r.ms);
   return changed;
