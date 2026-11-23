@@ -1,6 +1,7 @@
 // What the two adapters (yahoo/api.js and gmail/api.js) share: the errors they throw, the deadline
-// every request keeps, the shape of the folder list they give, and the check on the message ids
-// they are handed. Each adapter exports these as its own.
+// every request keeps, the shape of the folder list they give, the check on the message ids they
+// are handed, and the reading of the Message-IDs a message names. Each adapter exports these as
+// its own.
 
 export class ApiError extends Error {
   constructor(msg, detail) { super(msg); this.name = "ApiError"; this.detail = detail; }
@@ -37,3 +38,19 @@ export function checkIds(ids) {
   const bad = ids.find(id => !isMessageId(id));
   if (bad !== undefined) throw new ApiError(`refusing malformed message id ${JSON.stringify(String(bad).slice(0, 40))}`);
 }
+
+// The Message-IDs a header value names, in its order and without their angle brackets: a string
+// as the header is written, or a list of them. A value with no brackets counts as one id when it
+// is one word holding an @, as a provider may hand an id over bare.
+export function messageIds(value) {
+  const out = [];
+  for (const v of [].concat(value ?? [])) {
+    const s = String(v), named = [...s.matchAll(/<([^<>\s]+)>/g)].map(m => m[1]);
+    if (named.length) out.push(...named);
+    else if (/^\s*[^\s<>@]+@[^\s<>@]+\s*$/.test(s)) out.push(s.trim());
+  }
+  return out;
+}
+// What a message names of its conversation, for ext/thread.js: its own id, the one it answers
+// (the first of In-Reply-To) and its References, oldest first; "" or [] where it names none.
+export const refsFrom = (messageId, inReplyTo, references) => ({ id: messageIds(messageId)[0] || "", parent: messageIds(inReplyTo)[0] || "", refs: messageIds(references) });

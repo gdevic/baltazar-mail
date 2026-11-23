@@ -15,7 +15,7 @@ import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, rememberUntil } from "./cache.js";
 import { clean, fieldAtom } from "./query.js";
 import { esc } from "./text.js";
-import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds } from "./adapter.js";
+import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
 
 export { NotSignedIn, ApiError, TIMEOUTS, Timeout, normalizeFolders, isMessageId };
 
@@ -621,6 +621,23 @@ export const countAll = folders => folders.find(f => f.id === ALL)?.total || 0;
 // A query in Gmail's search language (queries.*, or one the dialect wrote), over all mail outside
 // Spam and Trash.
 export const search = (qs, count = 100, offset = 0) => listRows({ labelIds: [], q: qs }, count, offset, null);
+
+// The conversation of a message: its thread, whose messages threads.get names with their labels
+// (10 units), those in Spam or Trash left out; the rest come as a list's rows do, each in the
+// folder its labels place it in. A message without a thread names no conversation.
+export async function conversation(m) {
+  const id = m?.threadId;
+  if (id == null || id === "") return { messages: [], ms: 0, complete: true };
+  if (!isMessageId(id)) throw new ApiError(`refusing malformed thread id ${JSON.stringify(String(id).slice(0, 40))}`);
+  const t0 = performance.now();
+  const t = await call("GET", `/threads/${id}`, { query: { format: "minimal", fields: "messages(id,labelIds)" }, units: 10 });
+  const kept = (t.messages || []).filter(x => isMessageId(x?.id) && !(x.labelIds || []).some(isSpamOrTrash));
+  for (const x of kept) if (Array.isArray(x.labelIds)) labelsOf.set(x.id, x.labelIds);
+  const messages = await rows(kept.map(x => x.id));
+  return { messages, ms: Math.round(performance.now() - t0), complete: true };
+}
+// What a message names of its conversation (see refsFrom), from the headers every row carries.
+export const refsOf = m => refsFrom(m?.headers?.messageId, m?.headers?.inReplyTo, m?.headers?.references);
 
 // A label named in a query, as Gmail's search writes it: in quotes, spaces as hyphens.
 const labelTerm = id => `label:"${(labelName.get(id) || id).replace(/"/g, "").replace(/ /g, "-")}"`;

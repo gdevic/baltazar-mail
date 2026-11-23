@@ -214,6 +214,11 @@ function createGmail(opts = {}) {
     if (p === "/messages/batchDelete") { remove(JSON.parse(body).ids); return { status: 204, json: null }; }
     if ((m = p.match(/^\/messages\/([^/]+)\/attachments\/(.+)$/))) { const a = state.attachments.get(m[2]); return a ? ok({ size: a.length, data: b64url(a) }) : err(404, "Not Found"); }
     if ((m = p.match(/^\/messages\/([^/]+)$/))) { const x = state.messages.get(m[1]); if (!x) return err(404, "Requested entity was not found."); if (method === "DELETE") { remove([x.id]); return { status: 204, json: null }; } const v = view(x, q); if (state.patchHtml && q.get("format") === "full" && !q.get("fields")?.startsWith("payload")) patchHtml(v, x.id); return ok(v); }
+    // a thread: every message of it, in Spam and Trash too, oldest first
+    if ((m = p.match(/^\/threads\/([^/]+)$/)) && method === "GET") {
+      const all = [...state.messages.values()].filter(x => x.threadId === m[1]).sort((a, b) => Number(a.internalDate) - Number(b.internalDate));
+      return all.length ? ok({ id: m[1], historyId: state.profile.historyId, messages: all.map(x => view(x, q)) }) : err(404, "Requested entity was not found.");
+    }
     // no drafts: no body at all, as Gmail answers an empty list under a fields mask
     if (p === "/drafts" && method === "GET") return state.drafts.length ? ok({ drafts: state.drafts.map(d => ({ id: d.id, message: { id: d.message.id } })) }) : { status: 200, json: null };
     if ((m = p.match(/^\/drafts\/([^/]+)$/)) && method === "DELETE") { const i = state.drafts.findIndex(d => d.id === m[1]); if (i < 0) return err(404, "Not Found"); remove([state.drafts[i].message.id]); state.drafts.splice(i, 1); return { status: 204, json: null }; }

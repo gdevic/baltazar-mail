@@ -14,6 +14,7 @@ No server, no analytics, no ads: your mail goes only between your browser and yo
 Everything a mail client does, and:
 
 - **Attachments open in place:** PDF, Office documents, spreadsheets, pictures and ZIP listings, without downloading. Right-click to download several at once in one ZIP file.
+- **A conversation in one list:** right-click a message › Show conversation lists the whole exchange from all your folders, each reply beneath the message it answers.
 - **A folder's attachments in one list:** right-click a folder › Show attachments lists every attachment in its mail, with its subfolders' if you like, such as the tickets and itineraries of a trip.
 - **Contacts in one list:** everyone in your mail, learned from the message headers and suggested as you write. Pin, hide, rename or delete them, write to several at once, and export the list to a text file you can edit and import back.
 - **Sixteen light and dark palettes**, with a dark mode that darkens the messages to match.

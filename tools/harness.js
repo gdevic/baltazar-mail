@@ -21,7 +21,7 @@ const now = Math.floor(Date.now() / 1000);
 const RLO = "\u202E", PDF = "\u202C", RLI = "\u2067", PDI = "\u2069";
 const msg = (i, folder) => folder === "32" ? spoofed(plainMsg(i, folder)) : plainMsg(i, folder);
 const spoofed = m => ({ ...m, headers: { ...m.headers, subject: `Pay ${RLO}eulav${PDF} ${m.id.split("_")[1]}`, from: [{ name: `Bob${RLI}evil${PDI}`, email: m.headers.from[0].email }] } });
-const plainMsg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: `C${i}`, modSeq: i, size: 1000, csid: `csid${i}`,
+const plainMsg = (i, folder) => ({ id: `MSG${folder}_${i}`, conversationId: String(4000 + i), modSeq: i, size: 1000, csid: `csid${i}`,
   attachmentCount: i % 3 === 0 ? 1 : i === 4 ? 2 : 0,
   attachments: i % 3 === 0 ? [{ partId: "2", disposition: "attachment", filename: "f.pdf", size: 52000, type: "application", subtype: "pdf", objectId: `OBJ${folder}_${i}`, downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/pdf" },
     ...(i === 6 ? [{ partId: "9", disposition: "attachment", filename: "", size: 2109, type: "image", subtype: "png", objectId: "LOGO", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/png" }] : [])]

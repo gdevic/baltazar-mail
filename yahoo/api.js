@@ -6,7 +6,7 @@ import { listParts, extract } from "./mime.js";
 import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, failure, freshFailure, recent, RETRY_FAILED } from "./cache.js";
 import { clean, fieldAtom } from "./query.js";
-import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds } from "./adapter.js";
+import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
 
 export { ApiError, TIMEOUTS, Timeout, normalizeFolders, isMessageId };
 
@@ -251,6 +251,22 @@ export async function search(qs, count = 100, offset = 0) {
   const r = await batch("messageGroups.getList", [{ id: "GetMessageGroupList", method: "GET", uri: q(`${ALL_MAIL} count:${count} offset:${offset} -sort:date ${qs}`) }]);
   return { messages: first(r).messages || [], ms: r.ms };
 }
+
+// The conversation of a message: every message Yahoo gives the same conversation id, in every
+// folder but Spam and Trash and the hidden ones, the newest CONVERSATION_MAX of them in one search
+// (verified 2026-11-22: all 19 messages of a conversation in one request, about 200 ms). The id
+// goes into the query, so it must be the digits Yahoo writes; a message without one names no
+// conversation.
+const CONVERSATION_ID = /^[0-9]{1,32}$/, CONVERSATION_MAX = 300;
+export async function conversation(m) {
+  const id = m?.conversationId;
+  if (id == null || id === "") return { messages: [], ms: 0, complete: true };
+  if (!CONVERSATION_ID.test(String(id))) throw new ApiError(`refusing malformed conversation id ${JSON.stringify(String(id).slice(0, 40))}`);
+  const r = await search(`conversationId:${id} ${LIST_FILTER}`, CONVERSATION_MAX);
+  return { messages: r.messages, ms: r.ms, complete: true };
+}
+// What a message names of its conversation (see refsFrom), from the headers Yahoo gives every row.
+export const refsOf = m => refsFrom(m?.headers?.messageIdRfc822, m?.headers?.inReplyTo, m?.headers?.referenceList);
 
 export async function body(msgId) {
   checkIds([msgId]);

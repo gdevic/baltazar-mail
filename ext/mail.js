@@ -13,6 +13,7 @@ import { attr, esc, noBidi, plural } from "./text.js";
 import { cleanLink } from "./links.js";
 import { isTracker } from "./pixels.js";
 import * as history from "./history.js";
+import { arrange } from "./thread.js";
 import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow, copyText } from "./guide.js";
 import * as awake from "./awake.js";
 
@@ -181,7 +182,7 @@ $("notice-copy").onclick = () => copyReport(noticeReport, $("notice-copy"));
 
 // What failed, in words, for each action that reports errors; the technical cause follows it.
 const FAILED = {
-  start: "Could not load your mailbox.", list: "Could not load the message list.",
+  start: "Could not load your mailbox.", list: "Could not load the message list.", conversation: "Could not show the conversation.",
   "fetching the message": "Could not open the message.", "rendering the message": "Could not show the message.",
   "mark read": "Could not mark the message as read.", draft: "Could not open the draft.",
   send: "The message was not sent; it is back in the composer.", print: "Could not print the message.",
@@ -589,12 +590,18 @@ function toggleExpand(name) {
 }
 
 // Folder changes seen by any folder refresh wait here until acted on, so none is lost to a refresh
-// made for another reason (after a send or a move) or while an action was running.
+// made for another reason (after a send or a move) or while an action was running. A provider's
+// search can trail a change by a moment (Yahoo's trails a move: see checkContacts), so a refresh
+// of a conversation that acted on changes is made once more at the next poll (lookAgain).
 const listDirty = new Set(), contactsDirty = new Set();
+let lookAgain = false;
+// A conversation spans folders: a change in any folder that can hold part of it counts.
+const holdsConversation = id => { const f = state.byId.get(id); return !!f && !isHidden(f) && !outOfMail(f); };
 async function actOnChanges() {
   const v = state.view;
   if (v.kind === "folder" && listDirty.has(v.folderId) && !busy) { listDirty.clear(); await loadList("refresh"); }
   else if (v.kind === "files" && !busy && files.scopeIds().some(id => listDirty.has(id))) { listDirty.clear(); await files.reload(); }
+  else if (v.kind === "conversation" && !busy && (lookAgain || [...listDirty].some(holdsConversation))) await loadList("refresh");
   if (contactsDirty.has(inboxId()) || contactsDirty.has(folderByType("SENT")?.id)) { contactsDirty.clear(); syncContacts(); }
 }
 
@@ -690,9 +697,11 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
   // A refresh asks for one more than it shows, so a full answer tells whether more exist.
   const shownN = Math.max(PAGE, state.messages.filter(x => !x.elsewhere).length);
   const count = mode === "refresh" ? shownN + 1 : PAGE;
-  if (mode !== "more" && v.kind === "folder") listDirty.delete(v.folderId);
-  // a load that is discarded or fails leaves its folder still to be refreshed
-  const stillDirty = () => { if (mode !== "more" && v.kind === "folder") listDirty.add(v.folderId); };
+  // the folder changes a load acts on, which stay to be acted on when it is discarded or fails: its
+  // folder's, or for a conversation, which spans folders, every change seen
+  const acting = mode === "more" ? [] : v.kind === "folder" ? [v.folderId] : v.kind === "conversation" ? [...listDirty] : [];
+  for (const id of acting) listDirty.delete(id);
+  const stillDirty = () => { for (const id of acting) listDirty.add(id); };
   if (mode === "refresh") state.refreshing = token;
   // what a fresh load replaces, put back if it fails
   const shown = mode === "fresh" ? { messages: state.messages, selected: state.selected, anchor: state.anchor, marked: new Set(state.marked), more: state.more, elsewhere: state.elsewhere } : null;
@@ -704,6 +713,7 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
     // Searches the provider can answer in one query page normally; compound ones it cannot (AND
     // between words, NOT of words or senders, at Yahoo) are evaluated whole by query.js. A scoped
     // search also searches everything outside the scope; those hits are listed below the scoped ones.
+    // A conversation comes whole from the provider.
     const nq = v.kind === "search" ? (v.raw || nativeQuery(parse(v.term), api.dialect)) : null;
     if (v.kind === "search" && !nq) {
       const t0 = performance.now(), ast = parse(v.term);
@@ -720,7 +730,7 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
         api.searchScoped(nq, { include: v.scope }, count, scoped),
         mode === "more" ? null : api.searchScoped(nq, { exclude: v.scope }, ELSEWHERE_MAX, 0).catch(() => ({ messages: [] })),
       ]);
-    } else r = v.kind === "search" ? await api.search(nq, count, offset) : await api.list(v.folderId, count, offset);
+    } else r = v.kind === "conversation" ? await api.conversation(v.message) : v.kind === "search" ? await api.search(nq, count, offset) : await api.list(v.folderId, count, offset);
   } catch (e) {
     if (token !== state.listToken) { stillDirty(); return; }
     if (state.refreshing === token) state.refreshing = null;
@@ -732,20 +742,22 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
       if (prevView.kind === "contacts") showPeoplePane(true);
       renderFolders(); renderList();
     }
-    handleError(e, "list");
+    handleError(e, v.kind === "conversation" ? "conversation" : "list");
     return;
   }
   if (token !== state.listToken) { stillDirty(); return; }
   if (state.refreshing === token) state.refreshing = null;
   state.loading = false;
   state.prevView = null;
+  if (v.kind === "conversation") { r = { ...r, messages: conversationRows(r.messages, v.message, mode) }; lookAgain = mode === "refresh" && acting.some(holdsConversation); }
   if (other) state.elsewhere = other.messages.map(x => ({ ...x, elsewhere: true }));
   else if (mode !== "more") state.elsewhere = [];
   if (mode === "more") {
     const have = new Set(state.messages.map(m => m.id));
     state.messages = state.messages.filter(x => !x.elsewhere).concat(r.messages.filter(m => !have.has(m.id)));
   } else state.messages = r.messages;
-  if (mode === "refresh" && r.messages.length > shownN) { state.messages = state.messages.slice(0, shownN); state.more = !r.complete; }
+  // a refresh of pages keeps the depth shown; an answer that is complete is shown whole
+  if (mode === "refresh" && !r.complete && r.messages.length > shownN) { state.messages = state.messages.slice(0, shownN); state.more = true; }
   else state.more = !r.complete && r.messages.length >= (mode === "refresh" ? count : PAGE);
   if (!state.more) state.messages = state.messages.concat(state.elsewhere);
   if (mode !== "more") {
@@ -765,9 +777,11 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
     } else if (state.openId && !ids.has(state.openId) && v.kind === "folder") clearReader();
   }
   renderList();
-  const name = v.starred ? "Starred" : v.kind === "search" ? `“${v.term}” in ${v.scope ? v.scope.name : "all mail"}` : (folderName(state.byId.get(v.folderId)) || v.folderId);
+  const name = v.starred ? "Starred" : v.kind === "search" ? `“${v.term}” in ${v.scope ? v.scope.name : "all mail"}` : v.kind === "conversation" ? conversationName()
+    : (folderName(state.byId.get(v.folderId)) || v.folderId);
   $("list-title").textContent = noBidi(name);
-  $("list-title").title = v.kind === "search" && !v.raw ? `Searched for: ${describe(parse(v.term))}` : "";
+  $("list-title").title = v.kind === "search" && !v.raw ? `Searched for: ${describe(parse(v.term))}`
+    : v.kind === "conversation" ? "Its messages in every folder but Spam and Trash, each reply beneath the message it answers. Esc goes back." : "";
   const elseN = state.elsewhere.length, elseStr = elseN >= ELSEWHERE_MAX ? `${ELSEWHERE_MAX}+` : String(elseN);
   if (v.kind === "search" && v.scope && elseN && state.more) {
     // Elsewhere hits wait below the scoped pages; offer them up front.
@@ -778,7 +792,8 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
     $("list-title").append(" ", link);
   }
   const scopedN = state.messages.filter(x => !x.elsewhere).length;
-  if (told) status(`${name}: ${scopedN} messages${v.scope && elseN ? `, ${elseStr} more in other folders` : ""}${r.truncated ? ` (a term matched over ${CAP} messages; only the newest ${CAP} were combined)` : ""}`, r.ms);
+  if (told && v.kind === "conversation") status(`${plural(scopedN, "message")} in the conversation`, r.ms);
+  else if (told) status(`${name}: ${scopedN} messages${v.scope && elseN ? `, ${elseStr} more in other folders` : ""}${r.truncated ? ` (a term matched over ${CAP} messages; only the newest ${CAP} were combined)` : ""}`, r.ms);
 }
 
 // Shown in place of the list when a view has no messages.
@@ -787,6 +802,7 @@ function emptyNote() {
   el.className = "list-empty";
   let main, sub = "";
   if (v.starred) main = "No starred messages.";
+  else if (v.kind === "conversation") main = "No message of this conversation is left outside Spam and Trash.";
   else if (v.kind === "search") {
     main = `Nothing matches “${esc(v.term)}”${v.scope ? ` in ${esc(v.scope.name)} or any other folder` : ""}.`;
     sub = v.scope || v.raw ? "" : "Press ? in the search box for search syntax.";
@@ -810,6 +826,9 @@ function renderList() {
   const frag = document.createDocumentFragment();
   let lastDay = null;
   const showFolder = state.view.kind === "search";
+  // A conversation is in tree order, not by day, and each row is as far in as its place in the
+  // tree. Its rows share their subject, so each names its folder before it.
+  const conversation = state.view.kind === "conversation";
   const outgoing = ["SENT", "DRAFT"].includes(folderType(state.byId.get(state.view.folderId)));
   let divided = false;
   state.messages.forEach((m, i) => {
@@ -827,16 +846,17 @@ function renderList() {
     }
     const day = dayLabel(h.date);
     // each row's name carries its date, so screen readers skip the day headings
-    if (day !== lastDay) { const d = document.createElement("div"); d.className = "day"; d.setAttribute("aria-hidden", "true"); d.textContent = day; frag.appendChild(d); lastDay = day; }
+    if (day !== lastDay && !conversation) { const d = document.createElement("div"); d.className = "day"; d.setAttribute("aria-hidden", "true"); d.textContent = day; frag.appendChild(d); lastDay = day; }
     const el = document.createElement("div");
     el.className = "row" + (m.flags?.read ? "" : " unread") + (m.elsewhere ? " else" : "") + (i === state.selected ? " sel" : "") + (state.marked.has(m.id) ? " marked" : "");
+    if (conversation && m.depth) el.style.paddingLeft = `calc(8px + ${m.depth * 12} * var(--fu))`;
     el.dataset.i = i;
     el.id = `row-${i}`;
     el.setAttribute("role", "option");
     el.draggable = true;
     const who = outgoing ? h.to?.[0] : h.from?.[0];
     el.innerHTML = `<span class="st" title="Star / unstar (s)"></span><span class="fl"></span><span class="fr" data-email="${attr(who?.email || "")}">${esc(who?.name || who?.email || "")}</span>` +
-      `<span class="sb">${subjectHtml(h.subject)}${showFolder ? `<em>${esc(m.folder?.name || "")}</em>` : ""}</span>` +
+      `<span class="sb">${conversation ? `<em class="lead">${esc(m.folder?.name || "")}</em>` : ""}${subjectHtml(h.subject)}${showFolder ? `<em>${esc(m.folder?.name || "")}</em>` : ""}</span>` +
       `<span class="dt"><span class="tr" title="Delete (Del)">${TRASH_ICON}</span>${fmtDate(h.date)}</span>`;
     paintFlags(el, m);
     el.onclick = e => {
@@ -890,7 +910,7 @@ function rowLabel(m) {
   const h = m.headers || {};
   const who = (["SENT", "DRAFT"].includes(folderType(state.byId.get(state.view.folderId))) ? h.to?.[0] : h.from?.[0]) || {};
   return [m.flags?.read ? "" : "Unread", noBidi(who.name || who.email || ""), plainSubject(h.subject) || "(no subject)", toDate(h.date)?.toLocaleString() || "",
-    m.flags?.flagged ? "starred" : "", fileCount(m) ? "has attachments" : "", m.elsewhere ? `in ${noBidi(m.folder?.name || "another folder")}` : ""].filter(Boolean).join(", ");
+    m.flags?.flagged ? "starred" : "", fileCount(m) ? "has attachments" : "", (m.elsewhere || state.view.kind === "conversation") ? `in ${noBidi(m.folder?.name || "another folder")}` : ""].filter(Boolean).join(", ");
 }
 // The list is a multi-select listbox: the selection is what is selected, or the cursor row when
 // nothing is; the focused list names the cursor row as its active descendant.
@@ -2065,18 +2085,22 @@ function showContextMenu(x, y) {
   // Reply and Forward answer the row that was clicked; drafts are edited, not answered.
   const answerable = folderType(state.byId.get(state.view.folderId)) !== "DRAFT";
   const whoTitle = who && (who.name ? `${who.name} <${who.email}>` : who.email);
+  // The clicked row's conversation (not in a conversation, which it is already), and the person's
+  // mail and card.
+  const more = [...(state.view.kind === "conversation" ? [] : [["conversation", "Show conversation", "w"]]),
+    ...(who ? [["find", outgoing ? "Find all to" : "Find all from", "", whoTitle], ["about", outgoing ? "About recipient..." : "About sender...", "", whoTitle]] : [])];
   // [action, label, shortcut, tooltip]; null is a separator
   const items = [
     ...(answerable ? [["reply", "Reply", "r"], ["replyAll", "Reply all", "a"], ["forward", "Forward", "f"], null] : []),
     ["archive", "Archive" + n, "e"], ["move", "Move..." + n, "v"], ["spam", spamLabel(ids) + n, "!"], ["delete", "Delete" + n, "Del"], null,
     ["read", (first.flags?.read ? "Mark unread" : "Mark read") + n, "u"],
     ["star", (first.flags?.flagged ? "Unstar" : "Star") + n, "s"],
-    ...(who ? [null, ["find", outgoing ? "Find all to" : "Find all from", "", whoTitle],
-      ["about", outgoing ? "About recipient..." : "About sender...", "", whoTitle]] : []),
+    ...(more.length ? [null, ...more] : []),
   ];
   openMenu(x, y, items, act => {
     if (act === "about") openCard({ getBoundingClientRect: () => ({ left: x, top: y, bottom: y }) }, who.email, who.name || "");
     else if (act === "find") findFrom(who.email, outgoing ? "to" : "from");
+    else if (act === "conversation") showConversation(state.messages[state.selected]);
     else if (act === "reply" || act === "replyAll" || act === "forward") answerRow(state.selected, act);
     else runAction(act);
   });
@@ -2154,18 +2178,21 @@ function wireMovePicker() {
 // ---------- navigation ----------
 // Each folder (and Starred) remembers, for this session, the highlighted message, the selection,
 // the message open in the reader and the list's scroll position; returning to it restores them.
-// A folder not visited yet opens with nothing selected and an empty reader. Searches are one-offs.
+// A folder not visited yet opens with nothing selected and an empty reader. A search or a
+// conversation keeps them on itself, for the way back to it (openBack); a search made again is a
+// new one.
 const viewMemory = new Map();
 const viewKey = v => v.kind === "folder" ? `f:${v.folderId}` : v.starred ? "starred" : null;
 function leaveView() {
   if (state.view.kind === "files") showFilesPane(false);   // Files remembers its own selection
   if (state.view.kind === "contacts") showPeoplePane(false);   // and so does Contacts
-  const key = viewKey(state.view); if (!key) return;
-  viewMemory.set(key, { cursorId: state.messages[state.selected]?.id ?? null, marked: [...state.marked],
-    openId: state.openId, scrollTop: $("rows").scrollTop });
+  const key = viewKey(state.view);
+  if (!key && state.view.kind !== "search" && state.view.kind !== "conversation") return;
+  const mem = { cursorId: state.messages[state.selected]?.id ?? null, marked: [...state.marked], openId: state.openId, scrollTop: $("rows").scrollTop };
+  if (key) viewMemory.set(key, mem); else state.view.memory = mem;
 }
 function restoreView() {
-  const key = viewKey(state.view), mem = key && viewMemory.get(key);
+  const key = viewKey(state.view), mem = key ? viewMemory.get(key) : state.view.memory;
   const at = id => state.messages.findIndex(m => m.id === id);
   if (!mem) { clearReader(); return; }
   const ids = new Set(state.messages.map(m => m.id));
@@ -2288,12 +2315,27 @@ async function openContacts(opts = {}) {
   await people.show(opts);
   if (state.view === v && !compose.isOpen()) { if (opts.filter !== undefined) people.focusFilter(); else people.focus(); }
 }
-// The view a search or Contacts was opened from, shown again. A folder's attachments give way to
-// the folder's messages.
+// The view a search, Contacts or a conversation was opened from, shown again. A folder's
+// attachments give way to the folder's messages.
 function openBack(b) {
   if (b?.kind === "contacts") openContacts();
   else if (b?.starred) openStarred();
+  else if (b?.kind === "search" || b?.kind === "conversation") reopen(b);
   else openFolder((b?.kind === "files" ? b.of : b?.folderId) || inboxId());
+}
+// A search or a conversation shown again as it was left: loaded afresh, with the highlighted
+// message, the selection, the open message and the place in the list it had.
+async function reopen(v) {
+  const from = focusWhere();
+  leaveView();
+  state.prevView = state.view;
+  state.view = v;
+  $("search").value = v.kind === "search" ? v.term : "";
+  scopeOff = v.kind === "search" && !v.scope; updateScopeChip();
+  renderFolders();
+  await loadList("fresh");
+  if (state.view === v) restoreView();
+  focusListIfStill(from);
 }
 const peopleHooks = {
   write: list => writeTo(list),
@@ -2361,6 +2403,41 @@ async function openStarred() {
   if (state.view === v) restoreView();
   focusListIfStill(from);
 }
+
+// ---------- conversation ----------
+// A message's conversation (its menu: Show conversation, or w) in place of the list: its messages
+// in every folder but Spam and Trash, as the provider counts them (conversation()), each row with
+// its folder, in tree order (thread.js) and with no days between. The message it was shown for stays
+// highlighted and open. A poll that sees a change refreshes it (actOnChanges), and Esc goes back to
+// the view it was shown from (openBack).
+async function showConversation(m) {
+  if (!m) return;
+  const from = focusWhere();
+  const cur = state.view;
+  leaveView();
+  state.prevView = cur;
+  state.view = { kind: "conversation", folderId: null, term: "", message: m, back: cur.kind === "conversation" ? cur.back : cur };
+  $("search").value = "";
+  scopeOff = false; updateScopeChip();
+  renderFolders();
+  const v = state.view;
+  await loadList("fresh");
+  if (state.view !== v) return;
+  const i = state.messages.findIndex(x => x.id === m.id);
+  // the message is open in the reader already, or opens there now, unless a message is being written
+  if (i >= 0) { select(i); if (state.openId !== m.id && !compose.isOpen()) open(i, "auto"); }
+  focusListIfStill(from);
+}
+// The rows of a conversation in tree order, each with its depth. The message it was shown for is
+// among them, also when the provider leaves it out (it is in Spam or Trash): on the first load,
+// and then for as long as the list holds it.
+function conversationRows(rows, m, mode) {
+  const all = [...rows], anchor = rows.some(x => x.id === m.id) ? null : mode === "fresh" ? m : state.messages.find(x => x.id === m.id);
+  if (anchor) { const { elsewhere, depth, ...row } = anchor; all.push(row); }
+  return arrange(all, api.refsOf).map(({ row, depth }) => ({ ...row, depth }));
+}
+// A conversation is named by the subject of its first message, without the Re: and Fwd: of replies.
+const conversationName = () => `Conversation: ${plainSubject((state.messages[0] || state.view.message)?.headers?.subject).replace(/^(\s*(re|fwd?|fw)\s*:\s*)+/i, "") || "(no subject)"}`;
 
 // ---------- search scope ----------
 // A search covers the folder being viewed and its subfolders (or Starred), shown as a chip in
@@ -2462,6 +2539,8 @@ function onKey(e) {
     if (state.view.kind === "contacts") { e.preventDefault(); people.escape(); return; }
     if (state.marked.size) { clearMarks(); return; }
     if (state.view.kind === "files") { if (!files.clearMarks()) openFolder(state.view.of); return; }
+    // a conversation gives way to the view it was shown from, as it was
+    if (state.view.kind === "conversation") { e.preventDefault(); openBack(state.view.back); return; }
     // a person's mail shown from Contacts gives way to Contacts again
     if (state.view.kind === "search" && state.view.back?.kind === "contacts" && document.activeElement === $("list")) { openContacts(); return; }
   }
@@ -2552,6 +2631,8 @@ function onKey(e) {
     case "z": e.preventDefault(); runAction("undo"); break;
     case "Z": e.preventDefault(); runAction("redo"); break;
     case "y": e.preventDefault(); if (!e.repeat) openHistory(); break;
+    // not in a conversation, which is the one it would show
+    case "w": if (!e.repeat && state.view.kind !== "conversation") showConversation(state.messages[state.selected]); break;
   }
 }
 

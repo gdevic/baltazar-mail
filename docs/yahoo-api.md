@@ -73,6 +73,8 @@ Folder sets: `folderId:(a OR b OR c)` selects several folders (verified with 217
 
 `is:flagged` selects starred messages across all folders; `-folderType:(TRASH)-folderType:(BULK)` excludes Trash and Spam (verified 2026-10-31); the client adds it to every search not limited to chosen folders (all mail, other folders, contact history).
 
+`conversationId:<id>` selects the messages of one conversation, by the `conversationId` every message carries, which is digits: in a read-only probe of the live mailbox on 2026-11-22 it found all 19 messages of a test conversation in one request, in about 200 ms. Show conversation asks it through `search()` (so outside Trash and Spam) with the hidden folders left out as well, `-folderType:(SYNC)-folderType:(INVISIBLE)`, for at most 300 rows (`conversation()`), and refuses an id that is not digits. The client arranges the rows by the `messageIdRfc822`, `inReplyTo` and `referenceList` headers each one carries (`refsOf()`, `ext/thread.js`).
+
 `q=folderId:<id> -folderType:(SYNC)-folderType:(INVISIBLE) count:100 offset:0 -sort:date`
 
 `-sort:date` is descending. Paging is by `offset`. Free-text search uses the same endpoint with `keyword:<term>` and no `folderId` (`count:20 offset:0 -sort:date keyword:Z80`, response `query.type` is `S` instead of `L`); a `folderId:` can be added to scope it. The response carries `query.token` and `query.nextModSeq`, which allow incremental refresh of an already-loaded list instead of re-fetching it.

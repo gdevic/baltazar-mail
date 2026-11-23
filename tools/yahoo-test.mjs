@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 // The adapter imports the shared modules beside it, so it is tested as built.
 createRequire(import.meta.url)("./build.js").build("yahoo");
-const { parseBootstrap, normalizeFolders, isMessageId, isInlineRef, isListed, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage, bootstrap, NotSignedIn } = await import("../dist/baltazar-mail-yahoo/api.js");
+const { parseBootstrap, normalizeFolders, isMessageId, isInlineRef, isListed, saveRequest, TIMEOUTS, Timeout, folders, send, rawMessage, bootstrap, NotSignedIn, conversation, refsOf } = await import("../dist/baltazar-mail-yahoo/api.js");
 
 let fail = 0;
 const ok = (cond, what) => { if (!cond) { fail++; console.log("FAIL", what); } };
@@ -104,6 +104,37 @@ ok(throws({ ...base, refs: [{ messageId: "a/b", partId: "2" }] }), "bad attachme
   old = 5;
   const r4 = await folders().then(() => "ok", e => e.name === "ApiError" ? e.detail?.code : e.name);
   ok(r4 === "EC-4003", "a second EC-4003 is reported, not a sign-out: " + r4);
+}
+
+// A conversation is one search by Yahoo's conversation id, outside Spam, Trash and the hidden
+// folders; an id that is not Yahoo's digits never reaches a query, and a message without one
+// names no conversation.
+{
+  const boot = '<script>window.AppBootstrapData={"appId":"A","mailWssid":"W","primaryMailbox":{"id":"M","email":"e@x"}}</script>';
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === "https://mail.yahoo.com/") return new Response(boot);
+    sent.push(JSON.parse(init.body.get("batchJson")));
+    const messages = [{ id: "M3", conversationId: "123" }, { id: "M1", conversationId: "123" }];
+    return new Response(JSON.stringify({ result: { responses: [{ id: "GetMessageGroupList", httpCode: 200, response: { result: { messages } } }] }, error: null }));
+  };
+  const c = await conversation({ id: "M1", conversationId: "123" });
+  const query = decodeURIComponent(sent[0]?.requests[0].uri.split("q=")[1] || "");
+  ok(c.complete && c.messages.map(m => m.id).join() === "M3,M1" && sent.length === 1 && /(^| )conversationId:123( |$)/.test(query) && /(^| )count:300( |$)/.test(query)
+    && query.includes("-folderType:(TRASH)-folderType:(BULK)") && query.includes("-folderType:(SYNC)-folderType:(INVISIBLE)"), "one search by conversation id, outside Spam, Trash and hidden folders: " + JSON.stringify({ query, ids: c.messages.map(m => m.id) }));
+  const refused = await conversation({ id: "M1", conversationId: "123) OR (x" }).then(() => "answered", e => e.name);
+  const none = await conversation({ id: "M1" });
+  ok(refused === "ApiError" && none.complete && !none.messages.length && sent.length === 1, "a malformed id is refused and a missing one names nothing, neither asking Yahoo: " + JSON.stringify({ refused, none, asked: sent.length }));
+}
+// What a row names of its conversation: Message-ID, In-Reply-To and References, as Yahoo gives
+// them in a list or as one header's text, with or without their brackets
+{
+  const r = JSON.stringify(refsOf({ headers: { messageIdRfc822: "<c@x.com>", inReplyTo: "<b@x.com>", referenceList: ["<a@x.com>", "<b@x.com>"] } }));
+  ok(r === JSON.stringify({ id: "c@x.com", parent: "b@x.com", refs: ["a@x.com", "b@x.com"] }), "a row's ids: " + r);
+  const s = JSON.stringify(refsOf({ headers: { messageIdRfc822: " c@x.com ", inReplyTo: "<b@x.com> (Bob's message of Monday)", referenceList: "<a@x.com>\r\n <b@x.com>" } }));
+  ok(s === JSON.stringify({ id: "c@x.com", parent: "b@x.com", refs: ["a@x.com", "b@x.com"] }), "a bare id, a comment, a folded header: " + s);
+  const t = JSON.stringify([refsOf({ headers: {} }), refsOf({}), refsOf({ headers: { messageIdRfc822: "not an id", inReplyTo: "", referenceList: [] } })]);
+  ok(t === JSON.stringify(Array(3).fill({ id: "", parent: "", refs: [] })), "nothing named: " + t);
 }
 console.log(fail ? `${fail} FAIL` : "PASS");
 process.exit(fail ? 1 : 0);

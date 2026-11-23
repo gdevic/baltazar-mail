@@ -185,7 +185,7 @@ const folders = [
   expect(afterArchive.rows === 93 && afterArchive.undo.startsWith("Undo: archive 2"), "archive removed two rows with undo label");
   expect(afterUndo.rows === 95, "undo restored rows");
   expect(sentMenu.slice(-2).join() === "Find all to|,About recipient...|", "Sent rows find and describe the recipient: " + JSON.stringify(sentMenu));
-  expect(/^Reply\|r,Reply all\|a,Forward\|f,---,Archive\|e,Move\.\.\.\|v,Spam\|!,Delete\|Del,---,Mark (un)?read\|u,(Star|Unstar)\|s,---,Find all from\|,About sender\.\.\.\|$/.test(ctxItems.join()),
+  expect(/^Reply\|r,Reply all\|a,Forward\|f,---,Archive\|e,Move\.\.\.\|v,Spam\|!,Delete\|Del,---,Mark (un)?read\|u,(Star|Unstar)\|s,---,Show conversation\|w,Find all from\|,About sender\.\.\.\|$/.test(ctxItems.join()),
     "context menu items, in order, with shortcuts: " + JSON.stringify(ctxItems));
   expect(aboutCard.email === aboutCard.rowFrom && aboutCard.nearMenu && aboutCard.closed && aboutCard.noHover && aboutCard.find === "Find all from" && aboutCard.book === "Open in Contacts", "About sender card: " + JSON.stringify(aboutCard));
   expect(moveChoices[0] === "Projects", "move picker filter");

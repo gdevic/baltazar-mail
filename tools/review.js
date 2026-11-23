@@ -1704,6 +1704,111 @@ scenario("the undo history cancels the older of two sends waiting, and the newer
   expect(sent.length === 1 && sent[0] === "Second", "only the newer one is sent: " + JSON.stringify(sent));
 }, { settings: { undoSendSec: 8 } });
 
+// ---------- conversation ----------
+// Yahoo's answer to the search for a conversation id: rows() as it lists them, newest first.
+const conversationAnswer = (id, rows) => async ({ name, uri }) => name === "messageGroups.getList" && new RegExp(`conversationId%3A${id}(%20|$)`).test(uri)
+  ? { responses: [{ id: "GetMessageGroupList", httpCode: 200, response: { result: { messages: rows(), query: {} } } }] } : undefined;
+// A message of conversation 4002 (that of MSG1_2) in a folder, from a person, days old, with its
+// Message-ID, In-Reply-To and References.
+const ofConversation = (i, folder, name, from, subject, days, [own, parent = "", ...refs]) => {
+  const m = msg(i, folder);
+  return { ...m, conversationId: "4002", folder: { id: folder, name }, headers: { ...m.headers, subject, from: [from], date: String(Math.floor(Date.now() / 1000) - days * 86400), messageIdRfc822: own, inReplyTo: parent, referenceList: refs } };
+};
+// Each row's sender, folder, depth (in steps of the first indentation) and whether it is highlighted.
+const conversationRows = page => page.locator("#rows .row").evaluateAll(rs => {
+  const pad = rs.map(r => parseFloat(getComputedStyle(r).paddingLeft)), step = pad.find(p => p > pad[0]) - pad[0];
+  return rs.map((r, k) => ({ who: r.querySelector(".fr").textContent, folder: r.querySelector(".sb em")?.textContent ?? null, depth: Math.round((pad[k] - pad[0]) / step) || 0, sel: r.classList.contains("sel") }));
+});
+const conversationShown = page => page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("Conversation"), null, { timeout: 5000 }).catch(() => {});
+
+scenario("Show conversation lists a message's conversation as a tree, keeps the message open, follows a mail check, and Esc goes back", async ({ page, calls, mock, folders }, expect) => {
+  const alex = { name: "Alex", email: "alex@x.com" }, me = { name: "Me Myself", email: "me@yahoo.com" }, bob = { name: "Bob", email: "bob@x.com" }, cy = { name: "Cy", email: "cy@x.com" };
+  let answered = false;
+  // the original in Projects; the user's reply in Sent; Bob's answer to it (MSG1_2, in Inbox); a
+  // second reply to the original; and one whose parent is gone, which hangs from the original it
+  // also names. Once answered, the user's answer to Bob comes after a mail check.
+  mock.handler = conversationAnswer("4002", () => [
+    ...(answered ? [ofConversation(3, "2", "Sent", me, "Re: Plan", 0, ["<f@x>", "<c@x>", "<a@x>", "<b@x>", "<c@x>"])] : []),
+    ofConversation(1, "62", "Archive", cy, "Re: Plan", 1, ["<e@x>", "<gone@x>", "<a@x>", "<gone@x>"]),
+    ofConversation(5, "1", "Inbox", alex, "Re: Plan", 2, ["<d@x>", "<a@x>", "<a@x>"]),
+    ofConversation(2, "1", "Inbox", bob, "Re: Plan", 3, ["<c@x>", "<b@x>", "<a@x>", "<b@x>"]),
+    ofConversation(1, "2", "Sent", me, "Re: Plan", 4, ["<b@x>", "<a@x>", "<a@x>"]),
+    ofConversation(1, "31", "Projects", alex, "Plan", 5, ["<a@x>"]),
+  ]);
+  const bodies = () => calls.filter(c => c.name === "messages.getBody").length;
+  const asked = () => calls.filter(c => c.name === "messageGroups.getList").map(c => decodeURIComponent(c.envelope.requests[0].uri.split("q=")[1] || "")).filter(q => q.includes("conversationId"));
+  // the address book's first build says when it is done, which would cover what the list says
+  await page.waitForFunction(() => /^Contacts:/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(700);
+  const subject = await page.locator("#r-subject").textContent(), opened = bodies();
+  await page.locator("#rows .row").nth(1).click({ button: "right" }); await page.waitForTimeout(150);
+  const item = await page.locator('#ctx [data-act="conversation"]').evaluate(e => [e.querySelector("span").textContent, e.querySelector("kbd")?.textContent]).catch(() => null);
+  await page.locator('#ctx [data-act="conversation"]').click();
+  await conversationShown(page); await page.waitForTimeout(300);
+  const shown = { title: await page.locator("#list-title").textContent(), rows: await conversationRows(page), days: await page.locator("#rows .day").count(), reader: await page.locator("#r-subject").textContent(), fetched: bodies() - opened, said: await page.locator("#st-msg").textContent(), asked: asked() };
+  expect(JSON.stringify(item) === '["Show conversation","w"]', "the menu offers Show conversation, with its key: " + JSON.stringify(item));
+  expect(shown.title === "Conversation: Plan" && !shown.days && shown.said === "5 messages in the conversation" && shown.asked.length === 1 && /(^| )conversationId:4002( |$)/.test(shown.asked[0]) && /(^| )count:300( |$)/.test(shown.asked[0]) && shown.asked[0].includes("-folderType:(TRASH)-folderType:(BULK)"),
+    "one search by conversation id, the list named after it, no days: " + JSON.stringify(shown));
+  expect(shown.rows.map(r => `${r.who}/${r.folder}/${r.depth}`).join() === "Alex/Projects/0,Me Myself/Sent/1,Bob/Inbox/2,Alex/Inbox/1,Cy/Archive/1",
+    "the original on top, each reply beneath what it answers, oldest first, each with its folder: " + JSON.stringify(shown.rows));
+  expect(shown.rows.findIndex(r => r.sel) === 2 && shown.rows.filter(r => r.sel).length === 1 && shown.reader === subject && !shown.fetched, "the message stays highlighted and open, not fetched again: " + JSON.stringify({ rows: shown.rows, reader: shown.reader, subject, fetched: shown.fetched }));
+  // A mail check sees Sent change before Yahoo's search has the user's new answer; the next check,
+  // which sees no change, looks again and finds it, under Bob's; the one after asks nothing.
+  const check = async () => { await sleep(3100); await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); };   // a check comes 3 s after the last at the soonest
+  const looked = asked().length;
+  folders.find(f => f.id === "2").highestModSeq++;
+  await check();
+  for (let i = 0; i < 50 && asked().length === looked; i++) await sleep(100);
+  await page.waitForTimeout(300);
+  const lagging = await page.locator("#rows .row").count();
+  answered = true;
+  await check();
+  await page.waitForFunction(() => document.querySelectorAll("#rows .row").length === 6, null, { timeout: 6000 }).catch(() => {});
+  const polled = { rows: await conversationRows(page), reader: await page.locator("#r-subject").textContent() };
+  await check(); await page.waitForTimeout(800);
+  const looks = asked().length - looked;
+  expect(lagging === 5 && looks === 2 && polled.rows.map(r => `${r.who}/${r.depth}`).join() === "Alex/0,Me Myself/1,Bob/2,Me Myself/3,Alex/1,Cy/1" && polled.rows.findIndex(r => r.sel) === 2 && polled.reader === subject,
+    "a mail check refreshes the conversation, and the next looks once more, the highlight and the reader where they were: " + JSON.stringify({ lagging, looks, polled }));
+  await page.locator("#rows .row").nth(0).click({ button: "right" }); await page.waitForTimeout(150);
+  const inside = await page.locator('#ctx [data-act="conversation"]').count();
+  await page.keyboard.press("Escape");
+  const stays = await page.locator("#list-title").textContent();
+  await page.locator("#list").focus(); await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.getElementById("list-title").textContent === "Inbox", null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  const back = { title: await page.locator("#list-title").textContent(), sel: await page.evaluate(() => [...document.querySelectorAll("#rows .row")].findIndex(x => x.classList.contains("sel"))), reader: await page.locator("#r-subject").textContent() };
+  expect(!inside && stays === "Conversation: Plan", "a conversation does not offer itself again, and Esc closes the menu first: " + JSON.stringify({ inside, stays }));
+  expect(back.title === "Inbox" && back.sel === 1 && back.reader === subject, "Esc goes back to Inbox, the message highlighted and open: " + JSON.stringify(back));
+  await page.locator("#list").focus(); await page.keyboard.press("w");
+  await conversationShown(page); await page.waitForTimeout(300);
+  const byKey = { title: await page.locator("#list-title").textContent(), rows: await conversationRows(page) };
+  expect(byKey.title === "Conversation: Plan" && byKey.rows[2]?.who === "Bob" && byKey.rows[2].sel, "w shows it too: " + JSON.stringify(byKey));
+}, { settings: { markReadSec: null } });
+
+scenario("a conversation shown from a search goes back to the search as it was, and one shown from Trash keeps its message", async ({ page, mock }, expect) => {
+  // the search leaves out a message in Trash, so the conversation of MSG4_1 answers another alone
+  mock.handler = conversationAnswer("4001", () => [{ ...msg(7, "1"), conversationId: "4001" }]);
+  // a search's rows name their folder after the subject
+  const selected = () => page.locator("#rows .row.sel .sb").evaluate(e => e.firstChild.textContent).catch(() => "");
+  await page.locator("#search").click(); await page.keyboard.type("Subject"); await page.keyboard.press("Shift+Enter"); await page.waitForTimeout(800);
+  const title = await page.locator("#list-title").textContent();
+  await page.locator("#rows .row").nth(2).click(); await page.waitForTimeout(500);
+  const picked = await selected();
+  await page.locator("#list").focus(); await page.keyboard.press("w");
+  await conversationShown(page); await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("Escape");
+  await page.waitForFunction(t => document.getElementById("list-title").textContent === t, title, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  const back = { title: await page.locator("#list-title").textContent(), sel: await selected(), reader: await page.locator("#r-subject").textContent(), box: await page.inputValue("#search") };
+  expect(back.title === title && title.startsWith("“Subject”") && back.sel === picked && back.reader === picked && back.box === "Subject", "Esc goes back to the search, the message highlighted and open: " + JSON.stringify({ title, picked, back }));
+  await folder(page, "Trash");
+  await page.locator("#rows .row").first().click(); await page.waitForTimeout(500);
+  await page.locator("#list").focus(); await page.keyboard.press("w");
+  await conversationShown(page); await page.waitForTimeout(300);
+  const trash = await conversationRows(page);
+  expect(trash.length === 2 && trash.filter(r => r.sel).map(r => r.who).join() === "Sender 1", "the message from Trash is listed with its conversation, highlighted: " + JSON.stringify(trash));
+});
+
 scenario("a failed folder load keeps the list that was shown", async ({ page, mock }, expect) => {
   const before = await subjects(page);
   mock.handler = async ({ name, uri }) => name === "messageGroups.getList" && /folderId%3A62\b/.test(uri) ? { error: { code: "EC-5003", message: "Internal error" } } : undefined;

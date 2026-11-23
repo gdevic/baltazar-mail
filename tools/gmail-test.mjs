@@ -361,6 +361,26 @@ const lastMod = () => modsOf().at(-1);
   ok(arow?.attachmentCount === 1, "the row counts it: " + JSON.stringify(arow?.attachments));
   mock.messages.delete("apple1");
 }
+// a conversation is the message's thread, its messages in Spam and Trash left out, each row in the
+// folder its labels place it in; a thread id that is not Gmail's never reaches a request
+{
+  const t = Math.floor(Date.now() / 1000), thread = { threadId: "t-plan", cc: "", html: "<p>x</p>" };
+  mock.addMessage({ id: "c1", labels: ["Label_1"], subject: "Plan", from: "Alex <alex@x.com>", date: t - 400, ...thread });
+  mock.addMessage({ id: "c2", labels: ["SENT"], subject: "Re: Plan", from: "Me <me@gmail.com>", inReplyTo: "<c1@x.com>", date: t - 300, ...thread });
+  mock.addMessage({ id: "c3", labels: ["TRASH"], subject: "Re: Plan", from: "Bob <bob@x.com>", inReplyTo: "<c1@x.com>", date: t - 200, ...thread });
+  mock.addMessage({ id: "c4", labels: ["SPAM", "UNREAD"], subject: "Re: Plan", from: "Spam <s@x.com>", inReplyTo: "<c2@x.com>", date: t - 100, ...thread });
+  mock.calls.length = 0;
+  const c = await api.conversation({ id: "c2", threadId: "t-plan" });
+  const asked = mock.calls.filter(x => /^\/threads\//.test(x.path)), got = c.messages.map(m => `${m.id}@${m.folder.id}`).join();
+  ok(c.complete && got === "c1@Label_1,c2@SENT" && asked.length === 1 && asked[0].path === "/threads/t-plan" && asked[0].q.format === "minimal" && !mock.calls.some(x => /\/messages\/c[34]\b/.test(x.path)),
+    "the thread's messages outside Spam and Trash, as rows, the others not fetched: " + JSON.stringify({ got, asked }));
+  const r = JSON.stringify(api.refsOf(c.messages[1]));
+  ok(r === JSON.stringify({ id: "c2@x.com", parent: "c1@x.com", refs: ["c1@x.com"] }) && JSON.stringify(api.refsOf(c.messages[0])) === JSON.stringify({ id: "c1@x.com", parent: "", refs: [] }), "a row names its Message-ID, In-Reply-To and References: " + r);
+  mock.calls.length = 0;
+  const refused = await outcome(api.conversation({ id: "c2", threadId: "t) OR x" })), none = await api.conversation({ id: "c2" });
+  ok(refused.e instanceof api.ApiError && none.complete && !none.messages.length && !mock.calls.length, "a malformed thread id is refused and a missing one names nothing, neither asking Gmail: " + JSON.stringify({ refused: refused.e?.message, none }));
+  for (const id of ["c1", "c2", "c3", "c4"]) mock.messages.delete(id);
+}
 // mutations: label changes, a few one message each, more in bulk; a move trades the placing
 // labels for the target's
 {
