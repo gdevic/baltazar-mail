@@ -197,12 +197,13 @@ const FAILED = {
 const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? `${api.PROVIDER.name} could not be reached; check the connection.` : e.message;
 
 // Errors that mean "no session" show the sign-in panel; others a notice, or with quiet (a
-// background check that simply runs again) only the status line.
+// background check that simply runs again) only the status line. A quiet one goes to the console
+// as a warning: the browser's extension page lists console errors as the extension's own, and a
+// dropped connection or a computer waking from sleep is not one.
 function handleError(e, what, { quiet = false } = {}) {
   if (e instanceof api.NotSignedIn) { showSignIn(e); return; }
-  console.error(what, e);
-  if (quiet) status(`${what}: ${cause(e)}`);
-  else notify(FAILED[what] || `Something went wrong (${what}).`, { detail: cause(e), err: e, what });
+  if (quiet) { console.warn(what, e); status(`${what}: ${cause(e)}`); }
+  else { console.error(what, e); notify(FAILED[what] || `Something went wrong (${what}).`, { detail: cause(e), err: e, what }); }
 }
 
 // ---------- folders ----------
