@@ -2510,6 +2510,102 @@ scenario("outgoing mail carries no sender style sheet and no Yahoo address", asy
   expect(out.every(o => !o.style && !o.yahoo), "forward and reply carry neither: " + JSON.stringify(out));
 });
 
+// ---------- a quote's formatting ----------
+// A message laid out by its style sheet alone, as a shop's receipt is: a reset on every element,
+// classes and an id for the rest, and rules for narrow and dark screens.
+const RECEIPT = `<style>
+* { border: none; margin: 0; padding: 0; font-family: "Courier New", monospace; text-decoration: none; }
+table { border-collapse: collapse; }
+body { background-color: #f1f3f4; }
+.wrap { width: 560px; margin: 0 auto; background: #ffffff; }
+.pad { padding: 24px 32px; }
+.h2 { font-weight: 700; font-size: 28px; line-height: 36px; color: #202124; }
+.body { color: #202124; font-weight: 400; font-size: 14px; line-height: 1.5; letter-spacing: 0.2px; }
+.col { width: 50%; vertical-align: top; }
+.price { text-align: right; font-weight: 700; }
+.btn { display: inline-block; background: #1a73e8; color: #ffffff !important; border-radius: 4px; padding: 10px 24px; }
+.muted { color: #5f6368; font-size: 12px; }
+#sum td { border-top: 1px solid #dadce0; padding-top: 12px; }
+@media screen and (max-width: 720px) { .wrap { width: 100% !important; } .col { display: block !important; } .h2 { font-size: 20px !important; } }
+@media (prefers-color-scheme: dark) { .wrap { background: #000000 !important; } }
+</style>
+<table width="100%"><tr><td align="center"><table class="wrap"><tr><td class="pad">
+<h2 class="h2">Thanks for your purchase</h2>
+<p class="body">Your order is confirmed.</p>
+<table width="100%"><tr><td class="col"><p class="body">Pixel Stand</p><p class="muted">Qty 1</p></td><td class="col price"><p class="body">$79.00</p></td></tr>
+<tr id="sum"><td class="col"><p class="body">Total</p></td><td class="col price"><p class="body">$85.32</p></td></tr></table>
+<p><a class="btn" href="https://example.com/order">View order</a></p>
+</td></tr></table></td></tr></table>`;
+// What the sheet gives six of its elements, as computed where the message is shown: the reader's
+// frame, or the quote in the editor.
+const receiptLook = where => {
+  const root = where === "reader" ? document.getElementById("r-body").contentDocument.body : document.querySelector("#c-editor .ymq");
+  const cell = text => [...root.querySelectorAll("td")].findLast(td => td.textContent.trim() === text);
+  const text = ["font-family", "font-size", "font-weight", "line-height", "letter-spacing", "color", "margin-top", "margin-bottom"];
+  const look = { title: [root.querySelector("h2"), text], para: [root.querySelector("h2 + p"), text], wrap: [root.querySelectorAll("table")[1], ["width", "background-color", "border-collapse"]],
+    price: [cell("$79.00"), ["text-align", "font-weight", "vertical-align", "padding-left", "padding-top"]], sum: [cell("Total"), ["border-top-width", "border-top-style", "border-top-color", "padding-top"]],
+    button: [root.querySelector("a"), ["display", "background-color", "color", "border-top-left-radius", "padding-left", "padding-top", "text-decoration-line", "font-family"]] };
+  return Object.fromEntries(Object.entries(look).map(([k, [el, props]]) => [k, el ? props.map(p => getComputedStyle(el).getPropertyValue(p)).join("|") : "missing"]));
+};
+
+scenario("a forward and a reply keep the formatting a message's style sheet gives it", async ({ page, calls, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id === "MSG1_2") body.html = RECEIPT; };
+  await page.setViewportSize({ width: 1500, height: 900 });      // a reader wider than the sheet's narrow screen
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  const reader = await page.evaluate(receiptLook, "reader");
+  expect(/^"Courier New", monospace\|28px\|700\|36px/.test(reader.title) && /^560px\|rgb\(255, 255, 255\)/.test(reader.wrap), "the reader shows the wide, light layout: " + JSON.stringify(reader));
+  for (const [key, what] of [["f", "forward"], ["r", "reply"]]) {
+    await page.locator("#list").focus(); await page.keyboard.press(key); await page.waitForSelector("#compose:not(.hidden)");
+    await page.waitForTimeout(300);
+    const quote = await page.evaluate(receiptLook, "editor");
+    expect(JSON.stringify(quote) === JSON.stringify(reader), `the ${what}'s quote looks as the message does in the reader: ` + JSON.stringify({ quote, reader }));
+    const r = await page.evaluate(() => { const q = document.querySelector("#c-editor .ymq"), mine = getComputedStyle(document.querySelector("#c-editor > div"));
+      return { sheets: q.querySelectorAll("style").length, named: q.querySelectorAll("[class], [id]").length, mine: mine.fontFamily, frames: document.querySelectorAll("iframe").length }; });
+    expect(!r.sheets && !r.named && !/Courier/.test(r.mine) && r.frames === 1, `the ${what} holds no sheet, class or id of the sender's, and the user's own text keeps the composer's font: ` + JSON.stringify(r));
+    if (key === "r") break;
+    await page.locator("#c-to input").type("q@example.com"); await page.keyboard.press("Enter");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
+    const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
+    expect(/<h2 style="[^"]*font-size: 28px/.test(html) && !/<style|class="(h2|wrap|btn)"/.test(html), "the sent forward carries the formatting in its elements: " + html.slice(0, 600));
+    expect(html.length < 2 * RECEIPT.length, `a reset on every element does not swell the quote: ${html.length} characters for a message of ${RECEIPT.length}`);
+    await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  }
+});
+
+scenario("inlineStyles golden values: the cascade, the screens a rule is for, what is left out, and nothing loaded", async ({ page, mock, cspViolations }, expect) => {
+  const cases = {
+    cascade: ['<style>p{color:red;margin:0}.a{color:blue}#x{color:green}.b{color:orange!important}</style><p class="a b" id="x" style="color:black">t</p><p class="a">u</p><p id="y" style="color:black">v</p><p style="color:black!important" class="b">w</p>',
+      '<p class="a b" id="x" style="color: orange; margin-top: 0px; margin-bottom: 0px;">t</p><p class="a" style="color: blue; margin-top: 0px; margin-bottom: 0px;">u</p><p id="y" style="color: black; margin-top: 0px; margin-bottom: 0px;">v</p><p style="color: black; margin-top: 0px; margin-bottom: 0px;" class="b">w</p>'],
+    order: ['<style>div p{color:red}p{color:blue}:is(.q,#z) p{margin:1px}div p{margin:2px}:where(#z) p{padding:3px}p{padding:4px}</style><div class="q"><p>t</p></div>',
+      '<div class="q"><p style="color: red; padding: 4px; margin: 1px;">t</p></div>'],
+    screens: ['<style>.w{width:600px}@media (max-width:720px){.w{width:100%!important}}@media screen{.w{color:red}}@media (prefers-color-scheme:dark){.w{background:#000}}@media print{.w{display:none}}</style><style media="print">.w{float:left}</style><div class="w">x</div>',
+      '<div class="w" style="color: red; width: 600px;">x</div>'],
+    // the body's styles go to a div around the message; a declaration that changes nothing is left out
+    reset: ['<style>*{margin:0;padding:0;font-family:Georgia}body{background:#eee;height:100%}table{border-collapse:collapse}</style><table><tr><td><p>a</p><span>b</span></td></tr></table>',
+      '<div style="font-family: Georgia; background-color: rgb(238, 238, 238);"><table style="border-collapse: collapse;"><tbody><tr><td style="padding: 0px;"><p style="margin-top: 0px; margin-bottom: 0px;">a</p><span>b</span></td></tr></tbody></table></div>'],
+    // an inherited property is left out only under an element of the quote that keeps it
+    inherited: ['<style>p{font-size:16px;color:#000;text-align:left}b{font-size:16px;text-align:left}</style><p>a<b>c</b></p><b>d</b>',
+      '<p style="font-size: 16px; color: rgb(0, 0, 0); text-align: left;">a<b>c</b></p><b style="font-size: 16px; text-align: left;">d</b>'],
+    // an address is kept and not asked for; a cell whose picture is an attribute keeps its style as it is
+    address: ['<style>.h{background:url(https://ecp.yusercontent.com/t-bg.png) no-repeat;color:red;margin:0}td{background-image:none}</style><div class="h">x</div><img src="https://ecp.yusercontent.com/t-img.png" width="5" height="5" class="h"><table><tr><td background="https://ecp.yusercontent.com/t-td.png">y</td></tr></table>',
+      '<div class="h" style="color: red; background-repeat: no-repeat; background-image: url(&quot;https://ecp.yusercontent.com/t-bg.png&quot;);">x</div><img src="https://ecp.yusercontent.com/t-img.png" width="5" height="5" class="h" style="color: red; background-repeat: no-repeat; background-image: url(&quot;https://ecp.yusercontent.com/t-bg.png&quot;);"><table><tbody><tr><td background="https://ecp.yusercontent.com/t-td.png" style="background-image: none;">y</td></tr></tbody></table>'],
+    unstyled: ['<p class="k">x</p><link rel="stylesheet" href="x.css">', '<p class="k">x</p>'],
+  };
+  const r = await page.evaluate(async cases => {
+    const { inlineStyles } = await import("./quotestyle.js");
+    const got = {};
+    for (const [k, [html]] of Object.entries(cases)) got[k] = await inlineStyles(html);
+    const t0 = performance.now();
+    const many = await inlineStyles(`<style>${"*{color:red}".repeat(120)}</style>${"<i>x</i>".repeat(2000)}`);
+    return { got, many: many.slice(0, 16), ms: performance.now() - t0, frames: document.querySelectorAll("iframe").length };
+  }, cases);
+  for (const [k, [, want]] of Object.entries(cases)) expect(r.got[k] === want, `${k}: ${r.got[k]}`);
+  expect(r.many === "<i>x</i><i>x</i>" && r.ms < 1500, "a message with too many matches is quoted without its sheets, quickly: " + JSON.stringify([r.many, Math.round(r.ms)]));
+  await page.waitForTimeout(300);
+  expect(!mock.images.length && !cspViolations.length && r.frames === 1, "inlining asks for no picture and leaves no frame behind: " + JSON.stringify([mock.images, cspViolations, r.frames]));
+});
+
 scenario("a plain-text reply quotes names and structure as text", async ({ page, mock }, expect) => {
   mock.patchBody = (id, m, body) => { if (id === "MSG1_2") { m.headers.from = [{ name: `O'Brien "AT&T"`, email: "ob@x.ie" }];
     body.html = '<p>See <a href="https://example.com/doc">the doc</a> and <a href="https://example.com/">https://example.com/</a></p><ul><li>one</li><li>two</li></ul><ol><li>first</li></ol><table><tr><td>a</td><td>b</td></tr></table>'; } };

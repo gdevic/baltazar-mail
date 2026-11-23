@@ -1,6 +1,7 @@
 import * as api from "./api.js";
 import { sniffImage, dataUrl } from "./bytes.js";
 import * as contacts from "./contacts.js";
+import { inlineStyles } from "./quotestyle.js";
 import { esc, noBidi } from "./text.js";
 
 // Compose panel: new message, reply, reply all, forward, or editing a draft.
@@ -259,6 +260,10 @@ async function openNow(opts) {
   const me = opts.myEmail;
   const primary = accounts.find(a => a.isPrimary) || accounts[0] || { email: me, sendingName: "" };
   const m = opts.message, h = m?.headers || {};
+  // The original of a reply or forward, without the sender's style sheets: in the outgoing message
+  // they would apply to all of it in the recipients' mail and could restyle or hide the user's own
+  // text. What they give the original is in its elements instead (quotestyle.js).
+  const original = ["reply", "replyAll", "forward"].includes(opts.mode) ? await inlineStyles(opts.body.html) : "";
   // images: whether the quoted message's remote images may load, as decided in the reader
   // quoteHtml and quoteText hold the original of a reply or forward until it goes into the editor
   draft = { csid: String(Date.now()), mode: "new", inReplyTo: null, files: [], refs: [], savedId: null, quoteHtml: "", quoteText: "", html: true, images: opts.images !== false };
@@ -274,9 +279,7 @@ async function openNow(opts) {
       ({ to, cc } = replyRecipients(opts.mode, h, mine));
       subject = /^re:/i.test(h.subject || "") ? h.subject : `Re: ${h.subject || ""}`;
       draft.inReplyTo = { id: m.id, replied: true };
-      // The sender's style sheets stay out of the reply: they would apply to the whole outgoing
-      // message in the recipients' mail and could restyle or hide the user's own text.
-      draft.quoteHtml = `<div class="ymq"><div>${quoteHeader()}</div><blockquote style="border-left:1px solid #ccc;margin:0 0 0 .8em;padding-left:1em">${withoutStyleSheets(opts.body.html)}</blockquote></div>`;
+      draft.quoteHtml = `<div class="ymq"><div>${quoteHeader()}</div><blockquote style="border-left:1px solid #ccc;margin:0 0 0 .8em;padding-left:1em">${original}</blockquote></div>`;
       draft.quoteText = `${quoteHeaderText()}\n` + toText(opts.body.html).split("\n").map(l => "> " + l).join("\n");
       break;
     }
@@ -284,8 +287,7 @@ async function openNow(opts) {
       subject = /^fwd?:/i.test(h.subject || "") ? h.subject : `Fwd: ${h.subject || ""}`;
       draft.inReplyTo = { id: m.id, forwarded: true };
       const hdr = `---------- Forwarded message ----------<br>From: ${esc(fmtList(h.from))}${when ? `<br>Date: ${when}` : ""}<br>Subject: ${esc(h.subject || "")}<br>To: ${esc(fmtList(h.to))}${h.cc?.length ? `<br>Cc: ${esc(fmtList(h.cc))}` : ""}<br><br>`;
-      // as in a reply, the sender's style sheets stay out of the outgoing message
-      draft.quoteHtml = `<div class="ymq">${hdr}${withoutStyleSheets(opts.body.html)}</div>`;
+      draft.quoteHtml = `<div class="ymq">${hdr}${original}</div>`;
       const hdrText = `---------- Forwarded message ----------\nFrom: ${fmtList(h.from)}${when ? `\nDate: ${when}` : ""}\nSubject: ${h.subject || ""}\nTo: ${fmtList(h.to)}${h.cc?.length ? `\nCc: ${fmtList(h.cc)}` : ""}\n\n`;
       draft.quoteText = hdrText + toText(opts.body.html);
       draft.refs = (opts.body.attachments || []).filter(a => a.disposition !== "inline" && a.partId)
@@ -910,14 +912,6 @@ function editorSafe(html, { images = true } = {}) {
   const box = document.createElement("div");
   box.appendChild(frag);
   return box.innerHTML;
-}
-
-
-function withoutStyleSheets(html) {
-  const tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  tpl.content.querySelectorAll("style, link").forEach(e => e.remove());
-  return tpl.innerHTML;
 }
 
 // Plain text of an HTML message: links keep their address, list items their bullet or number,
