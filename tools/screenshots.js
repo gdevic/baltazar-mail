@@ -35,18 +35,30 @@ const folders = [
 const fname = id => folders.find(f => f.id === id)?.name || "Inbox";
 
 let seq = 0;
+// o.conv: the conversation a message is in, digits as Yahoo writes them (one of its own otherwise);
+// o.ids: its Message-ID, In-Reply-To and References headers
 const mk = (folder, daysAgo, from, subject, o = {}) => ({
-  id: `M${folder}_${++seq}`, conversationId: `C${seq}`, size: 4000, csid: `cs${seq}`,
+  id: `M${folder}_${++seq}`, conversationId: o.conv || String(9000 + seq), size: 4000, csid: `cs${seq}`,
   flags: { read: o.unread ? false : true, flagged: !!o.star },
   attachmentCount: o.att || 0,
-  headers: { subject, from: [from], to: [o.to || ME], cc: o.cc || [], date: String(NOW - Math.round(daysAgo * DAY) - (seq % 7) * 1800) },
+  headers: { subject, from: [from], to: [o.to || ME], cc: o.cc || [], date: String(NOW - Math.round(daysAgo * DAY) - (seq % 7) * 1800), ...o.ids },
   folder: { id: folder, name: fname(folder) }, snippet: o.snippet || "",
 });
 const p = (name, email) => ({ name, email });
+const ROBIN = p("Robin Hale", "robin.hale@example.com"), CASEY = p("Casey Wu", "casey.wu@example.com");
+
+// The website design thread, one conversation in Projects/Website, Sent and Inbox, for the dark
+// screenshot: each message names its own id, the one it answers and, as References, the chain
+// above that, as mail does.
+const THREAD = "7001", ANSWERS = { s: "a", b: "s", c: "b", e: "a", d: "e", k: "d", f: "d", g: "f" };
+const chain = id => ANSWERS[id] ? [...chain(ANSWERS[id]), ANSWERS[id]] : [];
+const msgId = id => `<${id}.staging@website.example>`;
+const inThread = id => ({ conv: THREAD, ids: { messageIdRfc822: msgId(id), inReplyTo: ANSWERS[id] ? msgId(ANSWERS[id]) : "", referenceList: chain(id).map(msgId) } });
 
 const inbox = [
   mk("1", 0.1, p("Maya Chen", "maya.chen@example.com"), "Re: Saturday hike, meet at the trailhead?", { unread: true }),
   mk("1", 0.3, p("Contoso Bank", "alerts@contoso.example"), "Your October statement is ready", { unread: true }),
+  mk("1", 0.5, CASEY, "Re: Website redesign: staging feedback", inThread("k")),
   mk("1", 0.6, p("Northwind Airlines", "no-reply@northwind.example"), "Your boarding pass for flight NW 482", { star: true }),
   mk("1", 1.2, p("Leo Martins", "leo.martins@example.com"), "Re: Bike repair", {}),
   mk("1", 1.5, p("Fabrikam Utilities", "billing@fabrikam.example"), "Your bill for October is ready", { unread: true }),
@@ -92,16 +104,15 @@ To: <a href="mailto:sam.rivera@example.com">sam.rivera@example.com</a></div><br>
 <p>Hi all, I took about forty photos at the cove this morning. Here are three of my favourites; the rest are in the shared album.
 The light at the point was perfect around eight. Thanks for organising the trip! Same time next year? - Dana</p></div>`;
 
-// Projects/Website: a design thread for the dark screenshot
-const ROBIN = p("Robin Hale", "robin.hale@example.com");
+// Projects/Website: the design thread, and the project's other mail
 const website = [
-  [0.2, ME, "Re: Website redesign: staging feedback", 0], [0.3, ROBIN, "Re: Website redesign: staging feedback", 1],
-  [0.9, ROBIN, "Re: Website redesign: staging feedback", 1], [1.1, ME, "Re: Website redesign: staging feedback", 1],
-  [1.4, ME, "Re: Website redesign: staging feedback", 1], [2.0, ROBIN, "Re: Website redesign: staging feedback", 0],
-  [3.0, ROBIN, "Website redesign: staging feedback", 0], [4.5, p("Casey Wu", "casey.wu@example.com"), "Logo files, final versions", 2],
-  [6.0, p("Casey Wu", "casey.wu@example.com"), "Re: Colour palette options", 1], [9.0, ROBIN, "Hosting renewal and DNS move", 0],
-  [14.0, p("Casey Wu", "casey.wu@example.com"), "Colour palette options", 1], [21.0, ROBIN, "Kickoff notes", 1],
-].map(([d, from, s, att]) => mk("22", d, from, s, { att }));
+  [0.2, ME, "Re: Website redesign: staging feedback", 0, "g"], [0.3, ROBIN, "Re: Website redesign: staging feedback", 1, "f"],
+  [0.9, ROBIN, "Re: Website redesign: staging feedback", 1, "d"], [1.1, ME, "Re: Website redesign: staging feedback", 1, "e"],
+  [1.4, ME, "Re: Website redesign: staging feedback", 1, "c"], [2.0, ROBIN, "Re: Website redesign: staging feedback", 0, "b"],
+  [3.0, ROBIN, "Website redesign: staging feedback", 0, "a"], [4.5, CASEY, "Logo files, final versions", 2],
+  [6.0, CASEY, "Re: Colour palette options", 1], [9.0, ROBIN, "Hosting renewal and DNS move", 0],
+  [14.0, CASEY, "Colour palette options", 1], [21.0, ROBIN, "Kickoff notes", 1],
+].map(([d, from, s, att, id]) => mk("22", d, from, s, { att, ...(id ? inThread(id) : {}) }));
 const DESIGN_MSG = website[2];
 DESIGN_MSG.attachments = [{ partId: "2", filename: "staging-notes.pdf", size: 182000, disposition: "attachment", type: "application", subtype: "pdf", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/9" }];
 DESIGN_MSG.html = `<div style="font-family:Helvetica,Arial,sans-serif;font-size:14px">
@@ -120,7 +131,7 @@ DESIGN_MSG.html = `<div style="font-family:Helvetica,Arial,sans-serif;font-size:
 <p>Could you click through it this week and send me anything that looks wrong? I would like to switch the DNS over before the end of the month.</p>
 <p>- Alex</p></blockquote></div>`;
 
-const sent = [mk("2", 1.1, ME, "Re: Website redesign: staging feedback", { to: ROBIN }), mk("2", 2.2, ME, "Re: Saturday hike", { to: p("Maya Chen", "maya.chen@example.com") })];
+const sent = [mk("2", 2.5, ME, "Re: Website redesign: staging feedback", { to: ROBIN, ...inThread("s") }), mk("2", 2.2, ME, "Re: Saturday hike", { to: p("Maya Chen", "maya.chen@example.com") })];
 const all = [...inbox, ...website, ...sent];
 for (const m of all) if (!m.html) m.html = `<p>${m.headers.subject}</p>`;
 
@@ -234,6 +245,9 @@ function listFor(q) {
   // all mail with one person, newest first (a contact's page)
   const who = (q.match(/from:\("([^"]+)"\) OR to:/) || [])[1];
   if (who) return all.filter(m => [...m.headers.from, ...m.headers.to].some(a => a.email === who)).sort((a, b) => b.headers.date - a.headers.date);
+  // a conversation, newest first, in every folder (Show conversation)
+  const conv = (q.match(/conversationId:(\d+)/) || [])[1];
+  if (conv) return all.filter(m => m.conversationId === conv).sort((a, b) => b.headers.date - a.headers.date);
   const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1";
   return all.filter(m => m.folder.id === folder);
 }
@@ -263,6 +277,19 @@ function listFor(q) {
       const msg = all.find(x => x.id === id) || all[0];
       result = { message: { ...msg, attachments: msg.attachments || [] }, simpleBody: { html: msg.html } };
     } else if (/"method":"(POST|DELETE)"/.test(post)) {
+      // flags and moves are kept, with the folders' counts, as the server keeps them, so what is
+      // listed afterwards shows them
+      const count = (folderId, total, unread) => { const f = folders.find(x => x.id === folderId); if (f) { f.total += total; f.unread += unread; f.highestModSeq++; } };
+      for (const r of m ? JSON.parse(m[1]).requests : []) {
+        const id = (decodeURIComponent(r.uri || "").match(/id:\(([^)]+)\)/) || [])[1], msg = all.find(x => x.id === id), change = r.payload?.message;
+        if (!msg || !change) continue;
+        if (change.flags && "read" in change.flags && change.flags.read !== msg.flags.read) count(msg.folder.id, 0, change.flags.read ? -1 : 1);
+        if (change.flags) msg.flags = { ...msg.flags, ...change.flags };
+        if (change.folder?.id && change.folder.id !== msg.folder.id) {
+          count(msg.folder.id, -1, msg.flags.read ? 0 : -1); count(change.folder.id, 1, msg.flags.read ? 0 : 1);
+          msg.folder = { id: change.folder.id, name: fname(change.folder.id) };
+        }
+      }
       const ids = [...post.matchAll(/"id":"((?:UnifiedUpdateMessage|UnifiedDeleteMessage)_\d+)"/g)].map(x => x[1]);
       return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses: ids.map(id => ({ id, httpCode: 204 })) } }) });
     } else {
@@ -329,15 +356,31 @@ function listFor(q) {
   await viewerFrame.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await page.waitForSelector("#viewer.hidden", { state: "attached" });
 
-  // 3. dark, messages above the preview, a project thread
+  // 3. dark, messages above the preview: the design thread as a conversation, and the undo
+  // history open over it with its oldest action taken back alone. The mailbox is put back after.
+  const kept = { messages: all.map(m => [m, m.flags, m.folder]), folders: folders.map(f => [f, f.total, f.unread]) };
   await setup({ layout: "horizontal", theme: "dark", darkTheme: "dark", folderW: 230, listH: 36, expanded: ["Projects"] });
   await page.locator("#folder-list .folder", { hasText: "Website" }).click();
   await page.waitForFunction(() => document.getElementById("list-title").textContent === "Projects/Website");
-  await openRow("Re: Website redesign: staging feedback");
-  await page.locator("#rows .row").nth(2).click();
+  for (const [subject, key] of [["Hosting renewal and DNS move", "e"], ["Logo files, final versions", "s"]]) {
+    await page.locator("#rows .row", { hasText: subject }).first().click(); await page.waitForTimeout(400);
+    await page.keyboard.press(key); await page.waitForTimeout(600);
+  }
+  await page.locator("#rows .row").nth(2).click();     // Robin's feedback, with the review attached
+  await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, DESIGN_MSG.headers.subject);
+  await page.keyboard.press("w");
+  await page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("Conversation"));
+  await page.waitForTimeout(600);
+  await page.keyboard.press("s"); await page.waitForTimeout(600);
+  await page.keyboard.press("y"); await page.waitForSelector("#history:not(.hidden)");
+  await page.keyboard.press("End"); await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector("#history .h-row.undone:not(.working)"));
   await page.waitForTimeout(800);
   await page.mouse.move(W - 5, 60);
   await page.screenshot({ path: path.join(OUT, "dark.png") });
+  await page.keyboard.press("Escape");
+  for (const [m, flags, folder] of kept.messages) Object.assign(m, { flags, folder });
+  for (const [f, total, unread] of kept.folders) Object.assign(f, { total, unread });
 
   // 4. Contacts, in the light theme: the people written to, and one person's page
   await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });

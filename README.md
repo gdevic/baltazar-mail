@@ -27,7 +27,7 @@ Everything a mail client does, and:
 
 ![Attachment viewer showing a PDF review document over the message](docs/screenshots/viewer.png)
 
-![Dark theme with the message list above the preview and a darkened message](docs/screenshots/dark.png)
+![Dark theme: a conversation above the darkened message, each reply beneath the message it answers, and the undo history with an older action taken back alone](docs/screenshots/dark.png)
 
 ![Contacts: the people you have written to, and one person's page with what can be done and the recent mail with them](docs/screenshots/contacts.png)
 
