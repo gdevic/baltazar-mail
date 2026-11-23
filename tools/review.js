@@ -459,6 +459,27 @@ scenario("a PDF the viewer has to repair is shown without a warning in the conso
   expect(pages === 2 && !warnings.length, "the repaired PDF shows, and nothing is logged: " + JSON.stringify({ pages, warnings }));
 });
 
+// The browser lets the sandboxed preview take focus only once it has it (the harness asks for that),
+// so what scrolls gets the keys when the viewer focuses the frame, with no click in it first.
+scenario("a preview has the keys as soon as it opens: PageDown scrolls a PDF, and a spreadsheet's grid has them", async ({ page }, expect) => {
+  const keys = f => f.evaluate(() => ({ has: document.hasFocus(), at: document.activeElement?.id || document.activeElement?.className || document.activeElement?.localName, top: Math.round(document.getElementById("root").scrollTop) }));
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(800);
+  await page.locator("#r-attach .att-card", { hasText: "report.pdf" }).click();
+  let f = await previewFrame(page);
+  await f.waitForFunction(() => document.querySelector(".pdfViewer .page canvas"), null, { timeout: 15000 });
+  await page.waitForTimeout(300);
+  const pdf = await keys(f);
+  await page.keyboard.press("PageDown"); await page.waitForTimeout(400);
+  pdf.paged = (await keys(f)).top;
+  await page.click("#v-close");
+  await page.locator("#r-attach .att-card", { hasText: "budget.xlsx" }).click();
+  f = await previewFrame(page);
+  await page.waitForTimeout(300);
+  const sheet = await keys(f);
+  expect(pdf.has && pdf.at === "root" && pdf.paged > pdf.top, "the PDF's pages scroll with PageDown at once: " + JSON.stringify(pdf));
+  expect(sheet.has && sheet.at === "grid", "a spreadsheet's grid has the keys at once: " + JSON.stringify(sheet));
+});
+
 // ---------- address book ----------
 scenario("the address book survives a repeated full build and a second tab", async (h, expect) => {
   const { page } = h;

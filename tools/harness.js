@@ -48,9 +48,12 @@ async function launch(opts = {}) {
   const provider = opts.provider || "yahoo";
   const ext = built[provider] ||= buildForTest(provider);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-profile-"));
-  // No host outside the mocks resolves, so nothing can reach the real network.
+  // No host outside the mocks resolves, so nothing can reach the real network. Focus that a
+  // cross-origin frame (the sandboxed preview) takes without a click in it is blocked, as the
+  // browsers the extension runs in block it; the build the tests use allows it otherwise.
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true,
-    args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] });
+    args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, "--no-proxy-server", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+      "--enable-blink-features=BlockingFocusWithoutUserActivation"] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
   // The Gmail extension opens its mail tab when it is first installed, before any route here is

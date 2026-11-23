@@ -52,6 +52,17 @@
     else if (zoom && e.key === "0") { e.preventDefault(); zoom(0); }
   });
 
+  // What the arrow and page keys scroll: the box every file is drawn in, or a spreadsheet's grid.
+  // The browser blocks focus that this frame, cross-origin to the viewer, takes without a click in
+  // it, so that element is focused at once only while the frame has focus, and otherwise as the
+  // frame gets it: the viewer focuses the frame once the file is drawn.
+  let scroller = root;
+  function scrollWithKeys(el) {
+    scroller = el;
+    if (document.hasFocus()) el.focus();
+  }
+  addEventListener("focus", () => { if (!document.activeElement || document.activeElement === document.body) scroller.focus(); });
+
   // ---------- PDF: PDF.js with its text layer ----------
   // A worker cannot be started from an opaque origin, so PDF.js parses on this page's thread.
   let pdfjs = null;
@@ -83,7 +94,7 @@
     // imageResourcesPath: where the icons of a PDF's notes are, which PDF.js names relative to it
     const viewer = new ui.PDFViewer({ container: root, eventBus, linkService, textLayerMode: 1, annotationMode: lib.AnnotationMode.ENABLE, removePageBorders: false, imageResourcesPath: base + "images/" });
     linkService.setViewer(viewer);
-    eventBus.on("pagesinit", () => { viewer.currentScaleValue = "page-width"; root.focus(); });
+    eventBus.on("pagesinit", () => { viewer.currentScaleValue = "page-width"; });
     const pageInfo = () => post({ type: "meta", text: `page ${viewer.currentPageNumber} of ${doc.numPages}` });
     eventBus.on("pagechanging", pageInfo);
     viewer.setDocument(doc);
@@ -130,7 +141,7 @@
           return `<td${/^-?[\d.,]+%?$|^[$€£¥]/.test(v) ? ' class="num"' : ""}>${esc(v)}</td>`;
         }).join("")}</tr>`).join("")}</tbody></table>`;
       grid.scrollTo(0, 0);
-      grid.focus();
+      scrollWithKeys(grid);
     };
     tabs.onclick = e => { const b = e.target.closest("button"); if (b) show(Number(b.dataset.i)); };
     tabs.classList.toggle("hidden", names.length < 2);
@@ -161,7 +172,6 @@
     pageState = { list: root.querySelector(".page-list"), more: root.querySelector(".more"), next: pages.length + 1, total, busy: false };
     post({ type: "meta", text: `${total} page${total === 1 ? "" : "s"}` });
     addPages(pages);
-    root.focus();
     if (pageState.next > total) { pageState.more.remove(); return; }
     pageState.more.textContent = "Loading more pages...";
     pageState.io = new IntersectionObserver(([entry]) => {
