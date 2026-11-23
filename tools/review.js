@@ -2273,6 +2273,8 @@ scenario("the size limit counts pictures in the text with the files", async ({ p
 
 // A picture mail cannot show in the text (SVG here) is attached instead of being lost on sending.
 scenario("a picture of a kind the text cannot carry is attached", async ({ page }, expect) => {
+  // the first build of Contacts ends with a word in the status line, which is where the composer says what it attached: the build is let end first
+  await page.waitForFunction(() => /^Contacts: [\d,.\s]+ addresses \(/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
   await newMessage(page, { subject: "Pictures", text: "see" });
   await page.setInputFiles("#c-imgfile", [{ name: "logo.svg", mimeType: "image/svg+xml", buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>') },
     { name: "dot.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64") }]);
