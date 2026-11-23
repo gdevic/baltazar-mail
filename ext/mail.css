@@ -107,7 +107,6 @@ body.dragging iframe { pointer-events: none; }
 #list:focus { outline: none; }
 #list-head { display: flex; justify-content: space-between; padding: 3px 10px; color: var(--fg2); border-bottom: 1px solid var(--line); background: var(--bg2); font-size: calc(12 * var(--fu)); }
 #toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px 6px; border-bottom: 1px solid var(--line); background: var(--bg2); }
-#toolbar .sp { flex: 1; }
 #toolbar .sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--line); }
 #toolbar button { font-size: calc(12 * var(--fu)); padding: 1px 7px; }
 #toolbar button:disabled { opacity: .4; cursor: default; }
@@ -140,6 +139,28 @@ body.dragging iframe { pointer-events: none; }
 #move-list div { padding: 2px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #move-list div.kb, #move-list div:hover { background: var(--sel); }
 #st-undo { color: var(--fg2); }
+/* Undo, Redo and the undo history's ▾ at the right of the status bar, which every view has */
+#st-acts { flex: none; align-self: stretch; display: flex; align-items: stretch; gap: 3px; padding: 1px 0; }
+#st-acts button { font-family: var(--font); font-size: calc(11 * var(--fu)); line-height: 1; padding: 0 7px; }
+#st-acts button:disabled { opacity: .4; cursor: default; }
+#st-acts #st-hist { padding: 0 4px; font-size: calc(14 * var(--fu)); }
+/* The undo history's list, opened above the status bar's ▾ (mail.js places it): twelve rows of
+   its fifty at most, the rest a scroll away */
+#history { --h-row: calc(24 * var(--fu)); position: fixed; z-index: 25; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; min-width: 320px; max-width: min(640px, calc(100vw - 8px)); max-height: min(60vh, calc(12 * var(--h-row) + 10px)); overflow-y: auto; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+#history:focus { outline: none; }
+#history .h-row { display: flex; align-items: center; gap: 16px; height: var(--h-row); padding: 0 8px 0 14px; cursor: pointer; white-space: nowrap; }
+#history .h-what { flex: 1; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+#history .h-when { color: var(--fg3); font-variant-numeric: tabular-nums; }
+/* what a click on the row does, drawn as the app's buttons are */
+#history .h-act { flex: none; min-width: 52px; text-align: center; font-size: calc(11 * var(--fu)); line-height: 1.5; background: var(--bg3); border: 1px solid var(--line); border-radius: 3px; }
+#history .h-row.kb { background: var(--sel); }
+#history .h-row.kb .h-act { border-color: var(--fg3); }
+#history .h-row.undone .h-what { text-decoration: line-through; color: var(--fg2); }
+#history .h-row.send .h-what { color: var(--accent); }
+#history .h-row.off { cursor: default; }
+#history .h-row.off .h-what { color: var(--fg3); }
+#history .h-row.off .h-act { opacity: .4; }
+#history .h-row.working { cursor: progress; }
 .row { display: grid; grid-template-columns: calc(15 * var(--fu)) calc(13 * var(--fu)) calc(150 * var(--fu)) 1fr calc(99 * var(--fu)); gap: 6px; align-items: center; height: var(--row-h); padding: 0 8px; cursor: pointer; border-bottom: 1px solid transparent; white-space: nowrap; }
 .row:hover { background: var(--bg3); }
 .row.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
@@ -286,7 +307,11 @@ input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px);
 #notice-copy { flex: none; }
 #notice-close { flex: none; border: 0; background: none; color: var(--fg2); font-size: calc(16 * var(--fu)); line-height: 1; padding: 0 4px; }
 #notice-close:hover { color: var(--fg); }
-#status { grid-area: status; display: flex; justify-content: space-between; padding: 0 10px; font-size: calc(12 * var(--fu)); color: var(--fg2); background: var(--bg2); border-top: 1px solid var(--line); font-family: var(--mono); }
+#status { grid-area: status; display: flex; justify-content: space-between; gap: 16px; padding: 0 10px; font-size: calc(12 * var(--fu)); color: var(--fg2); background: var(--bg2); border-top: 1px solid var(--line); font-family: var(--mono); }
+/* the texts give way to the buttons, and the send countdown keeps the middle of what is left */
+#st-msg, #st-undo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#st-undo { flex: 1; text-align: center; }
+#st-lat { flex: none; }
 
 #signin { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; }
 #signin-fail { max-width: 560px; text-align: center; }
@@ -523,13 +548,13 @@ input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px);
 /* Windows Contrast themes (forced colours) drop backgrounds and shadows, which is how the cursor,
    marks and the active folder are drawn; there they are outlines in the system's highlight colour. */
 @media (forced-colors: active) {
-  .row.marked, .folder.drop, #ctx div:hover:not(.off), #move-list div.kb, #move-list div:hover,
+  .row.marked, .folder.drop, #ctx div:hover:not(.off), #move-list div.kb, #move-list div:hover, #history .h-row.kb,
   #c-suggest div.kb, #c-suggest div:hover, #search-suggest div.kb, #search-suggest div:hover, .seg button.on, .prow.marked, .frow.marked, .att-card.marked { outline: 1px dashed Highlight; outline-offset: -2px; }
   .row.sel, .frow.sel, .prow.sel, .folder.active, .side-link.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .row:hover:not(.sel), .frow:hover:not(.sel), .prow:hover:not(.sel), .folder:hover:not(.active), .side-link:hover:not(.active) { outline: 1px dotted CanvasText; outline-offset: -2px; }
   #notice { border: 2px solid CanvasText; }
   .row .sb mark { background: Mark; color: MarkText; }
-  #ctx div.off { color: GrayText; }
+  #ctx div.off, #history .h-row.off .h-what, #history .h-row.off .h-act { color: GrayText; }
 }
 
 /* Names and subjects in other scripts keep their own direction; a right-to-left name cannot

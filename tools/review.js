@@ -23,6 +23,9 @@ async function start(h, { settings = {}, noWait = false } = {}) {
 const folder = async (page, name) => { await page.locator("#folder-list .folder", { hasText: name }).first().click(); await page.waitForTimeout(500); };
 const saves = calls => calls.filter(c => c.name === "messages.saveV3");
 const msgOf = c => c?.envelope?.requests?.[0]?.payloadParts?.[0]?.payload;
+// The status bar's Undo and Redo say in their tooltips what they would take.
+const undoTip = page => page.locator('#st-acts [data-act="undo"]').getAttribute("title");
+const undoTips = page => page.locator("#st-acts").evaluate(s => [...s.querySelectorAll("button[data-act]")].map(b => b.title).join("   "));
 const notice = async page => (await page.locator("#notice").isVisible()) ? await page.locator("#notice-text").textContent() : "";
 const composerHidden = page => page.waitForFunction(() => document.getElementById("compose").classList.contains("hidden"), null, { timeout: 5000 }).catch(() => {});
 
@@ -655,7 +658,7 @@ scenario("Contacts shows a person's mail and comes back, keeps a pin across tabs
   await contactRow(page, "s4@x.com").click(); await page.keyboard.press("s");
   await page.waitForFunction(() => /^pinned/.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
   await contactsTab(page, "people");
-  r.pinned = { first: await page.locator("#p-rows .prow").first().getAttribute("data-email"), heads: (await page.locator("#p-rows .day").allTextContents()).join(), undo: await text("#st-undo") };
+  r.pinned = { first: await page.locator("#p-rows .prow").first().getAttribute("data-email"), heads: (await page.locator("#p-rows .day").allTextContents()).join(), undo: await undoTip(page) };
   const other = await h.ctx.newPage(); await other.goto(`chrome-extension://${h.extId}/mail.html`); await other.waitForSelector("#rows .row", { timeout: 15000 });
   await other.locator("#contacts-link").click(); await other.waitForSelector("#p-rows .prow", { timeout: 5000 }).catch(() => {});
   r.otherTab = await other.locator("#p-rows .prow").first().getAttribute("data-email").catch(() => "");
@@ -743,10 +746,15 @@ scenario("Contacts forgets an address with no mail left, on its page and when it
   await page.waitForFunction(() => document.querySelector('#person button[data-p="to"]')?.disabled, null, { timeout: 3000 }).catch(() => {});
   const button = async p => ({ off: await page.locator(`#person button[data-p="${p}"]`).isDisabled(), why: await page.locator(`#person button[data-p="${p}"]`).getAttribute("title") });
   r.grey = { mail: await button("mail"), from: await button("from"), to: await button("to") };
+  // s5 hidden and the hide undone: it waits to be redone, through the forgetting below, which Contacts does by itself
+  await page.locator("#list").focus(); await page.keyboard.press("h");
+  await page.waitForFunction(() => !document.querySelector('#p-rows .prow[data-email="s5@x.com"]'), null, { timeout: 5000 }).catch(() => {});
+  await page.keyboard.press("z");
+  await page.waitForSelector('#p-rows .prow[data-email="s5@x.com"]', { timeout: 5000 }).catch(() => {});
   // s7 has no mail left: opening it forgets it, nobody is selected, and the arrows carry on from its place
   await contactRow(page, "s7@x.com").click();
   await page.waitForFunction(() => !document.querySelector('#p-rows .prow[data-email="s7@x.com"]'), null, { timeout: 5000 }).catch(() => {});
-  r.forgot = { listed: await contactRow(page, "s7@x.com").count(), inBook: await inBook(page, "s7@x.com"), said: await text("#person .p-none"), undo: await text("#st-undo"), sel: await page.locator("#p-rows .prow.sel").count() };
+  r.forgot = { listed: await contactRow(page, "s7@x.com").count(), inBook: await inBook(page, "s7@x.com"), said: await text("#person .p-none"), undo: await undoTip(page), redo: await page.locator('#st-acts [data-act="redo"]').getAttribute("title"), sel: await page.locator("#p-rows .prow.sel").count() };
   await page.keyboard.press("ArrowDown");
   r.next = await page.locator("#p-rows .prow.sel").getAttribute("data-email").catch(() => "");
   // z brings it back, and it is then left alone
@@ -761,7 +769,7 @@ scenario("Contacts forgets an address with no mail left, on its page and when it
   r.before = await inBook(page, "s3@x.com");
   await page.locator('#rows .row:has(.fr[data-email="s3@x.com"])').first().click(); await page.waitForTimeout(300);
   await page.locator("#list").focus(); await page.keyboard.press("#");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Undo: delete"), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="undo"]').title.startsWith("Undo: delete"), null, { timeout: 5000 }).catch(() => {});
   for (let i = 0; i < 30 && await inBook(page, "s3@x.com"); i++) await page.waitForTimeout(250);
   r.deleted = { s3: await inBook(page, "s3@x.com"), o: await inBook(page, "o@x.com") };
   await page.locator("#list").focus(); await page.keyboard.press("z");
@@ -771,7 +779,7 @@ scenario("Contacts forgets an address with no mail left, on its page and when it
   r.asked = { s3: h.asked.includes("s3@x.com"), o: h.asked.includes("o@x.com") };
   expect(r.asked.s3 && !r.asked.o, "the delete asks about the sender's mail, and not about the address the message was copied to: " + JSON.stringify(r.asked));
   expect(!r.grey.mail.off && !r.grey.from.off && r.grey.to.off && r.grey.to.why === "No mail to this address", "Mail to is greyed out for someone who only ever wrote, and nothing else is: " + JSON.stringify(r.grey));
-  expect(r.forgot.listed === 0 && !r.forgot.inBook && /^Sender 7 was forgotten: no mail with s7@x\.com is left/.test(r.forgot.said) && r.forgot.undo === "Undo: forget Sender 7 (z)" && r.forgot.sel === 0 && r.next === "s8@x.com",
+  expect(r.forgot.listed === 0 && !r.forgot.inBook && /^Sender 7 was forgotten: no mail with s7@x\.com is left/.test(r.forgot.said) && r.forgot.undo === "Undo: forget Sender 7 (z)" && r.forgot.redo === "Redo: hide Sender 5 (Shift+Z)" && r.forgot.sel === 0 && r.next === "s8@x.com",
     "a person whose page finds no mail is forgotten, and the arrows carry on from their place: " + JSON.stringify([r.forgot, r.next]));
   expect(r.spared.listed === 1 && r.spared.inBook && /No mail with this address is left outside Spam and Trash\. It was brought back/.test(r.spared.said) && r.spared.mailOff, "z brings the person back, and they are left alone after that: " + JSON.stringify(r.spared));
   expect(r.before && !r.deleted.s3 && r.deleted.o && r.undone, "deleting the last mail with an address forgets it, and undoing the delete brings it back: " + JSON.stringify([r.before, r.deleted, r.undone]));
@@ -792,7 +800,7 @@ scenario("Contacts keeps an address mail was copied to, and lists under People w
   // its page finds no mail from or to it: it stays, and the page says why
   await contactRow(page, COPIED).click();
   await page.waitForFunction(() => /No mail with this address was found/.test(document.querySelector("#person .p-recent")?.textContent || ""), null, { timeout: 5000 }).catch(() => {});
-  r.kept = { asked: h.asked.includes(COPIED), said: await text("#person .p-recent"), row: await contactRow(page, COPIED).count(), inBook: await inBook(page, COPIED), undo: await text("#st-undo"),
+  r.kept = { asked: h.asked.includes(COPIED), said: await text("#person .p-recent"), row: await contactRow(page, COPIED).count(), inBook: await inBook(page, COPIED), undo: await undoTip(page),
     forgot: await page.evaluate(async e => (await (await import("./contacts.js")).forget([e])).length, COPIED) };
   // s8's page finds a draft to them, which is no writing to them: s8 stays among the others
   await contactRow(page, "s8@x.com").click();
@@ -826,7 +834,7 @@ scenario("the eye and the pin of a selected row act on everyone selected, and of
   r.tips = [await rows.nth(1).locator(".pe").getAttribute("title"), await rows.nth(3).locator(".pe").getAttribute("title")];
   await rows.nth(1).hover(); await rows.nth(1).locator(".pe").click();
   await page.waitForFunction(want => document.querySelectorAll("#p-rows .prow").length === want, n - 3, { timeout: 5000 }).catch(() => {});
-  r.hid = { left: await rows.count(), hidden: await count("hidden"), status: await text("#st-msg"), undo: await text("#st-undo"), marked: await page.locator("#p-rows .prow.marked").count() };
+  r.hid = { left: await rows.count(), hidden: await count("hidden"), status: await text("#st-msg"), undo: await undoTip(page), marked: await page.locator("#p-rows .prow.marked").count() };
   // two rows selected: the pin of a row outside the selection pins that row alone, and the selection stays
   await rows.nth(0).click(); await rows.nth(1).click({ modifiers: ["Control"] });
   const other = await rows.nth(3).getAttribute("data-email");
@@ -844,7 +852,7 @@ scenario("the eye and the pin of a selected row act on everyone selected, and of
   await page.keyboard.press("h");
   await page.waitForFunction(() => /^hid /.test(document.getElementById("st-msg").textContent), null, { timeout: 5000 }).catch(() => {});
   r.mixed = { status: await text("#st-msg"), people: await count("people") };
-  expect(n >= 6 && r.tips[0] === "Hide the 3 selected contacts" && /^Hide: /.test(r.tips[1]) && r.hid.left === n - 3 && r.hid.hidden === before.hidden + 3 && r.hid.status === "hid 3 contacts; Hidden has them" && r.hid.undo === "Undo: hide 3 contacts (z)" && r.hid.marked === 0,
+  expect(n >= 6 && r.tips[0] === "Hide the 3 selected contacts" && /^Hide: /.test(r.tips[1]) && r.hid.left === n - 3 && r.hid.hidden === before.hidden + 3 && r.hid.status === "hid 3 contacts; Hidden has them" && r.hid.undo.startsWith("Undo: hide 3 contacts: ") && r.hid.undo.endsWith(", ... (z)") && r.hid.marked === 0,
     "the eye of a selected row hides everyone selected: " + JSON.stringify([n, r.tips, r.hid]));
   expect(/^pinned Sender \d$/.test(r.one.status) && r.one.marked === 2 && r.one.people === before.people + 1, "the pin of a row outside the selection pins that row alone, and the selection stays: " + JSON.stringify(r.one));
   expect(r.both.status === "pinned 2 contacts" && r.both.people === before.people + 3 && r.both.left === n - 6, "the pin of a selected row pins everyone selected: " + JSON.stringify(r.both));
@@ -877,7 +885,7 @@ scenario("Rename gives a contact a name of the user's own, which undo and an emp
   r.box = { value: await page.inputValue("#person input.p-name"), focused: await page.evaluate(() => document.activeElement?.className) };
   await page.keyboard.type("Sam Four"); await page.keyboard.press("Enter");
   await named("s4@x.com", "Sam Four");
-  r.renamed = { row: await text('#p-rows .prow[data-email="s4@x.com"] .pn'), page: await text("#person .p-name"), status: await text("#st-msg"), undo: await text("#st-undo"), book: await book("s4@x.com"), focus: await page.evaluate(() => document.activeElement.id) };
+  r.renamed = { row: await text('#p-rows .prow[data-email="s4@x.com"] .pn'), page: await text("#person .p-name"), status: await text("#st-msg"), undo: await undoTip(page), book: await book("s4@x.com"), focus: await page.evaluate(() => document.activeElement.id) };
   // F2 opens the box again; Esc leaves the name, and Contacts, as they are
   await page.keyboard.press("F2");
   await page.waitForSelector("#person input.p-name", { timeout: 5000 }).catch(() => {});
@@ -896,7 +904,7 @@ scenario("Rename gives a contact a name of the user's own, which undo and an emp
   await contactRow(page, "s7@x.com").click();
   await page.waitForFunction(() => /No mail with this address/.test(document.querySelector("#person .p-recent")?.textContent || ""), null, { timeout: 5000 }).catch(() => {});
   r.kept = { row: await contactRow(page, "s7@x.com").count(), said: await text("#person .p-recent") };
-  expect(r.box.value === "Sender 4" && r.box.focused === "p-name" && r.renamed.row === "Sam Four" && r.renamed.page === "Sam Four" && r.renamed.status === "renamed Sender 4 to Sam Four" && r.renamed.undo === "Undo: rename Sam Four (z)" && r.renamed.book.given === "Sam Four" && r.renamed.focus === "list",
+  expect(r.box.value === "Sender 4" && r.box.focused === "p-name" && r.renamed.row === "Sam Four" && r.renamed.page === "Sam Four" && r.renamed.status === "renamed Sender 4 to Sam Four" && r.renamed.undo === "Undo: rename Sender 4 to Sam Four (z)" && r.renamed.book.given === "Sam Four" && r.renamed.focus === "list",
     "Rename types the user's own name over the one on the page: " + JSON.stringify([r.box, r.renamed]));
   expect(r.nameless.value === "" && r.nameless.hint === "Name" && r.nameless.book.name === "" && r.nameless.book.given === "", "for an address with no name the box is empty, and Enter on it names nobody: " + JSON.stringify(r.nameless));
   expect(r.esc.row === "Sam Four" && r.esc.box === 0 && r.esc.shown === 1, "Esc leaves the name as it was, and Contacts open: " + JSON.stringify(r.esc));
@@ -921,7 +929,7 @@ scenario("Contacts are exported to a text file, and a file is merged into them o
   // merging: a name, a new address pinned, a hide, and a line that is not a contact, which is said and skipped
   await pick("merge", "mine.txt", "Sender One <s1@x.com>\nnew.person@y.example pinned\nSender 2 <s2@x.com> hidden\nthis line is wrong\n");
   await said(/^Merged mine\.txt/);
-  r.merged = { status: await text("#st-msg"), undo: await text("#st-undo"), book: await book() };
+  r.merged = { status: await text("#st-msg"), undo: await undoTip(page), book: await book() };
   await page.locator("#list").focus(); await page.keyboard.press("z");
   await said(/^undone: merge/);
   r.unmerged = JSON.stringify(await book()) === JSON.stringify(before);
@@ -999,7 +1007,7 @@ scenario("the trash bin on a row deletes contacts, in any pile but not a pinned 
   r.tip = await contactRow(page, "s2@x.com").locator(".tr").getAttribute("title");
   await contactRow(page, "s2@x.com").hover(); await contactRow(page, "s2@x.com").locator(".tr").click();
   await page.waitForFunction(want => document.querySelectorAll("#p-rows .prow").length === want, n - 2, { timeout: 5000 }).catch(() => {});
-  r.others = { left: await rows.count(), hidden: await count("hidden"), status: await text("#st-msg"), undo: await text("#st-undo"), book: await book() };
+  r.others = { left: await rows.count(), hidden: await count("hidden"), status: await text("#st-msg"), undo: await undoTip(page), book: await book() };
   // in Hidden too
   await contactsTab(page, "hidden");
   const hid = await count("hidden");
@@ -1039,7 +1047,7 @@ scenario("the trash bin on a row deletes contacts, in any pile but not a pinned 
     "an export lists the contacts there are, and says nothing of the deleted ones: " + JSON.stringify(r.exported));
   expect(r.restored.status === "merged back.txt: 1 restored" && r.restored.book.s1 && !r.restored.book.s2 && r.restored.book.n === r.undone.n + 1, "importing a file that names a deleted contact brings it back, and no other: " + JSON.stringify(r.restored));
   expect(r.pinned.bin === 0 && r.pinned.off && /^Unpin it first/.test(r.pinned.why) && r.pinned.said === "unpin it first: a pinned address cannot be deleted" && r.pinned.still === 1, "a pinned contact has no bin and is not deleted: " + JSON.stringify(r.pinned));
-  expect(r.tip === "Delete the 2 selected contacts (Del)" && r.others.left === n - 2 && r.others.status === "deleted 2 contacts" && r.others.undo === "Undo: delete 2 contacts (z)" && !r.others.book.s1 && !r.others.book.s2 && r.others.book.n === had - 2 && !/s[12]@/.test(r.others.book.suggested),
+  expect(r.tip === "Delete the 2 selected contacts (Del)" && r.others.left === n - 2 && r.others.status === "deleted 2 contacts" && ["Undo: delete 2 contacts: Sender 1, Sender 2 (z)", "Undo: delete 2 contacts: Sender 2, Sender 1 (z)"].includes(r.others.undo) && !r.others.book.s1 && !r.others.book.s2 && r.others.book.n === had - 2 && !/s[12]@/.test(r.others.book.suggested),
     "the bin of a selected row deletes everyone selected, out of the list, the count and the suggestions: " + JSON.stringify([n, had, r.tip, r.others]));
   expect(r.hidden.left === hid - 1 && r.hidden.others === n - 2 && r.hidden.status === "deleted Sender 6" && !r.hidden.book.s6, "in Hidden it deletes too: " + JSON.stringify([hid, r.hidden]));
   expect(r.key === "deleted Sender 4" && r.page.status === "deleted Sender 3" && !r.page.book.s3 && r.page.book.n === had - 5, "Del and Delete on a person's page delete them: " + JSON.stringify([r.key, r.page]));
@@ -1589,12 +1597,12 @@ scenario("an undo that keeps failing stops blocking the older ones", async ({ pa
   mock.failMoves = 99;
   await page.keyboard.press("z"); await page.waitForTimeout(500);
   await page.keyboard.press("z"); await page.waitForTimeout(500);
-  const n = await notice(page), label = await page.locator("#st-undo").textContent();
+  const n = await notice(page), label = await undoTip(page);
   mock.failMoves = 0;
   await page.keyboard.press("z"); await page.waitForTimeout(800);
-  const after = await page.locator("#st-undo").textContent();
-  expect(/removed from the undo list/.test(n) && /Undo: archive 1 message/.test(label), "the failing entry is dropped after a second failure: " + JSON.stringify({ n, label }));
-  expect(!/Undo:/.test(after) && /Redo: archive 1 message/.test(after) && (await subjects(page)).includes(before[0]), "the older entry then undoes: " + JSON.stringify({ after }));
+  const after = await undoTips(page);
+  expect(/removed from the undo list/.test(n) && /Undo: archive "Subject 1-1" from Sender 1 \(z\)/.test(label), "the failing entry is dropped after a second failure: " + JSON.stringify({ n, label }));
+  expect(!/Undo:/.test(after) && /Redo: archive "Subject 1-1" from Sender 1/.test(after) && (await subjects(page)).includes(before[0]), "the older entry then undoes: " + JSON.stringify({ after }));
 }, { allow: /EC-5003|undo/ });
 
 scenario("an undo where some messages fail says so", async ({ page, mock }, expect) => {
@@ -1610,6 +1618,91 @@ scenario("an undo where some messages fail says so", async ({ page, mock }, expe
   const n = await notice(page);
   expect(/1 of 2 messages could not be/.test(n), "a partial undo is reported as partial: " + JSON.stringify({ n }));
 });
+
+// ---------- the undo history ----------
+const historyRows = page => page.locator("#history .h-row").evaluateAll(rs => rs.map(r => ({ what: r.querySelector(".h-what").textContent, act: r.querySelector(".h-act").textContent, off: r.classList.contains("off"), undone: r.classList.contains("undone"), send: r.classList.contains("send"), tip: r.title })));
+const flagCalls = (calls, name) => calls.filter(c => c.name === name).map(c => c.envelope.requests.map(q => [decodeURIComponent(q.uri || "").match(/id:\(([^)]+)\)/)?.[1], q.payload?.message?.flags]));
+
+scenario("the undo history takes an old star back alone, leaving the delete after it", async ({ page, calls }, expect) => {
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("s"); await page.waitForTimeout(500);
+  await page.locator("#rows .row").nth(1).click(); await page.waitForTimeout(300);
+  await page.locator("#list").focus(); await page.keyboard.press("#"); await page.waitForTimeout(600);
+  const moves = calls.filter(c => c.name === "messages.move").length, stars = flagCalls(calls, "messages.starFlagUpdate").length;
+  await page.keyboard.press("y"); await page.waitForSelector("#history:not(.hidden)", { timeout: 2000 }).catch(() => {});
+  const listed = await historyRows(page);
+  // the star is the second entry
+  await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector("#history .h-row.undone:not(.working)"), null, { timeout: 5000 }).catch(() => {});
+  const after = await historyRows(page), lines = await page.locator("#history hr").count(), bar = await undoTips(page), unstar = flagCalls(calls, "messages.starFlagUpdate").slice(stars);
+  await page.keyboard.press("Escape");
+  expect(listed.length === 2 && listed[0].what === 'delete "Subject 1-2" from Sender 2' && listed[1].what === 'star "Subject 1-1" from Sender 1' && listed.every(r => r.act === "Undo" && !r.off && !r.undone),
+    "the list names each entry, newest first, both free: " + JSON.stringify(listed));
+  expect(JSON.stringify(unstar) === JSON.stringify([[["MSG1_1", { flagged: false }]]]) && calls.filter(c => c.name === "messages.move").length === moves,
+    "the star alone is taken back, and the delete stays: " + JSON.stringify({ unstar, moves }));
+  expect(after.length === 2 && after[0].what.startsWith("delete") && after[0].act === "Undo" && !after[0].undone && after[1].what.startsWith("star") && after[1].undone && after[1].act === "Redo" && !after[1].off && !lines &&
+    bar === 'Undo: delete "Subject 1-2" from Sender 2 (z)   Redo: star "Subject 1-1" from Sender 1 (Shift+Z)' && await page.locator("#history").isHidden(),
+    "the star stays in its place, undone, offering Redo, and Esc closes the list: " + JSON.stringify({ after, lines, bar }));
+});
+
+scenario("a click on an entry of the undo history undoes it in its place, and a double click acts once", async ({ page, calls }, expect) => {
+  const reads = () => flagCalls(calls, "messages.readFlagUpdate");
+  for (const i of [0, 2]) { await page.locator("#rows .row").nth(i).click(); await page.waitForTimeout(300); await page.locator("#list").focus(); await page.keyboard.press("u"); await page.waitForTimeout(500); }
+  const marked = reads().length;
+  await page.locator("#st-hist").click(); await page.waitForSelector("#history:not(.hidden)", { timeout: 2000 }).catch(() => {});
+  const listed = await historyRows(page);
+  await page.locator("#history .h-row").nth(0).click();
+  await page.waitForFunction(() => document.querySelector("#history .h-row.undone:not(.working)"), null, { timeout: 5000 }).catch(() => {});
+  const one = await historyRows(page);
+  await page.locator("#history .h-row").nth(1).dblclick();
+  await page.waitForFunction(() => document.querySelectorAll("#history .h-row.undone:not(.working)").length === 2, null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  const two = await historyRows(page), lines = await page.locator("#history hr").count(), open = await page.locator("#history").isVisible();
+  expect(listed.length === 2 && listed[0].what === 'mark "Subject 1-3" from Sender 3 read' && listed[1].what === 'mark "Subject 1-1" from Sender 1 read' && listed.every(r => r.act === "Undo"),
+    "two marks, newest first, each with Undo: " + JSON.stringify(listed));
+  expect(one.length === 2 && one[0].what === listed[0].what && one[0].undone && one[0].act === "Redo" && one[1].what === listed[1].what && !one[1].undone && one[1].act === "Undo",
+    "the clicked row is undone where it was, and the other is as it was: " + JSON.stringify(one));
+  expect(two.every(r => r.undone && r.act === "Redo") && two.map(r => r.what).join() === listed.map(r => r.what).join() && !lines && open && reads().length === marked + 2,
+    "a double click undoes once, nothing moves, no line, the list stays open: " + JSON.stringify({ two, lines, open, reads: reads().slice(marked) }));
+}, { settings: { markReadSec: null } });
+
+scenario("the undo history greys out a move a later move of the same message replaced, naming that one", async ({ page, calls }, expect) => {
+  // in a search the moved message stays listed, so it can be moved again
+  await page.locator("#search").click(); await page.keyboard.type("Subject"); await page.keyboard.press("Shift+Enter"); await page.waitForTimeout(800);
+  await page.locator("#rows .row").nth(0).click(); await page.waitForTimeout(300);
+  const subject = await page.locator("#rows .row .sb").first().evaluate(e => e.firstChild.textContent), rows = await page.locator("#rows .row").count();
+  await page.locator("#list").focus(); await page.keyboard.press("v"); await page.keyboard.type("Projects"); await page.keyboard.press("Enter"); await page.waitForTimeout(600);
+  await page.keyboard.press("e"); await page.waitForTimeout(600);
+  const moves = calls.filter(c => c.name === "messages.move").map(c => c.envelope.requests.length);
+  await page.keyboard.press("y"); await page.waitForSelector("#history:not(.hidden)", { timeout: 2000 }).catch(() => {});
+  const listed = await historyRows(page);
+  await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter"); await page.waitForTimeout(500);
+  const refused = { said: await page.locator("#st-msg").textContent(), moves: calls.filter(c => c.name === "messages.move").length - moves.length };
+  await page.keyboard.press("ArrowUp"); await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelector("#history .h-row.undone:not(.working)"), null, { timeout: 5000 }).catch(() => {});
+  const freed = await historyRows(page);
+  const archive = listed[0]?.what || "", who = archive.slice(`archive "${subject}" `.length);
+  expect(rows > 1 && moves.join() === "1,1" && listed.length === 2 && archive.startsWith(`archive "${subject}" from `) && !listed[0].off && listed[1].what === `move "${subject}" ${who} to Projects` && listed[1].off && listed[1].act === "Undo" &&
+    listed[1].tip === `Undo “${archive}” first`, "the first move is greyed out, its tooltip naming the second: " + JSON.stringify({ subject, rows, moves, listed }));
+  expect(refused.said === `undo “${archive}” first` && refused.moves === 0, "Enter on it says why, and moves nothing: " + JSON.stringify(refused));
+  expect(freed.length === 2 && freed[0].what === archive && freed[0].undone && freed[0].act === "Redo" && freed[1].what.startsWith("move") && !freed[1].off && !freed[1].undone, "once the second move is undone, in its place, the first is free: " + JSON.stringify(freed));
+});
+
+scenario("the undo history cancels the older of two sends waiting, and the newer goes out", async ({ page, calls }, expect) => {
+  await newMessage(page, { subject: "First", text: "one" });
+  await page.keyboard.press("Control+Enter"); await composerHidden(page);
+  await newMessage(page, { subject: "Second", text: "two" });
+  await page.keyboard.press("Control+Enter"); await composerHidden(page);
+  await page.locator("#st-hist").click(); await page.waitForSelector("#history:not(.hidden)", { timeout: 2000 }).catch(() => {});
+  const listed = await historyRows(page);
+  await page.locator("#history .h-row").nth(1).click(); await page.waitForTimeout(800);
+  const reopened = { shown: await page.locator("#compose").isVisible(), subject: await page.inputValue("#c-subject"), list: await page.locator("#history").isVisible(), bar: await page.locator("#st-undo").textContent() };
+  await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 12000 }).catch(() => {});
+  const sent = calls.filter(c => c.name === "messages.saveAndSend").map(c => msgOf(c)?.message?.headers?.subject);
+  expect(listed.length === 2 && listed.every(r => r.send && r.act === "Cancel") && listed[0].what === 'send "Second" to q@example.com' && listed[1].what === 'send "First" to q@example.com', "both sends are listed, newest first: " + JSON.stringify(listed));
+  expect(reopened.shown && reopened.subject === "First" && !reopened.list && /^Sending in \d+ s: send "Second"/.test(reopened.bar), "the older send is back in the composer, and the newer still waits: " + JSON.stringify(reopened));
+  expect(sent.length === 1 && sent[0] === "Second", "only the newer one is sent: " + JSON.stringify(sent));
+}, { settings: { undoSendSec: 8 } });
 
 scenario("a failed folder load keeps the list that was shown", async ({ page, mock }, expect) => {
   const before = await subjects(page);
@@ -1709,7 +1802,7 @@ scenario("Caps Lock does not turn undo into redo, and a held key acts once", asy
   await key(page, { key: "e", repeat: true }); await key(page, { key: "e", repeat: true }); await page.waitForTimeout(500);
   const moves = calls.filter(c => c.name === "messages.move").length;
   await key(page, { key: "Z", modifierCapsLock: true }); await page.waitForTimeout(700);
-  const label = await page.locator("#st-undo").textContent();
+  const label = await undoTips(page);
   expect(moves === 1, "a held e archives once: " + moves);
   expect(/Redo: archive/.test(label) && !/Undo:/.test(label), "Z with Caps Lock undoes: " + label);
 });
@@ -1717,8 +1810,8 @@ scenario("Caps Lock does not turn undo into redo, and a held key acts once", asy
 scenario("the Undo button can cancel a pending send", async ({ page }, expect) => {
   await newMessage(page, { subject: "Wait", text: "x" });
   await page.keyboard.press("Control+Enter"); await page.waitForTimeout(400);
-  const disabled = await page.locator('button[data-act="undo"]').isDisabled();
-  await page.locator('button[data-act="undo"]').click({ timeout: 2000 }).catch(() => {});
+  const disabled = await page.locator('#st-acts button[data-act="undo"]').isDisabled();
+  await page.locator('#st-acts button[data-act="undo"]').click({ timeout: 2000 }).catch(() => {});
   await page.waitForTimeout(500);
   expect(!disabled && await page.locator("#compose").isVisible(), "Undo is enabled and cancels the send: " + JSON.stringify({ disabled }));
 }, { settings: { undoSendSec: 5 } });

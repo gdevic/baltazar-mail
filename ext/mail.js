@@ -12,6 +12,7 @@ import { darkenHtml, PAGE as DARK } from "./darken.js";
 import { attr, esc, noBidi, plural } from "./text.js";
 import { cleanLink } from "./links.js";
 import { isTracker } from "./pixels.js";
+import * as history from "./history.js";
 import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow, copyText } from "./guide.js";
 import * as awake from "./awake.js";
 
@@ -957,11 +958,8 @@ function spamLabel(ids) {
 
 function updateToolbar() {
   const n = state.marked.size || (state.selected >= 0 ? 1 : 0);
-  for (const b of $("toolbar").querySelectorAll("button[data-act]")) {
-    if (b.dataset.act === "undo") b.disabled = !pendingSends.length && (busy || !undoStack.length);   // z also cancels a send
-    else if (b.dataset.act === "redo") b.disabled = busy || !redoStack.length;
-    else b.disabled = busy || n === 0;
-  }
+  for (const b of $("toolbar").querySelectorAll("button[data-act]")) b.disabled = busy || n === 0;
+  paintUndo();
   const first = state.messages.filter(m => state.marked.has(m.id))[0] || state.messages[state.selected];
   $("toolbar").querySelector('[data-act="read"]').textContent = first && !first.flags?.read ? "Mark read" : "Mark unread";
   $("toolbar").querySelector('[data-act="star"]').textContent = first && first.flags?.flagged ? "Unstar" : "Star";
@@ -1499,7 +1497,8 @@ async function editDraft(i, { anyway = false } = {}) {
 }
 
 // Undo-send: the message is held client-side for settings.undoSendSec, then sent.
-// Sends wait undoSendSec before going out, each on its own timer; z cancels the newest.
+// Sends wait undoSendSec before going out, each on its own timer; z cancels the newest, and the
+// undo history's list any one of them.
 const pendingSends = [];
 let sendTicker = null;
 function scheduleSend(job) {
@@ -1525,9 +1524,10 @@ function scheduleSend(job) {
   if (!sendTicker) sendTicker = setInterval(() => { showUndo(); if (!pendingSends.length) { clearInterval(sendTicker); sendTicker = null; } }, 1000);
 }
 
-async function cancelSend() {
-  const entry = pendingSends.pop();
-  if (!entry) return false;
+async function cancelSend(entry = pendingSends[pendingSends.length - 1]) {
+  const i = pendingSends.indexOf(entry);
+  if (i < 0) return false;
+  pendingSends.splice(i, 1);
   clearTimeout(entry.timer);
   showUndo();
   status("send cancelled; message reopened");
@@ -1664,13 +1664,16 @@ async function run(fn) {
 }
 
 // ---------- undo ----------
-const undoStack = [], redoStack = [];
-const UNDO_MAX = 50;
+// The undo history (history.js): z undoes the newest action and Shift+Z redoes the one undone
+// last, as do Undo and Redo at the right of the status bar, which every view has; the history's
+// list (y, or ▾ beside them) takes any entry alone that no later action has changed since. The
+// status line itself only counts down the sends that wait.
+const hist = history.create();
 
+// entry: { label, touches, auto, count, undo(), redo(), reopen }; see history.js for touches and auto.
 function pushUndo(entry) {
-  entry.fails = 0;
-  undoStack.push(entry); if (undoStack.length > UNDO_MAX) undoStack.shift();
-  redoStack.length = 0;
+  entry.fails = 0; entry.at = Date.now();
+  history.push(hist, entry);
   showUndo();
 }
 
@@ -1684,36 +1687,173 @@ function showUndo() {
     el.classList.add("pending");
   } else {
     el.classList.remove("pending");
-    const u = undoStack[undoStack.length - 1], r = redoStack[redoStack.length - 1];
-    el.textContent = (u ? `Undo: ${u.label} (z)` : "") + (u && r ? "   " : "") + (r ? `Redo: ${r.label} (Shift+Z)` : "");
+    el.textContent = "";
   }
   updateToolbar();
+  if (historyShown()) drawHistory();
+}
+// The status bar's Undo, Redo and ▾ as the history and the sends waiting let them be; their
+// tooltips say what they would take. Undo also cancels the newest send, as z does.
+function paintUndo() {
+  const u = history.nextUndo(hist), r = history.nextRedo(hist), send = pendingSends[pendingSends.length - 1];
+  const [undoB, redoB] = ["undo", "redo"].map(a => $("st-acts").querySelector(`[data-act="${a}"]`));
+  undoB.disabled = !send && (busy || !u);
+  undoB.title = send ? `Cancel: ${send.job.label} (z)` : (u ? `Undo: ${u.label} (z)` : "Undo (z)");
+  redoB.disabled = busy || !r;
+  redoB.title = r ? `Redo: ${r.label} (Shift+Z)` : "Redo (Shift+Z)";
+  $("st-hist").disabled = !send && !hist.entries.length;
+}
+
+// What the undo history says of the messages an action changed: one by its subject and the person
+// its row names (the sender, or the recipient of the user's own mail), several by their count and
+// the first two subjects. verb and tail go before and after them: mark ... as spam.
+function aboutMessages(msgs, n, verb, tail = "") {
+  const subject = m => `"${plainSubject(m.headers?.subject)}"`;
+  if (n === 1 && msgs[0]) {
+    const m = msgs[0], own = ["SENT", "DRAFT"].includes(folderType(state.byId.get(m.folder?.id) || state.byId.get(state.view.folderId)));
+    const p = (own ? m.headers?.to?.[0] : m.headers?.from?.[0]) || {}, who = noBidi(p.name || p.email || "");
+    return `${verb} ${subject(m)}${who ? ` ${own ? "to" : "from"} ${who}` : ""}${tail}`;
+  }
+  const some = msgs.slice(0, 2).map(subject);
+  return `${verb} ${plural(n, "message")}${tail}${some.length ? `: ${some.join(", ")}${n > some.length ? ", ..." : ""}` : ""}`;
 }
 
 // Undo and redo steps return the api results; ids that failed are reported like a first try's.
 const failedOf = res => (Array.isArray(res) ? res : [res]).flatMap(r => r?.failed || []);
+// What to take first, in the status line's words, for an entry that must wait for b.
+const takeFirst = b => `${b.done ? "undo" : "redo"} “${b.label}” first`;
 // A step that fails stays for one more try (the network may be back); failing again, it is taken
-// off the list so the older entries stay reachable.
-async function undoOrRedo(from, to, step, words) {
-  const e = from.pop(); if (!e) return;
+// off the list so the older entries stay reachable. An entry the history does not allow now (it
+// changed since the list was drawn) is left alone, and the status line says what to take first.
+async function undoOrRedo(e, step) {
+  if (!e || !hist.entries.includes(e)) return;
+  if (!(step === "undo" ? history.canUndo(hist, e) : history.canRedo(hist, e))) { const b = history.blocker(hist, e); if (b) status(takeFirst(b)); return; }
+  const words = step === "undo" ? ["undoing", "undone", "put back"] : ["redoing", "redone", "changed again"];
   status(`${words[0]}: ${e.label}...`);
+  e.working = true;                // the history's list shows the step under way on its row
+  if (historyShown()) drawHistory();
   let ok = false;
   try {
     const failed = failedOf(await e[step]());
-    ok = true; e.fails = 0; to.push(e);
+    ok = true; e.fails = 0;
+    if (step === "undo") history.undone(hist, e); else history.redone(hist, e);
     if (failed.length) notify(`${failed.length} of ${plural(e.count || failed.length, "message")} could not be ${words[2]}; the rest were.`, { err: Object.assign(new Error(`${failed.length} failed`), { detail: { failed } }), what: step });
     else status(`${words[1]}: ${e.label}`);
   } catch (err) {
     e.fails = (e.fails || 0) + 1;
-    if (e.fails >= 2) { notify(`Could not ${step} “${e.label}” twice, so it was removed from the undo list.`, { detail: cause(err), err, what: step }); console.error(step, err); }
-    else { from.push(e); handleError(err, step); }
+    if (e.fails >= 2) { history.remove(hist, e); notify(`Could not ${step} “${e.label}” twice, so it was removed from the undo list.`, { detail: cause(err), err, what: step }); console.error(step, err); }
+    else handleError(err, step);
   }
+  e.working = false;
   showUndo();
   await loadFolders(true).catch(() => {});
   await loadList("refresh", ok && step === "undo" ? e.reopen : null);
 }
-const undo = () => undoOrRedo(undoStack, redoStack, "undo", ["undoing", "undone", "put back"]);
-const redo = () => undoOrRedo(redoStack, undoStack, "redo", ["redoing", "redone", "changed again"]);
+const undo = () => undoOrRedo(history.nextUndo(hist), "undo");
+const redo = () => undoOrRedo(history.nextRedo(hist), "redo");
+
+// ---------- the undo history's list ----------
+// It opens above the status bar's ▾: the messages waiting to be sent on top, each with Cancel,
+// then every entry, newest first, each with the time it was done and what a click on it does:
+// Undo, or Redo once it is undone, when it stays in its place, struck through. So a click shows
+// its result on the row clicked, and nothing moves. While its step runs the row says "...". An
+// entry that cannot be taken alone has its Undo or Redo greyed out, its tooltip naming the entry to
+// take first. One highlight, which the mouse and ↓ ↑ Home End move; Enter or a click takes the
+// highlighted entry (a greyed one has the status line say why), z and Shift+Z work as anywhere,
+// Esc and y close. It stays open as entries are taken, so several can be.
+let histRows = [], histKb = 0;
+const historyShown = () => !$("history").classList.contains("hidden");
+const clock = ms => {
+  const d = new Date(ms), t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${t}`;
+};
+function historyRows() {
+  const rows = [...pendingSends].reverse().map(p => ({ what: p.job.label, when: `in ${Math.max(0, Math.ceil((p.until - Date.now()) / 1000))} s`, act: "Cancel", send: true,
+    tip: "Cancel this send: the message goes back to the composer", take: () => { closeHistory(); cancelSend(p); } }));
+  for (const e of [...hist.entries].reverse()) {
+    const step = e.done ? "undo" : "redo", verb = e.done ? "Undo" : "Redo", b = history.blocker(hist, e), why = b && takeFirst(b);
+    rows.push({ what: e.label, when: clock(e.at), act: e.working ? "..." : verb, undone: !e.done, working: !!e.working, why,
+      tip: why ? why[0].toUpperCase() + why.slice(1) : `${verb}: ${e.label}`, take: () => run(() => undoOrRedo(e, step)) });
+  }
+  return rows;
+}
+function openHistory() {
+  if (!pendingSends.length && !hist.entries.length) { status("nothing to undo"); return; }
+  histKb = 0; $("history").dataset.sig = "";
+  $("history").classList.remove("hidden");
+  $("st-hist").setAttribute("aria-expanded", "true");
+  drawHistory();
+  $("history").focus();
+}
+function closeHistory() {
+  if (!historyShown()) return;
+  const had = $("history").contains(document.activeElement);
+  $("history").classList.add("hidden");
+  $("st-hist").setAttribute("aria-expanded", "false");
+  if (had) $("list").focus();
+}
+function drawHistory() {
+  histRows = historyRows();
+  const box = $("history"), n = histRows.length;
+  if (!n) { closeHistory(); return; }
+  histKb = Math.max(0, Math.min(n - 1, histKb));
+  // The rows are made again only when one of them changes. While sends wait, the list is drawn
+  // every second for their times alone, and the rows stay, so a click on one is not lost to a row
+  // put in its place between press and release.
+  const sig = JSON.stringify(histRows.map(r => [r.what, r.act, r.tip, !!r.why, !!r.undone, !!r.send, !!r.working])), redrawn = sig !== box.dataset.sig;
+  if (redrawn) {
+    box.dataset.sig = sig;
+    box.innerHTML = histRows.map((r, k) => {
+      const cls = ["h-row", r.send && "send", r.undone && "undone", r.why && "off", r.working && "working"].filter(Boolean).join(" ");
+      return `<div id="h-${k}" data-i="${k}" class="${cls}" role="option"${r.why ? ' aria-disabled="true"' : ""} title="${esc(r.tip)}"><span class="h-what">${esc(r.what)}</span><span class="h-when">${esc(r.when)}</span><span class="h-act">${r.act}</span></div>`;
+    }).join("");
+  } else box.querySelectorAll(".h-when").forEach((el, k) => { el.textContent = histRows[k].when; });
+  paintHistoryKb(redrawn);
+  // its right edge under ▾'s, just above the status bar
+  const at = $("st-hist").getBoundingClientRect();
+  box.style.left = Math.max(4, Math.min(at.right - box.offsetWidth, innerWidth - box.offsetWidth - 4)) + "px";
+  box.style.bottom = (innerHeight - $("status").getBoundingClientRect().top + 2) + "px";
+}
+// The highlight on the row histKb, without making the rows again; scroll: brought into view.
+function paintHistoryKb(scroll) {
+  const box = $("history");
+  for (const el of box.children) { const on = Number(el.dataset.i) === histKb; el.classList.toggle("kb", on); el.setAttribute("aria-selected", String(on)); }
+  box.setAttribute("aria-activedescendant", `h-${histKb}`);
+  if (scroll) $(`h-${histKb}`)?.scrollIntoView({ block: "nearest" });
+}
+function takeHistory(i) {
+  const r = histRows[i]; if (!r) return;
+  histKb = i; paintHistoryKb(false);
+  if (r.why) { status(r.why); return; }
+  r.take();
+}
+function historyKey(e) {
+  const n = histRows.length;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key)) { e.preventDefault(); runAction((e.key.toLowerCase() === "y" || e.shiftKey) ? "redo" : "undo"); return; }
+  switch (e.key) {
+    case "ArrowDown": histKb = Math.min(n - 1, histKb + 1); break;
+    case "ArrowUp": histKb = Math.max(0, histKb - 1); break;
+    case "Home": histKb = 0; break;
+    case "End": histKb = n - 1; break;
+    case "Enter": e.preventDefault(); if (!e.repeat) takeHistory(histKb); return;
+    case "Escape": case "y": case "Y": e.preventDefault(); closeHistory(); return;
+    case "z": case "Z": e.preventDefault(); if (!e.repeat) runAction(e.shiftKey ? "redo" : "undo"); return;
+    default: return;
+  }
+  e.preventDefault(); paintHistoryKb(true);
+}
+// The second click of a double click is not a second step: it would take straight back what the
+// first did.
+$("history").onclick = e => { const d = e.target.closest("[data-i]"); if (d && e.detail < 2) takeHistory(Number(d.dataset.i)); };
+$("history").onmousemove = e => { const d = e.target.closest("[data-i]"); if (d && Number(d.dataset.i) !== histKb) { histKb = Number(d.dataset.i); paintHistoryKb(false); } };
+// Undo and Redo beside the open list leave it open, showing what they did.
+$("st-acts").onclick = e => {
+  const b = e.target.closest("button"); if (!b || b.disabled) return;
+  if (b.id === "st-hist") { if (historyShown()) closeHistory(); else openHistory(); }
+  else runAction(b.dataset.act);
+};
+document.addEventListener("mousedown", e => { if (!e.target.closest("#history, #st-acts")) closeHistory(); });
+window.addEventListener("blur", closeHistory);
 
 // ---------- actions ----------
 const byIds = ids => { const set = new Set(ids); return state.messages.filter(m => set.has(m.id)); };
@@ -1738,7 +1878,7 @@ async function doSetRead(ids, read) {
     for (const id of r.ok) if (read) keptUnread.delete(id); else keptUnread.add(id);
     status(`marked ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`, r.ms); partial(r, "mark");
     const okSet = new Set(r.ok);
-    pushUndo({ label: `mark ${plural(r.ok.length, "message")} ${read ? "read" : "unread"}`, count: r.ok.length,
+    pushUndo({ label: aboutMessages(rowsOrOpen(r.ok), r.ok.length, "mark", read ? " read" : " unread"), count: r.ok.length, touches: r.ok.map(id => `m:${id}:read`),
       undo: async () => { const out = []; for (const [was, g] of groupBy(before.filter(([, id]) => okSet.has(id)))) out.push(await api.setRead(g, was)); return out; },
       redo: () => api.setRead(r.ok, read) });
   } catch (e) { handleError(e, "mark"); }
@@ -1753,7 +1893,7 @@ async function doSetStarred(ids, flagged) {
     refreshStarredCount();
     status(`${flagged ? "starred" : "unstarred"} ${plural(r.ok.length, "message")}`, r.ms); partial(r, "star");
     const okSet = new Set(r.ok);
-    pushUndo({ label: `${flagged ? "star" : "unstar"} ${plural(r.ok.length, "message")}`, count: r.ok.length,
+    pushUndo({ label: aboutMessages(rowsOrOpen(r.ok), r.ok.length, flagged ? "star" : "unstar"), count: r.ok.length, touches: r.ok.map(id => `m:${id}:star`),
       undo: async () => { const out = []; for (const [was, g] of groupBy(before.filter(([, id]) => okSet.has(id)))) out.push(await api.setStarred(g, was)); return out; },
       redo: () => api.setStarred(r.ok, flagged) });
   } catch (e) { handleError(e, "star"); }
@@ -1774,6 +1914,10 @@ async function doMove(ids, folderId, verb = "move") {
     const r = await api.move(moving.map(o => o.id), dest.id, { from });
     const okSet = new Set(r.ok);
     const done = moving.filter(o => okSet.has(o.id));
+    const n = plural(done.length, "message"), where = folderName(dest).split("/").pop();
+    // the undo history's words, while the rows still say where the messages were
+    const label = aboutMessages(msgs.filter(m => okSet.has(m.id)), done.length, ...{ move: ["move", ` to ${where}`], archive: ["archive"], delete: ["delete"],
+      spam: ["mark", " as spam"], notspam: ["mark", " not spam"], undelete: ["restore", ` to ${where}`] }[verb]);
     for (const o of done) { bumpFolder(o.from, -1, o.unread ? -1 : 0); bumpFolder(dest.id, 1, o.unread ? 1 : 0); }
     const v = state.view;
     const leaves = v.kind === "folder" ? v.folderId !== dest.id
@@ -1783,11 +1927,8 @@ async function doMove(ids, folderId, verb = "move") {
     // the open message moved from outside the list leaves the reader
     if (readerRow && okSet.has(readerRow.id) && !state.messages.some(m => m.id === readerRow.id)) clearReader();
     updateFolderCounts();
-    const n = plural(done.length, "message"), where = folderName(dest).split("/").pop();
-    const words = { move: [`move ${n} to ${where}`, `moved ${n} to ${where}`], archive: [`archive ${n}`, `archived ${n}`], delete: [`delete ${n}`, `deleted ${n}`],
-      spam: [`mark ${n} as spam`, `marked ${n} as spam`], notspam: [`mark ${n} not spam`, `marked ${n} not spam, moved to Inbox`],
-      undelete: [`restore ${n} to ${where}`, `restored ${n} to ${where}`] }[verb];
-    status(words[1], r.ms); partial(r, verb);
+    status({ move: `moved ${n} to ${where}`, archive: `archived ${n}`, delete: `deleted ${n}`, spam: `marked ${n} as spam`,
+      notspam: `marked ${n} not spam, moved to Inbox`, undelete: `restored ${n} to ${where}` }[verb], r.ms); partial(r, verb);
     const known = done.filter(o => o.from);
     // Contacts mirrors the mail outside Trash and Spam: these messages have left it, or come back
     // to it, and an undo turns that round (see mailLeft). A message that comes back into Drafts was
@@ -1801,7 +1942,7 @@ async function doMove(ids, folderId, verb = "move") {
     // A provider that can take back exactly what its move changed says how (undo); otherwise each
     // message moves back to the folder it came from. A redo's own answer undoes the redo.
     let last = r;
-    pushUndo({ label: words[0], reopen: openWas && okSet.has(openWas) ? openWas : null, count: done.length,
+    pushUndo({ label, reopen: openWas && okSet.has(openWas) ? openWas : null, count: done.length, touches: done.map(o => `m:${o.id}:folder`),
       undo: async () => {
         const out = [];
         if (last.undo) out.push(await last.undo());
@@ -2288,6 +2429,7 @@ function onKey(e) {
   // keys typed into the sign-in page (its paste box, its buttons and links) are the page's own
   if (e.target.closest && e.target.closest("#signin")) return;
   if (viewer.isOpen()) { viewer.onKey(e); return; }
+  if (historyShown()) { historyKey(e); return; }
   const openModal = modals.find(id => !$(id).classList.contains("hidden"));
   if (openModal) {
     if (e.key === "Escape") {
@@ -2408,6 +2550,7 @@ function onKey(e) {
     case "!": runAction("spam"); break;
     case "z": e.preventDefault(); runAction("undo"); break;
     case "Z": e.preventDefault(); runAction("redo"); break;
+    case "y": e.preventDefault(); if (!e.repeat) openHistory(); break;
   }
 }
 
@@ -2865,7 +3008,11 @@ function importContacts(replace) {
       const opts = { replace };
       let done = await contacts.importList(entries, opts);
       const c = done.counts, said = [[c.removed, "removed"], [c.added, "added"], [c.renamed, "renamed"], [c.pinned, "pinned"], [c.unpinned, "unpinned"], [c.hidden, "hidden"], [c.shown, "unhidden"], [c.restored, "restored"]].filter(x => x[0]).map(x => `${x[0].toLocaleString()} ${x[1]}`).join(", ");
-      if (done.changed) pushUndo({ label: `${replace ? "replace Contacts with" : "merge"} ${named}`, count: done.changed, undo: () => contacts.undoImport(done.undo), redo: async () => { done = await contacts.importList(entries, opts); } });
+      // the import touches every contact it changed; done again, the ones it changes then
+      const touched = d => [...d.undo.before.map(e => e.email), ...d.undo.created].map(e => `c:${e}`);
+      const entry = { label: `${replace ? "replace Contacts with" : "merge"} ${named}`, count: done.changed, touches: touched(done),
+        undo: () => contacts.undoImport(done.undo), redo: async () => { done = await contacts.importList(entries, opts); entry.touches = touched(done); } };
+      if (done.changed) pushUndo(entry);
       const what = `${replace ? "replaced Contacts with" : "merged"} ${named}: ${said || "nothing to change, Contacts already say what it says"}`;
       if (errors.length) notify(`${what[0].toUpperCase()}${what.slice(1)}. ${unread}`, { info: true }); else status(what);
       if (people.isShown()) people.reload();

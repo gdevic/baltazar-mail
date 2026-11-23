@@ -51,9 +51,6 @@
       <span class="sep"></span>
       <button data-act="read" title="Mark read / unread (u)">Mark read</button>
       <button data-act="star" title="Star / unstar (s)">Star</button>
-      <span class="sp"></span>
-      <button data-act="undo" title="Undo (z)" disabled>Undo</button>
-      <button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button>
     </div>
     <div id="rows" role="listbox" aria-multiselectable="true"></div>
     <div id="more" class="hidden"><button id="more-btn">Load more</button></div>
@@ -143,7 +140,7 @@
     <div id="c-suggest" class="hidden"></div>
   </section>
   <div id="notice" class="hidden" role="alert"><div id="notice-text"></div><button id="notice-copy" class="hidden" title="Copy the error, version and browser, for a bug report">Copy details</button><button id="notice-close" title="Dismiss" aria-label="Dismiss">×</button></div>
-  <footer id="status"><span id="st-msg"></span><span id="st-undo"></span><span id="st-lat"></span></footer>
+  <footer id="status"><span id="st-msg"></span><span id="st-undo"></span><span id="st-acts"><button data-act="undo" title="Undo (z)" disabled>Undo</button><button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button><button id="st-hist" title="Undo history (y)" aria-label="Undo history" aria-haspopup="listbox" aria-controls="history" aria-expanded="false" disabled>▾</button></span><span id="st-lat"></span></footer>
 </div>
 <div id="signin" class="hidden">
   <h1 id="signin-title">Baltazar Mail</h1>
@@ -210,6 +207,7 @@
   </div>
 </div>
 <div id="ctx" class="hidden"></div>
+<div id="history" class="hidden" role="listbox" aria-label="Undo history" tabindex="-1"></div>
 <div id="card" class="hidden"></div>
 <div id="viewer" class="hidden">
   <div id="v-box">
@@ -270,7 +268,8 @@
       <tr><td>u</td><td>mark read / unread</td></tr>
       <tr><td>s</td><td>star / unstar</td></tr>
       <tr><td>!</td><td>mark as spam (in Spam: not spam, back to Inbox)</td></tr>
-      <tr><td>z / Shift+Z</td><td>undo / redo, also Ctrl+Z / Ctrl+Y (multi-level; the status bar shows what will be undone)</td></tr>
+      <tr><td>z / Shift+Z</td><td>undo / redo, also Ctrl+Z / Ctrl+Y, or Undo and Redo at the right of the status bar, whose tooltips say what they will take (multi-level)</td></tr>
+      <tr><td>y</td><td>undo history, also ▾ beside Undo and Redo in the status bar: every action, newest first, each with Undo, or with Redo once undone, when it stays in its place struck through (↓ / ↑ and Enter, or a click). Any entry can be taken alone unless a later one changed the same thing since (a message's folder, read flag or star, or a contact); its Undo or Redo is greyed out then, and its tooltip names the one to take first. Messages waiting to be sent are on top, each with Cancel</td></tr>
       <tr><td>R</td><td>refresh current list</td></tr>
       <tr><td>n</td><td>load next 100 messages</td></tr>
       <tr><td>i</td><td>load remote images in open message</td></tr>

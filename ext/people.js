@@ -74,8 +74,10 @@ const NO_PIN = "Unhide it first: a hidden address cannot be pinned";
 //   -> { messages }, draft(row) -> whether it is a draft, trash: the trash bin a message row
 //   shows, as markup, subject(row) -> its subject as text,
 //   date(epoch), menu(x, y, items, onPick), status(msg), leave() -> back to the view Contacts was
-//   opened from, undoable({ label, count, undo(), redo() }) -> a change the app's undo can take
-//   back, note() -> what to say above the list while the book is still being built, or "" }
+//   opened from, undoable({ label, count, touches, auto, undo(), redo() }) -> a change the app's
+//   undo can take back (touches: the keys of the contacts it changed; auto: made by the app
+//   itself, not the user, so it leaves what could be redone but for changes to the same
+//   contacts; see history.js), note() -> what to say above the list while the book is still being built, or "" }
 let hooks = null;
 // match: the pile shown, filtered and in order, the pinned people first (band: how many of them);
 // rows: as much of it as is listed; counts: what each pile has of the filter's matches; cur: the
@@ -327,6 +329,11 @@ function reveal(email) {
 // ---------- what can be done ----------
 const named = r => ({ name: r.name, email: r.email });
 const showName = r => r.name || r.email;
+// What the app's undo history says of the people a change was made to: one by name, several by
+// their count and the first two names. And the keys it knows them by: a contact as a whole, since
+// an undo restores all of its choices together.
+const about = t => t.length === 1 ? noBidi(showName(t[0])) : `${plural(t.length, "contact")}: ${t.slice(0, 2).map(r => noBidi(showName(r))).join(", ")}${t.length > 2 ? ", ..." : ""}`;
+const touches = emails => emails.map(e => `c:${e}`);
 async function act(what, button) {
   const t = targets(); if (!t.length) return;
   const emails = t.map(r => r.email), n = t.length;
@@ -382,7 +389,7 @@ async function rename(r, name) {
   const was = await contacts.choices([r.email]);
   const apply = () => contacts.rename(r.email, name);
   await apply();
-  hooks.undoable({ label: `rename ${name || r.email}`, count: 1, undo: () => contacts.restoreChoices(was), redo: apply });
+  hooks.undoable({ label: `rename ${noBidi(showName(r))} to ${name ? noBidi(name) : "the name the mail gives"}`, count: 1, touches: touches([r.email]), undo: () => contacts.restoreChoices(was), redo: apply });
   await load();
   const now = st.byEmail.get(r.email);
   hooks.status(name ? `renamed ${r.name || r.email} to ${name}` : `${r.email} has the name the mail gives it${now?.name ? `, ${now.name}` : " (none)"}`);
@@ -408,7 +415,7 @@ async function change(what, t, at = -1) {
   const was = await contacts.choices(emails);
   const apply = () => what === "hide" || what === "unhide" ? contacts.hideMany(emails, what === "hide") : contacts.pinMany(emails, what === "pin");
   await apply();
-  hooks.undoable({ label: `${words[0]} ${who}`, count: n, undo: () => contacts.restoreChoices(was), redo: apply });
+  hooks.undoable({ label: `${words[0]} ${about(t)}`, count: n, touches: touches(emails), undo: () => contacts.restoreChoices(was), redo: apply });
   hooks.status(`${words[1]} ${who}${what === "hide" ? `; Hidden has ${n === 1 ? "it" : "them"}` : ""}${barred ? `; ${barred} ${what === "hide" ? "pinned" : "hidden"} left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
   // people who left the pile are no longer selected; the cursor takes the row that moved up
   for (const e of emails) if (contacts.pileOf({ ...st.byEmail.get(e), ...after(what) }) !== st.pile) st.marked.delete(e);
@@ -428,7 +435,7 @@ async function remove(t, at = -1) {
   const was = await contacts.choices(emails);
   const apply = () => contacts.deleteMany(emails);
   await apply();
-  hooks.undoable({ label: `delete ${who}`, count: n, undo: () => contacts.restoreChoices(was), redo: apply });
+  hooks.undoable({ label: `delete ${about(t)}`, count: n, touches: touches(emails), undo: () => contacts.restoreChoices(was), redo: apply });
   hooks.status(`deleted ${who}${barred ? `; ${barred} pinned left as ${barred === 1 ? "it was" : "they were"}` : ""}`);
   for (const e of emails) { st.marked.delete(e); recent.delete(e); ways.delete(e); }
   await load();
@@ -555,7 +562,7 @@ async function forgetIfGone(email) {
   // kept after all: what the list knew of the entry was out of date (another tab changed it), so it is read again
   if (!rows.length) { if (!r.hidden) await load(); return false; }
   recent.delete(email); ways.delete(email);
-  hooks.undoable({ label: `forget ${showName(r)}`, count: 1, undo: () => { spared.add(email); return contacts.putBack(rows); }, redo: () => contacts.forget([email]) });
+  hooks.undoable({ label: `forget ${noBidi(showName(r))}`, count: 1, touches: touches([email]), auto: true, undo: () => { spared.add(email); return contacts.putBack(rows); }, redo: () => contacts.forget([email]) });
   const here = st.shown && st.cur === email;
   if (!here) hooks.status(`forgot ${r.email}: no mail with it is left`);
   if (!st.shown) return true;

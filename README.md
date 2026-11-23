@@ -17,7 +17,7 @@ Everything a mail client does, and:
 - **A folder's attachments in one list:** right-click a folder › Show attachments lists every attachment in its mail, with its subfolders' if you like, such as the tickets and itineraries of a trip.
 - **Contacts in one list:** everyone in your mail, learned from the message headers and suggested as you write. Pin, hide, rename or delete them, write to several at once, and export the list to a text file you can edit and import back.
 - **Sixteen light and dark palettes**, with a dark mode that darkens the messages to match.
-- **Undo for everything:** several levels of undo and redo for mailbox actions, and undo-send.
+- **Undo for everything:** several levels of undo and redo for mailbox actions and Contacts, an undo history that takes back an older action alone, and undo-send.
 - **Tracking pictures removed** from every message, and **tracking removed from links** when you switch it on.
 - **A new-mail dot** on the tab and the toolbar button, handy for a pinned tab.
 - **Keyboard shortcuts** throughout; press `?` in the app.

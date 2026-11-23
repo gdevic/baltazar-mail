@@ -137,11 +137,11 @@ const folders = [
   await page.keyboard.press("j"); await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
   const selectedText = await page.locator("#list-count").textContent();
   await page.keyboard.press("e");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Undo"));
-  const afterArchive = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="undo"]').title.startsWith("Undo:"));
+  const afterArchive = { rows: await page.locator("#rows .row").count(), undo: await page.locator('#st-acts [data-act="undo"]').getAttribute("title") };
   await page.keyboard.press("z");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.startsWith("Redo") && document.querySelectorAll("#rows .row").length === 95);
-  const afterUndo = { rows: await page.locator("#rows .row").count(), undo: await page.locator("#st-undo").textContent() };
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="redo"]').title.startsWith("Redo:") && document.querySelectorAll("#rows .row").length === 95);
+  const afterUndo = { rows: await page.locator("#rows .row").count(), undo: await page.locator('#st-acts [data-act="undo"]').getAttribute("title") };
   await page.locator("#rows .row").nth(3).click({ button: "right" });
   const ctxItems = await menu();
   // About sender opens the contact card where the menu was; Esc closes it; hovering a list sender does not
@@ -162,15 +162,15 @@ const folders = [
   await page.keyboard.type("Proj");
   const moveChoices = await page.locator("#move-list div").allTextContents();
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Undo: move"));
-  const afterMove = await page.locator("#st-undo").textContent();
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="undo"]').title.includes("Undo: move"));
+  const afterMove = await page.locator('#st-acts [data-act="undo"]').getAttribute("title");
   await page.keyboard.press("x"); await page.keyboard.press("j"); await page.keyboard.press("x");
   await page.locator("#rows .row").nth(6).click({ button: "right" });
   await page.screenshot({ path: path.join(__dirname, "..", "out", "actions.png") });
   await page.keyboard.press("Escape");
   await page.keyboard.press("u");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Undo: mark"));
-  const afterRead = await page.locator("#st-undo").textContent();
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="undo"]').title.includes("Undo: mark"));
+  const afterRead = await page.locator('#st-acts [data-act="undo"]').getAttribute("title");
   console.log("actions", JSON.stringify({ selectedText, afterArchive, afterUndo, ctxItems, moveChoices, afterMove, afterRead, mutations }));
   const expect = (cond, what) => { if (!cond) errors.push("assert: " + what); };
   expect(versionLine === "Baltazar Mail for Yahoo™ 0.14.0", "version line: " + versionLine);
@@ -257,7 +257,7 @@ const folders = [
   // or the whole selection when it is one of the selected rows.
   const trash = {};
   const shown = () => page.locator("#rows .row .tr").evaluateAll(ts => ts.slice(0, 6).map(t => getComputedStyle(t).visibility === "visible" ? 1 : 0).join(""));
-  const undoNow = () => page.locator("#st-undo").textContent();
+  const undoNow = () => page.locator('#st-acts [data-act="undo"]').getAttribute("title");
   await page.locator("#list").focus(); await page.keyboard.press("Home"); await page.keyboard.press("Escape");
   await page.locator("#rows .row").nth(4).hover();
   trash.hover = await shown();
@@ -346,6 +346,7 @@ const folders = [
   // (the mock's body is always message 1, the top row)
   const menuActs = {};
   menuActs.toolbar = await page.locator("#toolbar").evaluate(t => [...t.children].map(e => e.classList.contains("sep") ? "|" : e.classList.contains("sp") ? "_" : e.textContent).join(" "));
+  menuActs.status = await page.locator("#st-acts").evaluate(s => [...s.children].map(e => e.textContent).join(" "));
   await page.locator("#rows .row").nth(0).click({ button: "right" });
   menuActs.rowFrom = await page.locator("#rows .row").nth(0).locator(".fr").getAttribute("data-email");
   await page.locator("#ctx div[data-act=reply]").click();
@@ -366,7 +367,7 @@ const folders = [
   // Keys: Backspace deletes in the list, a symbol typed with Alt (Option, AltGr) still counts, Alt
   // with a letter does not; on a Mac the shortcuts are labelled with the Command key.
   const keys = {};
-  const undoText = () => page.locator("#st-undo").textContent();
+  const undoText = () => page.locator('#st-acts [data-act="undo"]').getAttribute("title");
   const rowCount = () => page.locator("#rows .row").count();
   await page.locator("#list").focus(); await page.keyboard.press("Home");
   keys.before = await rowCount();
@@ -440,10 +441,10 @@ const folders = [
     zoom.down === "0.9" && zoom.next === "0.9", "the message zoom scales the open message alone, with a badge over it: " + JSON.stringify(zoom));
   expectEnd(zoom.compose.zoom === "0.9" && zoom.compose.size === "13" && zoom.composeUp.badge === "110%" && zoom.composeUp.zoom === "1.1" && zoom.composeUp.size === "13" && zoom.composeReset === "1",
     "the composer opens at the message zoom and Ctrl+= / Ctrl+0 change it: " + JSON.stringify(zoom));
-  expectEnd(rdel.actions === "Reply Reply all Forward Print | Delete" && rdel.deleted.rows === rdel.before - 1 && /^Undo: delete 1 message/.test(rdel.deleted.undo) && 
-    rdel.inTrash.label === "Undelete" && rdel.inTrash.rows === 8 && rdel.restored.rows === 7 && /^Undo: restore 1 message to Inbox/.test(rdel.restored.undo), "the reader's Delete and Undelete: " + JSON.stringify(rdel));
-  expectEnd(menuActs.toolbar === "Archive Move... Spam | Delete | Mark read Star _ Undo Redo" || menuActs.toolbar === "Archive Move... Spam | Delete | Mark unread Star _ Undo Redo",
-    "toolbar order: " + menuActs.toolbar);
+  expectEnd(rdel.actions === "Reply Reply all Forward Print | Delete" && rdel.deleted.rows === rdel.before - 1 && /^Undo: delete "[^"]*" from /.test(rdel.deleted.undo) && 
+    rdel.inTrash.label === "Undelete" && rdel.inTrash.rows === 8 && rdel.restored.rows === 7 && /^Undo: restore "[^"]*" (from|to) .+ to Inbox \(z\)/.test(rdel.restored.undo), "the reader's Delete and Undelete: " + JSON.stringify(rdel));
+  expectEnd((menuActs.toolbar === "Archive Move... Spam | Delete | Mark read Star" || menuActs.toolbar === "Archive Move... Spam | Delete | Mark unread Star") && menuActs.status === "Undo Redo ▾",
+    "toolbar order, and Undo, Redo and the undo history in the status bar: " + JSON.stringify([menuActs.toolbar, menuActs.status]));
   expectEnd(menuActs.reply.title === "Reply" && menuActs.replyAll === "Reply all" && menuActs.reply.to.includes(menuActs.rowFrom) && menuActs.find.term === `from:${menuActs.rowFrom}`,
     "the menu's Reply answers the clicked row and Find all from searches its sender: " + JSON.stringify(menuActs));
   expectEnd(keys.pc.send === "Send (Ctrl+Enter)" && keys.mac.send === "Send (⌘Enter)" && !/Ctrl/.test(keys.mac.help) && /⌘Z/.test(keys.mac.help) && /⌘-click/.test(keys.mac.help),

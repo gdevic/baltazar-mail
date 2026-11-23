@@ -282,15 +282,15 @@ const { launch, watchdog, viewerKey } = require("./harness");
   // spam: mark the open message as spam, check move to Bulk and undo label
   const before = calls.length, spamWas = await page.locator("#r-subject").textContent();
   await page.keyboard.press("!");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("as spam"), null, { timeout: 4000 });
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="undo"]').title.includes("as spam"), null, { timeout: 4000 });
   const spamCall = calls.slice(before).find(c => c.name === "messages.move");
-  results.spam = { was: spamWas, dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator("#st-undo").textContent() };
+  results.spam = { was: spamWas, dest: spamCall?.envelope?.requests?.[0]?.payload?.message?.folder?.id, undo: await page.locator('#st-acts [data-act="undo"]').getAttribute("title") };
   // the reader moves on to the row now under the cursor instead of going blank
   await page.waitForFunction(() => !document.getElementById("reader-head").classList.contains("hidden") &&
     (document.querySelector("#rows .row.sel .sb")?.textContent || "").startsWith(document.getElementById("r-subject").textContent), null, { timeout: 4000 }).catch(() => {});
   results.spam.next = { empty: await page.locator("#reader-empty").isVisible(), subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
   await page.keyboard.press("z");
-  await page.waitForFunction(() => document.getElementById("st-undo").textContent.includes("Redo: mark"), null, { timeout: 4000 });
+  await page.waitForFunction(() => document.querySelector('#st-acts [data-act="redo"]').title.includes("Redo: mark"), null, { timeout: 4000 });
   // undo brings the spammed message back into the reader
   await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, spamWas, { timeout: 4000 }).catch(() => {});
   results.spam.undone = { subject: await page.locator("#r-subject").textContent(), sel: await page.locator("#rows .row.sel .sb").textContent() };
@@ -638,7 +638,7 @@ const { launch, watchdog, viewerKey } = require("./harness");
     ab.selected = await text("#person .p-name");
     ab.groupButtons = (await page.locator("#person .p-actions button").allTextContents()).join("|");
     await page.locator('#person button[data-p="hide"]').click(); await count("others", 0);
-    ab.hid = { tabs: await tabs(), undo: await text("#st-undo"), empty: await page.locator("#p-rows .list-empty").count() };
+    ab.hid = { tabs: await tabs(), undo: await page.locator('#st-acts [data-act="undo"]').getAttribute("title"), empty: await page.locator("#p-rows .list-empty").count() };
     await page.screenshot({ path: path.join(__dirname, "..", "out", "contacts.png") }).catch(() => {});
     await page.locator("#list").focus(); await page.keyboard.press("z"); await count("others", was.others);
     ab.undone = await tabs();
@@ -928,7 +928,7 @@ const { launch, watchdog, viewerKey } = require("./harness");
       "the arrows move the cursor from the filter box and the person's page follows, with their mail: " + JSON.stringify([ab.cursor, ab.recent]));
     expect(ab.kept.on === "others" && ab.kept.filter === ab.cursor.someone && ab.kept.row === ab.cursor.someone && ab.kept.page === ab.cursor.someone && ab.kept.focus === "p-filter", "Contacts is come back to as it was left: " + JSON.stringify(ab.kept));
     expect(ab.filterCleared === "" && ab.stillOpen === 1 && ab.selected === `${n.others} contacts selected` && ab.groupButtons === "Write to all|Mail from any|Mail to any|Copy addresses|Pin|Hide|Delete|Clear selection" &&
-      ab.hid.tabs.others === 0 && ab.hid.tabs.hidden === n.hidden + n.others && ab.hid.empty === 1 && ab.hid.undo === `Undo: hide ${n.others} contacts (z)` && same(ab.undone, n),
+      ab.hid.tabs.others === 0 && ab.hid.tabs.hidden === n.hidden + n.others && ab.hid.empty === 1 && ab.hid.undo.startsWith(`Undo: hide ${n.others} contacts: `) && ab.hid.undo.endsWith(" (z)") && same(ab.undone, n),
       "Ctrl+A selects the whole tab, Hide moves it to Hidden, and z takes that back: " + JSON.stringify(ab));
     expect(ab.eye.tabs.hidden === n.hidden + 1 && ab.eye.listed === 1 && ab.eye.noPin === 1 && same(ab.eye.back, n), "the eye on a row hides it, and unhides it under Hidden, where it has no pin: " + JSON.stringify(ab.eye));
     expect(ab.pin.heads === "Pinned,Written to" && ab.pin.first === ab.pin.who && ab.pin.noEye === 1 && ab.pin.hide && /^Unpin it first/.test(ab.pin.why) && ab.pin.button === "Unpin" && same(ab.pin.after, n),
