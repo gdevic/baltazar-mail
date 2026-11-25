@@ -1,18 +1,25 @@
-// README screenshots: the real extension in Chromium against a mocked Yahoo backend filled with
-// invented mail, so no real names, addresses or messages appear. node tools/screenshots.js
-// Writes docs/screenshots/{light,viewer,dark,contacts,settings}.png, and the Gmail edition's sign-in page
-// for docs/gmail-sign-in.md as docs/screenshots/signin-*.png. With --store, writes the Yahoo scenes
-// at the 1280x800 the Edge Add-ons store requires, plus a 300x300 logo and the 440x280 and 1400x560
-// promotional tiles, to store/.
+// Screenshots: the real extension in Chromium against a mocked mail service filled with invented
+// mail, so no real names, addresses or messages appear. One mailbox is drawn in either edition:
+// the Yahoo edition against the mocked Yahoo of this file, the Gmail edition against the Gmail of
+// gmail-mock.js, which is given the same folders (as labels), messages and files.
+//
+// node tools/screenshots.js
+//   The README's pictures, of the Yahoo edition: docs/screenshots/{light,viewer,dark,contacts,
+//   attachments,settings}.png, and the Gmail edition's sign-in page for docs/gmail-sign-in.md as
+//   docs/screenshots/signin-*.png.
+// node tools/screenshots.js --store [yahoo|gmail]
+//   A store's pictures of each edition (or of the one named), in store/<edition>/: the same scenes
+//   at the 1280x800 the stores take, in screenshots/, with a 300x300 logo and the 440x280 and
+//   1400x560 promotional tiles beside them. The Gmail edition also gets screenshots/setup.png, the
+//   page a new install opens with.
 const { chromium } = require("playwright");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-const EXT = require("./build.js").build("yahoo");
+const { build, EDITIONS, ROOT } = require("./build.js");
 const STORE = process.argv.includes("--store");
-const OUT = path.join(__dirname, "..", ...(STORE ? ["store", "screenshots"] : ["docs", "screenshots"]));
-const W = STORE ? 1280 : 1600, H = STORE ? 800 : 900, LIST_W = STORE ? 505 : 560, FOLDER_W = STORE ? 190 : 230;
+const NAMED = process.argv.slice(2).filter(a => !a.startsWith("--"));
 const NOW = Math.floor(Date.now() / 1000);
 const DAY = 86400;
 
@@ -34,16 +41,32 @@ const folders = [
 ].map((f, i) => ({ ...f, highestModSeq: 100 + i }));
 const fname = id => folders.find(f => f.id === id)?.name || "Inbox";
 
+// A file of a message, from its name and size, as a Yahoo list row names it. n numbers the files
+// of the whole mailbox, and the mocked download and thumbnail addresses carry it.
+const TYPES = { pdf: "application/pdf", jpg: "image/jpeg", png: "image/png", csv: "text/csv", zip: "application/zip", mp4: "video/mp4",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
+let fileSeq = 0;
+const fileOf = ([filename, size], i) => {
+  const mime = TYPES[filename.split(".").pop().toLowerCase()], [type, subtype] = mime.split("/"), n = fileSeq++;
+  return { partId: String(i + 2), filename, size, disposition: "attachment", type, subtype, mime, n, objectId: `OBJ${n}`,
+    downloadUrl: `https://cloud-apis.mail.yahoo.com/dl/${n}`, ...(type === "image" ? { thumbnailUrl: `https://cloud-apis.mail.yahoo.com/thumb/${n}?appid=x` } : {}) };
+};
+
 let seq = 0;
 // o.conv: the conversation a message is in, digits as Yahoo writes them (one of its own otherwise);
-// o.ids: its Message-ID, In-Reply-To and References headers
-const mk = (folder, daysAgo, from, subject, o = {}) => ({
-  id: `M${folder}_${++seq}`, conversationId: o.conv || String(9000 + seq), size: 4000, csid: `cs${seq}`,
-  flags: { read: o.unread ? false : true, flagged: !!o.star },
-  attachmentCount: o.att || 0,
-  headers: { subject, from: [from], to: [o.to || ME], cc: o.cc || [], date: String(NOW - Math.round(daysAgo * DAY) - (seq % 7) * 1800), ...o.ids },
-  folder: { id: folder, name: fname(folder) }, snippet: o.snippet || "",
-});
+// o.ids: its Message-ID, In-Reply-To and References headers; o.files: its files, each [name, size].
+// A message is dated a few half hours off its day, so the times in a list differ; one of a
+// conversation is not, so every reply is later than the message it answers.
+const mk = (folder, daysAgo, from, subject, o = {}) => {
+  const files = (o.files || []).map(fileOf);
+  return {
+    id: `M${folder}_${++seq}`, conversationId: o.conv || String(9000 + seq), size: 4000, csid: `cs${seq}`,
+    flags: { read: o.unread ? false : true, flagged: !!o.star },
+    attachmentCount: files.length, attachments: files,
+    headers: { subject, from: [from], to: [o.to || ME], cc: o.cc || [], date: String(NOW - Math.round(daysAgo * DAY) - (o.conv ? 0 : (seq % 7) * 1800)), ...o.ids },
+    folder: { id: folder, name: fname(folder) }, snippet: o.snippet || "",
+  };
+};
 const p = (name, email) => ({ name, email });
 const ROBIN = p("Robin Hale", "robin.hale@example.com"), CASEY = p("Casey Wu", "casey.wu@example.com");
 
@@ -63,39 +86,35 @@ const inbox = [
   mk("1", 1.2, p("Leo Martins", "leo.martins@example.com"), "Re: Bike repair", {}),
   mk("1", 1.5, p("Fabrikam Utilities", "billing@fabrikam.example"), "Your bill for October is ready", { unread: true }),
   mk("1", 2.1, p("City Library", "notices@library.example.org"), "Two items are due on Monday", {}),
-  mk("1", 2.4, p("Priya Patel", "priya.patel@example.com"), "Re: Recipe swap", { att: 1 }),
+  mk("1", 2.4, p("Priya Patel", "priya.patel@example.com"), "Re: Recipe swap", { files: [["lemon-tart.pdf", 248000]] }),
   mk("1", 3.0, p("Harbor Photo Club", "club@harborphoto.example"), "November meetup: night photography", { star: true }),
-  mk("1", 3.3, p("Tom Becker", "tom@beckerbuild.example"), "Kitchen remodel: revised quote", { att: 1 }),
+  mk("1", 3.3, p("Tom Becker", "tom@beckerbuild.example"), "Kitchen remodel: revised quote", { files: [["quote-revised.pdf", 312000]] }),
   mk("1", 3.9, p("Tailspin Toys", "orders@tailspin.example"), "Your order has shipped", {}),
-  mk("1", 4.2, p("Lakeside HOA", "board@lakesidehoa.example"), "Minutes from the annual meeting", { att: 1 }),
+  mk("1", 4.2, p("Lakeside HOA", "board@lakesidehoa.example"), "Minutes from the annual meeting", { files: [["annual-meeting-minutes.pdf", 164000]] }),
   mk("1", 5.0, p("Maya Chen", "maya.chen@example.com"), "Saturday hike", {}),
   mk("1", 5.4, p("Dr. Rao's Office", "frontdesk@raoclinic.example"), "Appointment reminder: Thursday 9:30", { star: true }),
   mk("1", 6.1, p("Wide World Importers", "receipts@wwi.example"), "Receipt for your purchase #4471-2210", {}),
-  mk("1", 6.6, p("Jordan Kim", "jordan.kim@example.com"), "Re: Weather station readings look off", { att: 1 }),
+  mk("1", 6.6, p("Jordan Kim", "jordan.kim@example.com"), "Re: Weather station readings look off", { files: [["readings.csv", 38000]] }),
   mk("1", 7.2, p("Adventure Works", "news@adventureworks.example"), "Fall gear guide: layers that work", {}),
   mk("1", 8.0, p("Sam Rivera", "sam.rivera@example.com"), "Re: Board game night", {}),
   mk("1", 9.5, p("Registry Office", "no-reply@registry.example.gov"), "Your vehicle registration expires soon", { star: true }),
-  mk("1", 11.0, p("Jordan Kim", "jordan.kim@example.com"), "3D printer settings for PETG", { att: 2 }),
+  mk("1", 11.0, p("Jordan Kim", "jordan.kim@example.com"), "3D printer settings for PETG", { files: [["petg-profile.zip", 12000], ["first-layer.jpg", 1100000]] }),
   mk("1", 12.3, p("Elena Novak", "elena.novak@example.com"), "Re: Volunteer schedule for the food bank", {}),
 ];
-const PHOTO_MSG = mk("1", 13.0, p("Sam Rivera", "sam.rivera@example.com"), "Fwd: Photos from the coast trip", { att: 3, cc: [p("Dana Brooks", "dana.brooks@example.com"), ME] });
+const PHOTO_MSG = mk("1", 13.0, p("Sam Rivera", "sam.rivera@example.com"), "Fwd: Photos from the coast trip", { files: [["IMG_1053.JPG", 812000], ["IMG_1230.JPG", 1930000], ["IMG_1254.JPG", 1720000]], cc: [p("Dana Brooks", "dana.brooks@example.com"), ME] });
 inbox.push(PHOTO_MSG,
   mk("1", 15.0, p("Contoso Bank", "alerts@contoso.example"), "New sign-in from a new device", {}),
-  mk("1", 17.2, p("Leo Martins", "leo.martins@example.com"), "Bike repair", { att: 1 }),
+  mk("1", 17.2, p("Leo Martins", "leo.martins@example.com"), "Bike repair", { files: [["bike-estimate.pdf", 96000]] }),
   mk("1", 19.0, p("Harbor Photo Club", "club@harborphoto.example"), "Results of the autumn photo contest", { star: true }),
   mk("1", 22.0, p("Northwind Airlines", "no-reply@northwind.example"), "We have received your refund request", { star: true }),
   mk("1", 26.0, p("Priya Patel", "priya.patel@example.com"), "Recipe swap", {}),
   mk("1", 31.0, p("Fabrikam Utilities", "billing@fabrikam.example"), "Your bill for September is ready", {}),
-  mk("1", 38.0, p("Elena Novak", "elena.novak@example.com"), "Volunteer schedule for the food bank", { att: 1 }),
-  mk("1", 47.0, p("Tom Becker", "tom@beckerbuild.example"), "Kitchen remodel: first quote", { att: 2, star: true }),
-  mk("1", 60.0, p("Maya Chen", "maya.chen@example.com"), "Trail map for next month", { att: 1 }),
+  mk("1", 38.0, p("Elena Novak", "elena.novak@example.com"), "Volunteer schedule for the food bank", { files: [["schedule-november.xlsx", 22000]] }),
+  mk("1", 47.0, p("Tom Becker", "tom@beckerbuild.example"), "Kitchen remodel: first quote", { files: [["quote.pdf", 298000], ["floor-plan.png", 640000]], star: true }),
+  mk("1", 60.0, p("Maya Chen", "maya.chen@example.com"), "Trail map for next month", { files: [["trail-map.pdf", 2400000]] }),
   mk("1", 75.0, p("Sam Rivera", "sam.rivera@example.com"), "Coast trip planning", { star: true }),
-  mk("1", 96.0, p("Jordan Kim", "jordan.kim@example.com"), "Robot arm servo test", { att: 1, star: true }),
+  mk("1", 96.0, p("Jordan Kim", "jordan.kim@example.com"), "Robot arm servo test", { files: [["servo-test.mp4", 8600000]], star: true }),
 );
-PHOTO_MSG.attachments = ["IMG_1053.JPG", "IMG_1230.JPG", "IMG_1254.JPG"].map((filename, i) => ({
-  partId: String(i + 2), filename, size: [812000, 4310000, 4120000][i], disposition: "attachment", type: "image", subtype: "jpeg",
-  downloadUrl: `https://cloud-apis.mail.yahoo.com/dl/${i}`, thumbnailUrl: `https://cloud-apis.mail.yahoo.com/thumb/${i}?appid=x`,
-}));
 PHOTO_MSG.html = `<div style="font-family:Helvetica,Arial,sans-serif;font-size:14px">
 <p>These turned out great, see the attached ones from Saturday.</p><br>
 <div>---------- Forwarded message ---------<br>From: <b>Dana Brooks</b> &lt;<a href="mailto:dana.brooks@example.com">dana.brooks@example.com</a>&gt;<br>
@@ -105,16 +124,16 @@ To: <a href="mailto:sam.rivera@example.com">sam.rivera@example.com</a></div><br>
 The light at the point was perfect around eight. Thanks for organising the trip! Same time next year? - Dana</p></div>`;
 
 // Projects/Website: the design thread, and the project's other mail
+const RE = "Re: Website redesign: staging feedback";
 const website = [
-  [0.2, ME, "Re: Website redesign: staging feedback", 0, "g"], [0.3, ROBIN, "Re: Website redesign: staging feedback", 1, "f"],
-  [0.9, ROBIN, "Re: Website redesign: staging feedback", 1, "d"], [1.1, ME, "Re: Website redesign: staging feedback", 1, "e"],
-  [1.4, ME, "Re: Website redesign: staging feedback", 1, "c"], [2.0, ROBIN, "Re: Website redesign: staging feedback", 0, "b"],
-  [3.0, ROBIN, "Website redesign: staging feedback", 0, "a"], [4.5, CASEY, "Logo files, final versions", 2],
-  [6.0, CASEY, "Re: Colour palette options", 1], [9.0, ROBIN, "Hosting renewal and DNS move", 0],
-  [14.0, CASEY, "Colour palette options", 1], [21.0, ROBIN, "Kickoff notes", 1],
-].map(([d, from, s, att, id]) => mk("22", d, from, s, { att, ...(id ? inThread(id) : {}) }));
+  [0.2, ME, RE, [], "g"], [0.3, ROBIN, RE, [["gallery-fix.png", 420000]], "f"],
+  [0.9, ROBIN, RE, [["staging-notes.pdf", 182000]], "d"], [1.1, ME, RE, [["contact-form.png", 310000]], "e"],
+  [1.4, ME, RE, [["staging-checklist.xlsx", 18000]], "c"], [2.0, ROBIN, RE, [], "b"],
+  [3.0, ROBIN, "Website redesign: staging feedback", [], "a"], [4.5, CASEY, "Logo files, final versions", [["logo-dark.png", 84000], ["logo-light.png", 79000]]],
+  [6.0, CASEY, "Re: Colour palette options", [["palette-v2.png", 156000]]], [9.0, ROBIN, "Hosting renewal and DNS move", []],
+  [14.0, CASEY, "Colour palette options", [["palette-options.pdf", 510000]]], [21.0, ROBIN, "Kickoff notes", [["kickoff-notes.docx", 41000]]],
+].map(([d, from, s, files, id]) => mk("22", d, from, s, { files, ...(id ? inThread(id) : {}) }));
 const DESIGN_MSG = website[2];
-DESIGN_MSG.attachments = [{ partId: "2", filename: "staging-notes.pdf", size: 182000, disposition: "attachment", type: "application", subtype: "pdf", downloadUrl: "https://cloud-apis.mail.yahoo.com/dl/9" }];
 DESIGN_MSG.html = `<div style="font-family:Helvetica,Arial,sans-serif;font-size:14px">
 <p>Hi Alex,</p>
 <p>Thanks for turning the staging build around so quickly. I went through every page on my laptop and phone last night and it is a big step up: the new navigation is much easier to follow, and the pages load noticeably faster.</p>
@@ -131,9 +150,21 @@ DESIGN_MSG.html = `<div style="font-family:Helvetica,Arial,sans-serif;font-size:
 <p>Could you click through it this week and send me anything that looks wrong? I would like to switch the DNS over before the end of the month.</p>
 <p>- Alex</p></blockquote></div>`;
 
-const sent = [mk("2", 2.5, ME, "Re: Website redesign: staging feedback", { to: ROBIN, ...inThread("s") }), mk("2", 2.2, ME, "Re: Saturday hike", { to: p("Maya Chen", "maya.chen@example.com") })];
-const all = [...inbox, ...website, ...sent];
+// The other projects, whose files the Attachments picture lists with the website's
+const JORDAN = p("Jordan Kim", "jordan.kim@example.com");
+const projects = [
+  ["20", 5.5, "Servo wiring diagram", [["wiring-diagram.pdf", 265000]]], ["21", 7.0, "October readings", [["readings-october.csv", 52000]]],
+  ["19", 8.0, "Bed levelling, step by step", [["bed-levelling.pdf", 730000]]], ["20", 12.0, "Gripper parts list", [["parts-list.xlsx", 27000]]],
+  ["19", 16.0, "Benchy at 0.12 mm", [["benchy.jpg", 1300000]]], ["20", 18.0, "Arm firmware 0.4", [["arm-firmware-0.4.zip", 96000]]],
+  ["21", 24.0, "Enclosure drawing, rev B", [["enclosure-rev-b.pdf", 388000]]],
+].map(([folder, d, s, files]) => mk(folder, d, JORDAN, s, { files }));
+
+const sent = [mk("2", 2.5, ME, RE, { to: ROBIN, ...inThread("s") }), mk("2", 2.2, ME, "Re: Saturday hike", { to: p("Maya Chen", "maya.chen@example.com") })];
+const all = [...inbox, ...website, ...projects, ...sent];
 for (const m of all) if (!m.html) m.html = `<p>${m.headers.subject}</p>`;
+// The bytes of a file: the invented photos for pictures, the staging review for the PDF that is
+// opened, and a few bytes for the rest, which are listed and never opened.
+const bytesOf = (a, { photos, notesPdf }) => a.type === "image" ? photos[a.n % photos.length] : a.filename === "staging-notes.pdf" ? notesPdf : Buffer.from(a.filename);
 
 // ---------- invented photos (SVG scenes rendered to JPEG) ----------
 const grain = `<filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4"/><feColorMatrix values="0 0 0 0 .5  0 0 0 0 .5  0 0 0 0 .5  0 0 0 .07 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>`;
@@ -239,28 +270,49 @@ async function renderPhotos(ctx) {
   return out;
 }
 
-// ---------- mocked backend ----------
-function listFor(q) {
-  if (q.includes("is:flagged")) return all.filter(m => m.flags.flagged && m.folder.id !== "2");
-  // all mail with one person, newest first (a contact's page)
-  const who = (q.match(/from:\("([^"]+)"\) OR to:/) || [])[1];
-  if (who) return all.filter(m => [...m.headers.from, ...m.headers.to].some(a => a.email === who)).sort((a, b) => b.headers.date - a.headers.date);
-  // a conversation, newest first, in every folder (Show conversation)
-  const conv = (q.match(/conversationId:(\d+)/) || [])[1];
-  if (conv) return all.filter(m => m.conversationId === conv).sort((a, b) => b.headers.date - a.headers.date);
-  const folder = (q.match(/folderId:(\d+)/) || [])[1] || "1";
-  return all.filter(m => m.folder.id === folder);
+// The photos and the staging review, drawn once for both editions.
+async function renderAssets() {
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext();
+  const assets = { photos: await renderPhotos(ctx), notesPdf: await renderNotesPdf(ctx) };
+  await browser.close();
+  return assets;
 }
 
-(async () => {
-  fs.mkdirSync(OUT, { recursive: true });
+// ---------- the mocked Yahoo ----------
+// A list is newest first, as a mail service answers it.
+function listFor(q) {
+  const newest = list => list.slice().sort((a, b) => b.headers.date - a.headers.date);
+  if (q.includes("is:flagged")) return newest(all.filter(m => m.flags.flagged && m.folder.id !== "2"));
+  // all mail with one person (a contact's page)
+  const who = (q.match(/from:\("([^"]+)"\) OR to:/) || [])[1];
+  if (who) return newest(all.filter(m => [...m.headers.from, ...m.headers.to].some(a => a.email === who)));
+  // a conversation, in every folder (Show conversation)
+  const conv = (q.match(/conversationId:(\d+)/) || [])[1];
+  if (conv) return newest(all.filter(m => m.conversationId === conv));
+  // a folder, or a folder with its subfolders; with has:attachment, their mail that carries files (Show attachments)
+  const scope = (q.match(/folderId:\(([^)]+)\)/) || [])[1]?.split(" OR ") || [(q.match(/folderId:(\d+)/) || [])[1] || "1"];
+  return newest(all.filter(m => scope.includes(m.folder.id) && (!q.includes("has:attachment") || m.attachmentCount)));
+}
+// Where the staging feedback with the review is in its folder's list, in either edition.
+const DESIGN_ROW = listFor("folderId:22").indexOf(DESIGN_MSG);
+
+// The release check sees the installed version, so Settings shows no update note.
+async function sameVersion(ctx, ext) {
+  const version = JSON.parse(fs.readFileSync(path.join(ext, "manifest.json"), "utf8")).version;
+  await ctx.route("https://api.github.com/**", route => route.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: `v${version}` }) }));
+}
+
+// An edition opened on the mailbox: { ctx, page, ext (its folder), restore() (the mailbox as it
+// was, after a scene that changed it), close() }.
+// The Yahoo edition, as dist/ has it.
+async function openYahoo({ W, H }, assets) {
+  const ext = build("yahoo");
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "baltazar-mail-shots-"));
   const ctx = await chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, viewport: { width: W, height: H },
-    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`] });
+    args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`] });
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker");
   const extId = new URL(sw.url()).host;
-  const photos = await renderPhotos(ctx);
-  const notesPdf = await renderNotesPdf(ctx);
 
   await ctx.route("https://mail.yahoo.com/**", async route => {
     const req = route.request();
@@ -275,7 +327,7 @@ function listFor(q) {
     else if (uri.includes("/content/simplebody/full")) {
       const id = uri.match(/@\.id==([^/]+)\/content/)[1];
       const msg = all.find(x => x.id === id) || all[0];
-      result = { message: { ...msg, attachments: msg.attachments || [] }, simpleBody: { html: msg.html } };
+      result = { message: msg, simpleBody: { html: msg.html } };
     } else if (/"method":"(POST|DELETE)"/.test(post)) {
       // flags and moves are kept, with the folders' counts, as the server keeps them, so what is
       // listed afterwards shows them
@@ -299,25 +351,122 @@ function listFor(q) {
     }
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ result: { responses: [{ id: top.id, httpCode: 200, response: { result } }] }, error: null }) });
   });
+  // A picture's thumbnail and download: the invented photo that stands for it.
   await ctx.route("https://cloud-apis.mail.yahoo.com/**", route => {
-    const i = Number((route.request().url().match(/\/(?:thumb|dl)\/(\d+)/) || [])[1] || 0);
-    return route.fulfill({ contentType: "image/jpeg", body: photos[i % photos.length] });
+    const n = Number((route.request().url().match(/\/(?:thumb|dl)\/(\d+)/) || [])[1] || 0);
+    return route.fulfill({ contentType: "image/jpeg", body: assets.photos[n % assets.photos.length] });
   });
   // Raw message source, from which the extension cuts attachment bytes.
   await ctx.route("https://apis.mail.yahoo.com/**", route => {
     const b64 = buf => buf.toString("base64").replace(/.{76}/g, "$&\r\n");
-    const part = (type, name, buf) => `--B\r\nContent-Type: ${type}; name="${name}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${name}"\r\n\r\n${b64(buf)}\r\n`;
-    const design = route.request().url().includes(`@.id==${DESIGN_MSG.id}/`);
-    const raw = "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nBody\r\n" +
-      (design ? part("application/pdf", "staging-notes.pdf", notesPdf) : PHOTO_MSG.attachments.map((a, i) => part("image/jpeg", a.filename, photos[i])).join("")) + "--B--\r\n";
+    const part = a => `--B\r\nContent-Type: ${a.mime}; name="${a.filename}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${a.filename}"\r\n\r\n${b64(bytesOf(a, assets))}\r\n`;
+    const msg = all.find(x => route.request().url().includes(`@.id==${x.id}/`)) || PHOTO_MSG;
+    const raw = "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nBody\r\n" + msg.attachments.map(part).join("") + "--B--\r\n";
     return route.fulfill({ contentType: "text/plain", body: raw });
   });
-  // The release check sees the installed version, so Settings shows no update note.
-  const version = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8")).version;
-  await ctx.route("https://api.github.com/**", route => route.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ tag_name: `v${version}` }) }));
+  await sameVersion(ctx, ext);
 
   const page = await ctx.newPage();
   await page.goto(`chrome-extension://${extId}/mail.html`);
+  const kept = { messages: all.map(m => [m, m.flags, m.folder]), folders: folders.map(f => [f, f.total, f.unread]) };
+  const restore = () => {
+    for (const [m, flags, folder] of kept.messages) Object.assign(m, { flags, folder });
+    for (const [f, total, unread] of kept.folders) Object.assign(f, { total, unread });
+  };
+  return { ctx, page, ext, restore, close: async () => { await ctx.close(); fs.rmSync(profile, { recursive: true, force: true }); } };
+}
+
+// ---------- the same mailbox in the mocked Gmail ----------
+// A folder is a label (Inbox, Sent, Drafts, Spam and Trash are Gmail's own, and Yahoo's Archive
+// is none, as archived mail has no label). A message keeps its date, people, text, files and
+// place in its conversation. Each label says the counts its Yahoo folder says, changed by what is
+// done to its messages here, and All Mail the sum of them. Returns what puts the labels of every
+// message back as they were filled.
+const SYSTEM_LABEL = { 1: "INBOX", 2: "SENT", 3: "DRAFT", 4: "TRASH", 6: "SPAM" };
+const labelOf = id => SYSTEM_LABEL[id] || `Label_${id}`;
+function fillGmail(state, assets) {
+  const addr = a => `"${a.name}" <${a.email}>`;
+  state.messages.clear(); state.attachments.clear(); state.drafts.length = 0;
+  state.profile.emailAddress = ME.email;
+  state.sendAs = [{ sendAsEmail: ME.email, displayName: ME.name, isPrimary: true, verificationStatus: "accepted" }];
+  state.labels = [...state.labels.filter(l => l.type === "system"),
+    ...folders.filter(f => f.types[0] === "USER").map(f => ({ id: labelOf(f.id), name: f.name, type: "user", labelListVisibility: "labelShow" }))];
+  all.forEach((m, i) => {
+    const h = m.headers;
+    const made = state.addMessage({ id: `g${i + 1}`, threadId: `t${m.conversationId}`, labels: [labelOf(m.folder.id), ...(m.flags.read ? [] : ["UNREAD"]), ...(m.flags.flagged ? ["STARRED"] : [])],
+      subject: h.subject, from: addr(h.from[0]), to: h.to.map(addr).join(", "), cc: h.cc.map(addr).join(", "), date: Number(h.date), html: m.html, inline: [],
+      files: m.attachments.map(a => ({ name: a.filename, type: a.mime, bytes: bytesOf(a, assets) })), messageId: h.messageIdRfc822 || null, inReplyTo: h.inReplyTo || null });
+    made.snippet = "";
+    // a file says the size the mailbox gives it, whatever bytes stand for it
+    m.attachments.forEach((a, k) => { made.payload.parts[k + 1].body.size = a.size; });
+  });
+  const real = id => { const of = [...state.messages.values()].filter(m => m.labelIds.includes(id)); return { total: of.length, unread: of.filter(m => m.labelIds.includes("UNREAD")).length }; };
+  const said = new Map(folders.map(f => [labelOf(f.id), { total: f.total, unread: f.unread, was: real(labelOf(f.id)) }]));
+  const everywhere = folders.filter(f => !["4", "6"].includes(f.id)).reduce((n, f) => n + f.total, 0);
+  state.countsOf = id => {
+    if (id === "ALL") return { messagesTotal: everywhere, messagesUnread: 0 };
+    const s = said.get(id), now = s && real(id);
+    return s ? { messagesTotal: s.total + now.total - s.was.total, messagesUnread: s.unread + now.unread - s.was.unread } : null;
+  };
+  const kept = [...state.messages.values()].map(m => [m, m.labelIds.slice()]);
+  return () => { for (const [m, labels] of kept) m.labelIds = labels.slice(); };
+}
+
+// Contacts of the Gmail edition is built from the message headers a little at a time, starting
+// two minutes after the mailbox first opened and only while nobody uses the app. The page is told
+// the time has come and is loaded as a tab in the background until the book is built.
+async function buildContacts(page) {
+  const built = () => page.evaluate(() => new Promise(done => {
+    const r = indexedDB.open("baltazar-mail");
+    r.onerror = () => done(null);
+    r.onsuccess = () => {
+      try {
+        const t = r.result.transaction("meta", "readonly"), q = t.objectStore("meta").get("built");
+        t.oncomplete = () => { r.result.close(); done(q.result?.value ?? null); };
+        t.onerror = () => { r.result.close(); done(null); };
+      } catch { r.result.close(); done(null); }
+    };
+  }));
+  await page.evaluate(() => chrome.storage.local.set({ contactsAfter: 1 }));
+  await page.addInitScript(() => {
+    try {
+      if (window.top !== window || !sessionStorage.getItem("hiddenTab")) return;
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    } catch {}
+  });
+  await page.evaluate(() => sessionStorage.setItem("hiddenTab", "1"));
+  await page.reload();
+  await page.waitForSelector("#rows .row");
+  for (let i = 0; i < 240 && !(await built()); i++) await page.waitForTimeout(500);
+  if (!(await built())) throw new Error("the Gmail edition's Contacts was not built in two minutes");
+  await page.evaluate(() => { sessionStorage.removeItem("hiddenTab"); delete document.hidden; delete document.visibilityState; document.dispatchEvent(new Event("visibilitychange")); });
+}
+
+// The Gmail edition, as the browser suites build it (no Google client of anyone's), signed in as
+// the suites sign it in: with the token the app would have got from Google.
+async function openGmail({ W, H }, assets) {
+  const { launch, buildForTest } = require("./harness.js");
+  const ext = buildForTest("gmail");
+  const h = await launch({ provider: "gmail", gmail: { mime: await import("../ext/mime.js") } });
+  const restore = fillGmail(h.gmail, assets);
+  await sameVersion(h.ctx, ext);
+  const { page } = h;
+  await page.setViewportSize({ width: W, height: H });
+  await h.open();
+  await page.evaluate(email => chrome.storage.session.set({ gmToken: { access_token: "test", expires: Date.now() + 3600e3, email } }), ME.email);
+  await page.reload();
+  await page.waitForSelector("#rows .row");
+  await buildContacts(page);
+  return { ctx: h.ctx, page, ext, restore, close: h.close };
+}
+
+// ---------- the scenes ----------
+// b: an edition opened on the mailbox; o: { W, H, shots: the folder the pictures go to, store }.
+async function scenes(b, o) {
+  const { page } = b, { W, H } = o;
+  const LIST_W = o.store ? 505 : 560, FOLDER_W = o.store ? 190 : 230;
+  const shot = (name, opts = {}) => page.screenshot({ path: path.join(o.shots, name), ...opts });
   const setup = async s => {
     await page.evaluate(s => chrome.storage.local.set({ settings: { pollSec: 600, markReadSec: null, ...s } }), s);
     await page.reload();
@@ -329,18 +478,22 @@ function listFor(q) {
     await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, subject);
     await page.waitForTimeout(700);
   };
+  const openWebsite = async () => {
+    await page.locator("#folder-list .folder", { hasText: "Website" }).click();
+    await page.waitForFunction(() => document.getElementById("list-title").textContent === "Projects/Website");
+  };
+  const light = { layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] };
 
   // 1. light, three columns, message with photo attachments
-  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });
+  await setup(light);
   await openRow("Fwd: Photos from the coast trip");
   await page.waitForFunction(() => document.querySelectorAll("#r-attach .att-thumb img").length === 3);
   await page.mouse.move(W - 5, H - 5);
-  await page.screenshot({ path: path.join(OUT, "light.png") });
+  await shot("light.png");
 
   // 2. the attachment viewer: the design thread's PDF review
-  await page.locator("#folder-list .folder", { hasText: "Website" }).click();
-  await page.waitForFunction(() => document.getElementById("list-title").textContent === "Projects/Website");
-  await page.locator("#rows .row").nth(2).click();
+  await openWebsite();
+  await page.locator("#rows .row").nth(DESIGN_ROW).click();
   await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, DESIGN_MSG.headers.subject);
   await page.waitForSelector("#r-attach .att-card");
   await page.locator("#r-attach .att-card").first().click();
@@ -352,21 +505,19 @@ function listFor(q) {
   await viewerFrame.waitForFunction(() => document.querySelector(".textLayer span"), null, { timeout: 20000 });
   await page.waitForTimeout(800);
   await page.mouse.move(W - 5, H - 5);
-  await page.screenshot({ path: path.join(OUT, "viewer.png") });
+  await shot("viewer.png");
   await viewerFrame.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await page.waitForSelector("#viewer.hidden", { state: "attached" });
 
   // 3. dark, messages above the preview: the design thread as a conversation, and the undo
   // history open over it with its oldest action taken back alone. The mailbox is put back after.
-  const kept = { messages: all.map(m => [m, m.flags, m.folder]), folders: folders.map(f => [f, f.total, f.unread]) };
   await setup({ layout: "horizontal", theme: "dark", darkTheme: "dark", folderW: 230, listH: 36, expanded: ["Projects"] });
-  await page.locator("#folder-list .folder", { hasText: "Website" }).click();
-  await page.waitForFunction(() => document.getElementById("list-title").textContent === "Projects/Website");
+  await openWebsite();
   for (const [subject, key] of [["Hosting renewal and DNS move", "e"], ["Logo files, final versions", "s"]]) {
     await page.locator("#rows .row", { hasText: subject }).first().click(); await page.waitForTimeout(400);
     await page.keyboard.press(key); await page.waitForTimeout(600);
   }
-  await page.locator("#rows .row").nth(2).click();     // Robin's feedback, with the review attached
+  await page.locator("#rows .row").nth(DESIGN_ROW).click();     // Robin's feedback, with the review attached
   await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, DESIGN_MSG.headers.subject);
   await page.keyboard.press("w");
   await page.waitForFunction(() => document.getElementById("list-title").textContent.startsWith("Conversation"));
@@ -377,85 +528,155 @@ function listFor(q) {
   await page.waitForFunction(() => document.querySelector("#history .h-row.undone:not(.working)"));
   await page.waitForTimeout(800);
   await page.mouse.move(W - 5, 60);
-  await page.screenshot({ path: path.join(OUT, "dark.png") });
+  await shot("dark.png");
   await page.keyboard.press("Escape");
-  for (const [m, flags, folder] of kept.messages) Object.assign(m, { flags, folder });
-  for (const [f, total, unread] of kept.folders) Object.assign(f, { total, unread });
+  b.restore();
 
   // 4. Contacts, in the light theme: the people written to, and one person's page
-  await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, expanded: ["Projects"] });
+  await setup(light);
   await page.locator("#contacts-link").click();
   await page.waitForSelector("#p-rows .prow");
   await page.locator("#p-rows .prow", { hasText: "Maya Chen" }).first().click();
   await page.waitForSelector("#person .p-msg");
   await page.mouse.move(W - 5, H - 5);
-  await page.screenshot({ path: path.join(OUT, "contacts.png") });
+  await shot("contacts.png");
 
-  // 5. Settings, in the light theme, with the default intervals and the app hidden behind it
+  // 5. a folder's attachments, in the light theme: the files in the mail of Projects and its
+  // subfolders, and the message one of them came with
+  await setup(light);
+  await page.locator("#folder-list .folder", { has: page.locator(".nm", { hasText: /^Projects$/ }) }).click({ button: "right" });
+  await page.locator('#ctx [data-act="files"]').click();
+  await page.waitForSelector("#f-subs:not(.hidden)");
+  await page.locator("#f-subs-box").check();
+  await page.locator("#f-rows .frow", { hasText: "staging-notes.pdf" }).click();
+  await page.waitForFunction(s => document.getElementById("r-subject").textContent === s, DESIGN_MSG.headers.subject);
+  await page.waitForSelector("#r-attach .att-card");
+  await page.waitForTimeout(700);
+  await page.mouse.move(W - 5, H - 5);
+  await shot("attachments.png");
+
+  // 6. Settings, in the light theme, with the default intervals: the whole panel, with the app
+  // hidden behind it
   await setup({ layout: "vertical", theme: "light", lightTheme: "light", folderW: FOLDER_W, listW: LIST_W, pollSec: 20, markReadSec: 2 });
   await page.locator("#list").focus(); await page.keyboard.press(",");
-  if (!STORE) await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
+  await page.evaluate(() => { document.getElementById("app").style.visibility = "hidden"; });
   await page.waitForSelector("#settings:not(.hidden)");
   await page.waitForTimeout(300);
-  // At the store's 800 px the panel scrolls; show it from the first section heading from which the
-  // rest, down to the buttons, fits the window, as a slightly taller window would, so no section
-  // below it is cut. The README's window grows instead until the whole panel fits under its 90vh cap.
-  if (STORE) await page.locator("#settings-box").evaluate(e => {
-    const box = e.getBoundingClientRect().top - e.scrollTop;
-    // 16 px above the heading, but nothing of the row before it
-    const tops = [...e.querySelectorAll("#settings-main > b")].map(b => Math.max(b.getBoundingClientRect().top - 16, b.previousElementSibling.getBoundingClientRect().bottom) - box);
-    const top = tops.find(t => e.scrollHeight - t + 2 <= innerHeight - 20) ?? tops.at(-1);
-    e.style.maxHeight = (e.scrollHeight - top) + "px";
-    e.scrollTop = top;
-  });
-  else {
-    const need = await page.locator("#settings-box").evaluate(e => e.scrollHeight + 2);   // with its borders
-    if (need > 0.9 * H) { await page.setViewportSize({ width: W, height: Math.ceil(need / 0.9) + 1 }); await page.waitForTimeout(300); }
+  const need = await page.locator("#settings-box").evaluate(e => e.scrollHeight + 2);   // with its borders
+  if (o.store) {
+    // The panel is taller than a store's picture, which has one size. The window is made as much
+    // larger as the whole panel needs, with a margin of 24 px above and below it, and drawn as
+    // much smaller, as a browser zoomed out shows it, so the picture is a whole window of the
+    // store's size still. The panel's cap of 90% of the window's height, which makes it scroll in
+    // a small window, is lifted, so the zoom is no smaller than the panel itself asks for.
+    const zoom = [1, 4 / 5, 8 / 11, 2 / 3, 16 / 25, 5 / 8, 1 / 2].find(z => need + 48 <= H / z);
+    if (!zoom) throw new Error(`the Settings panel (${need} px) does not fit a store's picture at half size`);
+    await page.locator("#settings-box").evaluate(e => { e.style.maxHeight = "none"; });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: Math.round(W / zoom), height: Math.round(H / zoom), deviceScaleFactor: zoom, mobile: false });
+    await page.waitForTimeout(400);
+    const png = Buffer.from((await cdp.send("Page.captureScreenshot", { format: "png" })).data, "base64");
+    if (png.readUInt32BE(16) !== W || png.readUInt32BE(20) !== H) throw new Error(`the Settings picture came out ${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`);
+    fs.writeFileSync(path.join(o.shots, "settings.png"), png);
+    await cdp.detach();
+    await page.setViewportSize({ width: W, height: H });
+    return;
   }
+  // The README shows the panel alone: the window grows until the whole panel fits under its cap.
+  if (need > 0.9 * H) { await page.setViewportSize({ width: W, height: Math.ceil(need / 0.9) + 1 }); await page.waitForTimeout(300); }
   const box = await page.locator("#settings-box").boundingBox(), pad = 16;
-  // The store takes whole windows only; the README shows the panel alone.
-  await page.screenshot({ path: path.join(OUT, "settings.png"), ...(STORE ? {} : { clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } }) });
+  await shot("settings.png", { clip: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad } });
+}
 
-  if (STORE) {
-    const logo = await ctx.newPage();
-    await logo.setViewportSize({ width: 300, height: 300 });
-    await logo.setContent(`<html><body style="margin:0;background:transparent"><img src="data:image/svg+xml;base64,${fs.readFileSync(path.join(EXT, "icons", "icon.svg")).toString("base64")}" width="300" height="300"></body></html>`);
-    await logo.screenshot({ path: path.join(OUT, "..", "logo-300.png"), omitBackground: true });
+// ---------- what a store shows beside the screenshots ----------
+// The logo, and the promotional tiles: icon, name and tagline, the large one with what sets the
+// app apart and a slice of a screenshot. A tile follows its edition's icon, so the two items tell
+// apart in a store as the two icons do in the toolbar. The Yahoo edition's envelope sits on a dark
+// tile, and its promotional tiles are dark, in the Graphite palette, around the light-theme
+// screenshot; the Gmail edition's envelope has no background, and its tiles are light, in the
+// Paper palette, around the dark-theme one.
+const TILE = {
+  yahoo: { of: "", tag: "Fast, ad-free Yahoo Mail™ client", shot: "light.png", back: "radial-gradient(circle at 25% 30%,#242a31,#15181c 70%)",
+    name: "#efe9da", accent: "#d9a441", text: "#c9c4b7", edge: "#3a424c", shadow: "rgba(0,0,0,.55)" },
+  gmail: { of: "for Gmail™", tag: "Fast, ad-free mail client", shot: "dark.png", back: "radial-gradient(circle at 25% 30%,#fbf9f4,#e4dece 75%)",
+    name: "#1c1a17", accent: "#94570e", text: "#4f4c44", edge: "#c2bbac", shadow: "rgba(40,30,10,.35)" },
+};
+// What the large tile says of the app, in the order a reader takes it in: what the screenshot
+// beside it shows, what no webmail does, and why it can be trusted with mail.
+const POINTS = ["PDFs, documents and photos open in place", "Undo for everything, even Send", "No tracking pictures, no server in between"];
+async function brand(b, o, edition) {
+  const icon = `data:image/svg+xml;base64,${fs.readFileSync(path.join(b.ext, "icons", "icon.svg")).toString("base64")}`;
+  const pg = await b.ctx.newPage();
+  await pg.setViewportSize({ width: 300, height: 300 });
+  await pg.setContent(`<html><body style="margin:0;background:transparent"><img src="${icon}" width="300" height="300"></body></html>`);
+  await pg.screenshot({ path: path.join(o.out, "logo-300.png"), omitBackground: true });
 
-    // Promotional tiles: icon, name and tagline in the Graphite palette; the large one with a
-    // slice of the light-theme screenshot.
-    const icon = `data:image/svg+xml;base64,${fs.readFileSync(path.join(EXT, "icons", "icon.svg")).toString("base64")}`;
-    const shot = `data:image/png;base64,${fs.readFileSync(path.join(OUT, "light.png")).toString("base64")}`;
-    const font = "font-family:Inter,'Segoe UI','Helvetica Neue',Arial,sans-serif";   // single quotes: it sits in a style attribute
-    const tiles = [
-      ["promo-small.png", 440, 280, `
-        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">
-          <img src="${icon}" width="92" height="92">
-          <div style="font-size:36px;font-weight:700;color:#efe9da;letter-spacing:-0.5px">Baltazar Mail</div>
-          <div style="font-size:16px;color:#d9a441">Fast, ad-free Yahoo Mail™ client</div>
-        </div>`],
-      ["promo-large.png", 1400, 560, `
-        <div style="position:absolute;left:90px;top:0;bottom:0;width:560px;display:flex;flex-direction:column;justify-content:center">
-          <div style="display:flex;align-items:center;gap:22px"><img src="${icon}" width="104" height="104">
-            <div style="font-size:60px;font-weight:700;color:#efe9da;letter-spacing:-1px;line-height:1.05">Baltazar<br>Mail</div></div>
-          <div style="font-size:27px;color:#d9a441;margin:26px 0 22px">Fast, ad-free Yahoo Mail™ client</div>
-          ${["Dark mode that darkens messages too", "Attachments open in place", "No server, no ads, no tracking"].map(t =>
-            `<div style="font-size:21px;color:#c9c4b7;margin:6px 0;display:flex;align-items:center;gap:14px"><span style="width:9px;height:9px;border-radius:50%;background:#d9a441"></span>${t}</div>`).join("")}
-        </div>
-        <img src="${shot}" style="position:absolute;left:720px;top:70px;width:900px;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);border:1px solid #3a424c">`],
-    ];
-    for (const [file, w, h, body] of tiles) {
-      await logo.setViewportSize({ width: w, height: h });
-      await logo.setContent(`<html><body style="margin:0;width:${w}px;height:${h}px;overflow:hidden;position:relative;${font};background:radial-gradient(circle at 25% 30%,#242a31,#15181c 70%)">${body}</body></html>`);
-      await logo.waitForTimeout(200);
-      await logo.screenshot({ path: path.join(OUT, "..", file) });
-    }
+  const t = TILE[edition], { of, tag } = t;
+  const shot = `data:image/png;base64,${fs.readFileSync(path.join(o.shots, t.shot)).toString("base64")}`;
+  const font = "font-family:Inter,'Segoe UI','Helvetica Neue',Arial,sans-serif";   // single quotes: it sits in a style attribute
+  const tiles = [
+    ["promo-small.png", 440, 280, `
+      <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:${of ? 6 : 10}px">
+        <img src="${icon}" width="${of ? 84 : 92}" height="${of ? 84 : 92}">
+        <div style="font-size:36px;font-weight:700;color:${t.name};letter-spacing:-0.5px">Baltazar Mail</div>
+        ${of ? `<div style="font-size:22px;font-weight:600;color:${t.name};margin-top:-6px">${of}</div>` : ""}
+        <div style="font-size:16px;color:${t.accent}${of ? ";margin-top:4px" : ""}">${tag}</div>
+      </div>`],
+    ["promo-large.png", 1400, 560, `
+      <div style="position:absolute;left:90px;top:0;bottom:0;width:560px;display:flex;flex-direction:column;justify-content:center">
+        <div style="display:flex;align-items:center;gap:22px"><img src="${icon}" width="104" height="104">
+          <div style="font-size:60px;font-weight:700;color:${t.name};letter-spacing:-1px;line-height:1.05">Baltazar<br>Mail${of ? `<div style="font-size:32px;font-weight:600;letter-spacing:-0.3px;margin-top:6px">${of}</div>` : ""}</div></div>
+        <div style="font-size:27px;color:${t.accent};margin:26px 0 22px">${tag}</div>
+        ${POINTS.map(p =>
+          `<div style="font-size:21px;color:${t.text};margin:6px 0;display:flex;align-items:center;gap:14px"><span style="flex:none;width:9px;height:9px;border-radius:50%;background:${t.accent}"></span>${p}</div>`).join("")}
+      </div>
+      <img src="${shot}" style="position:absolute;left:720px;top:70px;width:900px;border-radius:10px;box-shadow:0 18px 50px ${t.shadow};border:1px solid ${t.edge}">`],
+  ];
+  for (const [file, w, h, body] of tiles) {
+    await pg.setViewportSize({ width: w, height: h });
+    await pg.setContent(`<html><body style="margin:0;width:${w}px;height:${h}px;overflow:hidden;position:relative;${font};background:${t.back}">${body}</body></html>`);
+    await pg.waitForTimeout(200);
+    await pg.screenshot({ path: path.join(o.out, file) });
   }
+  await pg.close();
+}
 
-  await ctx.close();
-  fs.rmSync(profile, { recursive: true, force: true });
-  if (!STORE) await signInShots();
-  console.log("wrote", fs.readdirSync(OUT).join(", "));
+// The page a new install of the Gmail edition opens with: its setup guide at the first step, in a
+// window of the store's size and the light theme.
+async function setupShot(file, { W, H }) {
+  const h = await require("./harness.js").launch({ provider: "gmail" });
+  const { page, extId } = h;
+  await page.setViewportSize({ width: W, height: H });
+  await page.goto(`chrome-extension://${extId}/mail.html`);
+  await page.evaluate(() => chrome.storage.local.set({ settings: { theme: "light", lightTheme: "light" } }));
+  await page.reload();
+  await page.waitForSelector("#signin:not(.hidden) .g-step.now");
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.mouse.move(2, 2);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: file });
+  await h.close();
+}
+
+// One edition's pictures. o: { W, H, out: the folder that holds screenshots/, store }.
+async function draw(edition, o, assets) {
+  o = { ...o, shots: path.join(o.out, "screenshots") };
+  fs.mkdirSync(o.shots, { recursive: true });
+  const b = await (edition === "gmail" ? openGmail : openYahoo)(o, assets);
+  await scenes(b, o);
+  if (o.store) await brand(b, o, edition);
+  await b.close();
+  if (o.store && edition === "gmail") await setupShot(path.join(o.shots, "setup.png"), o);
+  console.log(`${path.relative(ROOT, o.out).replaceAll("\\", "/")}: wrote ${[...fs.readdirSync(o.out).filter(n => n.endsWith(".png")), ...fs.readdirSync(o.shots).map(n => `screenshots/${n}`)].join(", ")}`);
+}
+
+const DOCS = path.join(ROOT, "docs");
+(async () => {
+  for (const name of NAMED) if (!EDITIONS[name]) throw new Error(`unknown edition ${name}`);
+  if (NAMED.length && !STORE) throw new Error("the README's pictures are of the Yahoo edition; name an edition with --store");
+  const assets = await renderAssets();
+  if (STORE) for (const edition of NAMED.length ? NAMED : Object.keys(EDITIONS)) await draw(edition, { W: 1280, H: 800, out: path.join(ROOT, "store", edition), store: true }, assets);
+  else { await draw("yahoo", { W: 1600, H: 900, out: DOCS, store: false }, assets); await signInShots(); }
 })().catch(e => { console.error(e); process.exit(1); });
 
 // The Gmail edition's sign-in page, for docs/gmail-sign-in.md: a build that carries no Google
@@ -483,7 +704,7 @@ async function signInShots() {
       return { x: Math.min(...rs.map(b => b.left)), y: Math.min(...rs.map(b => b.top)), right: Math.max(...rs.map(b => b.right)), bottom: Math.max(...rs.map(b => b.bottom)) };
     });
     const pad = 20;
-    await page.screenshot({ path: path.join(OUT, file), clip: { x: r.x - pad, y: r.y - pad, width: r.right - r.x + 2 * pad, height: r.bottom - r.y + 2 * pad } });
+    await page.screenshot({ path: path.join(DOCS, "screenshots", file), clip: { x: r.x - pad, y: r.y - pad, width: r.right - r.x + 2 * pad, height: r.bottom - r.y + 2 * pad } });
   };
   const at = step => page.waitForSelector(`.g-step.now[data-step="${step}"]`);
 

@@ -118,7 +118,10 @@ function createGmail(opts = {}) {
   state.drafts.push({ id: "r-d1", message: { id: "d1" } });
   if (opts.setup) opts.setup(state);
 
-  const counts = id => { const all = [...state.messages.values()].filter(m => m.labelIds.includes(id)); return { messagesTotal: all.length, messagesUnread: all.filter(m => m.labelIds.includes("UNREAD")).length }; };
+  // A label's counts are those of its messages here, unless the caller says them itself
+  // (state.countsOf(id) -> { messagesTotal, messagesUnread }, with "ALL" for the whole mailbox),
+  // as the screenshots do for a mailbox that holds more mail than it lists.
+  const counts = id => state.countsOf?.(id) || (() => { const all = [...state.messages.values()].filter(m => m.labelIds.includes(id)); return { messagesTotal: all.length, messagesUnread: all.filter(m => m.labelIds.includes("UNREAD")).length }; })();
   const err = (code, message) => ({ status: code, json: { error: { code, message, errors: [{ reason: code === 404 ? "notFound" : "backendError" }] } } });
   const ok = json => ({ status: 200, json });
 
@@ -198,7 +201,7 @@ function createGmail(opts = {}) {
     if (state.fail?.times > 0) { state.fail.times--; return { status: state.fail.status, json: state.fail.body || { error: { code: state.fail.status, message: "injected" } } }; }
     if (!/^Bearer (test|tok\d+)$/.test(h.authorization || "") || state.revoked.includes(h.authorization.slice(7))) return err(401, "Invalid Credentials");
     let m;
-    if (p === "/profile") return ok({ ...state.profile, messagesTotal: state.messages.size });
+    if (p === "/profile") return ok({ ...state.profile, messagesTotal: state.countsOf?.("ALL")?.messagesTotal ?? state.messages.size });
     if (p === "/labels" && method === "GET") return ok({ labels: state.labels });
     if (p === "/labels" && method === "POST") { const j = JSON.parse(body); if (state.labels.some(l => l.name === j.name)) return err(409, "Label name exists or conflicts"); const l = { id: `Label_${100 + state.labels.length}`, name: j.name, type: "user", labelListVisibility: "labelShow" }; state.labels.push(l); return ok(l); }
     if ((m = p.match(/^\/labels\/([^/]+)$/))) {

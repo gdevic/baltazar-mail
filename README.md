@@ -31,6 +31,8 @@ Everything a mail client does, and:
 
 ![Contacts: the people you have written to, and one person's page with what can be done and the recent mail with them](docs/screenshots/contacts.png)
 
+![A folder's attachments: the files in the mail of a folder and its subfolders in one list, beside the message one of them came with](docs/screenshots/attachments.png)
+
 ![Settings: layout, theme with palettes and contrast, size, writing, images, links, and behaviour](docs/screenshots/settings.png)
 
 All names, addresses and messages in these screenshots are invented.
