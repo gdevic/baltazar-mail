@@ -1,26 +1,93 @@
 // What the two adapters (yahoo/api.js and gmail/api.js) share: the errors they throw, the deadline
-// every request keeps, the shape of the folder list they give, the check on the message ids they
-// are handed, and the reading of the Message-IDs a message names. Each adapter exports these as
-// its own.
+// every request keeps, the record of what the requests wait for and how long they took, the shape
+// of the folder list they give, the check on the message ids they are handed, and the reading of
+// the Message-IDs a message names. Each adapter exports these as its own.
 
 export class ApiError extends Error {
   constructor(msg, detail) { super(msg); this.name = "ApiError"; this.detail = detail; }
 }
 
 // Every request has a deadline, so a stalled connection ends in an error instead of waiting
-// forever. Uploads get extra time per megabyte sent.
-export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000 };
+// forever. Uploads get extra time per megabyte sent. slow: how long a request may go unanswered
+// before the client is told that it is waited for. first: how long a request an adapter would
+// ask twice may go without its answer beginning, the first time. renew: the deadline of a sign-in
+// renewed without the user.
+export const TIMEOUTS = { page: 30000, batch: 60000, perMB: 10000, raw: 120000, slow: 3000, first: 12000, renew: 20000 };
+// early: no answer had begun within the time the caller gave for that (see deadlined).
 export class Timeout extends Error {
-  constructor(provider, what, ms) { super(`${provider} did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; }
+  constructor(provider, what, ms) { super(`${provider} did not answer within ${Math.round(ms / 1000)} s (${what})`); this.name = "Timeout"; this.early = false; }
 }
+
+// ---------- what the requests wait for, and how long they took ----------
+// What keeps a request from being answered is a wait: { text, since, until }, where until is when
+// it ends if that is known, else 0. An adapter begins one with activity.wait(), which answers the
+// function that ends it, and the client watches them (activity.watch) to say in its status bar why
+// nothing happens. Every request, and every wait long enough to notice, is also kept when it ends
+// (the newest KEPT of them: when, how long, how it ended, what), for the report a user can copy
+// when the app seems slow (activity.report). What is kept names no address and no subject, and
+// the ids in it are replaced by *.
+const KEPT = 300, NOTICED = 250;
+const waits = new Set(), watchers = new Set(), kept = [];
+const tell = () => { for (const fn of [...watchers]) { try { fn(); } catch { /* a watcher's own trouble */ } } };
+const keep = e => { kept.push(e); if (kept.length > KEPT) kept.shift(); };
+// An id is a word of ten characters or more with a digit in it.
+const noIds = what => String(what).replace(/[A-Za-z0-9_-]{10,}/g, w => /\d/.test(w) ? "*" : w);
+const clock = at => new Date(at).toTimeString().slice(0, 8);
+export const activity = {
+  // logged: whether the wait is kept for the report when it ends (one that a request's own entry
+  // tells of is not). since: when it began, where that was before it is told of.
+  wait(text, until = 0, { logged = true, since = Date.now() } = {}) {
+    const w = { text, since, until };
+    waits.add(w); tell();
+    return () => {
+      if (!waits.delete(w)) return;
+      const ms = Date.now() - w.since;
+      if (logged && ms >= NOTICED) keep({ at: w.since, ms, how: "waited", what: text });
+      tell();
+    };
+  },
+  // The wait to tell of: the one that ends last, or where none names its end, the oldest.
+  waiting() {
+    const all = [...waits], timed = all.filter(w => w.until);
+    return (timed.length ? timed.reduce((a, b) => (b.until > a.until ? b : a)) : all[0]) || null;
+  },
+  watch(fn) { watchers.add(fn); return () => watchers.delete(fn); },
+  // A request that has ended: how is its HTTP status, or the words for a request with no answer.
+  note(what, ms, how) { keep({ at: Date.now() - ms, ms, how: String(how), what: noIds(what) }); },
+  // The record as text, oldest first, under a line that sums it up.
+  report() {
+    const asked = kept.filter(e => e.how !== "waited"), waited = kept.filter(e => e.how === "waited");
+    const longest = list => list.reduce((n, e) => Math.max(n, e.ms), 0);
+    const sum = `${asked.length} requests, the slowest ${longest(asked)} ms; ${waited.length} waits, ${Math.round(waited.reduce((n, e) => n + e.ms, 0) / 1000)} s in all, the longest ${longest(waited)} ms`;
+    return [sum, ...kept.map(e => `${clock(e.at)} ${String(e.ms).padStart(6)} ms  ${e.how.padEnd(9)} ${e.what}`)].join("\n");
+  },
+};
+
 // The provider's fetch: fetch plus reading the body, both inside the deadline. read(resp) returns
-// the body; a deadline that passes is a Timeout naming the provider.
-export const deadlined = provider => async (what, url, init, ms, read) => {
-  const signal = AbortSignal.timeout(ms);
+// the body; a deadline that passes is a Timeout naming the provider. A request still unanswered
+// after TIMEOUTS.slow is a wait the client can tell of, until its answer begins to come (a large
+// attachment being received is no wait for an answer), unless it is quiet (work nobody waits
+// for). first: the request is given up, as a Timeout that is early, when no answer has begun
+// within that time, which a caller that can ask again uses to leave a dead connection soon; an
+// answer that has begun has the whole deadline to arrive. Every request is noted when it ends.
+export const deadlined = provider => async (what, url, init, ms, read, { quiet = false, first = 0 } = {}) => {
+  const whole = AbortSignal.timeout(ms), early = first > 0 && first < ms ? new AbortController() : null;
+  const signal = early ? AbortSignal.any([whole, early.signal]) : whole, t0 = Date.now();
+  let late = null, how = "failed";
+  const slow = quiet ? 0 : setTimeout(() => { late = activity.wait(`no answer from ${provider} yet`, 0, { logged: false, since: t0 }); }, TIMEOUTS.slow);
+  const hurry = early ? setTimeout(() => early.abort(), first) : 0;
+  const answered = () => { clearTimeout(slow); clearTimeout(hurry); late?.(); late = null; };
   try {
     const resp = await fetch(url, { ...init, signal });
-    return { resp, body: await read(resp) };
-  } catch (e) { throw signal.aborted && e.name === "TimeoutError" ? new Timeout(provider, what, ms) : e; }
+    answered();
+    const body = await read(resp);
+    how = resp.status;
+    return { resp, body };
+  } catch (e) {
+    const gaveUp = !!early?.signal.aborted, out = gaveUp || (whole.aborted && e.name === "TimeoutError");
+    if (out) how = "no answer";
+    throw out ? Object.assign(new Timeout(provider, what, gaveUp ? first : ms), { early: gaveUp }) : e;
+  } finally { answered(); activity.note(what, Date.now() - t0, how); }
 };
 
 // Every folder with a string id, a name and a types list, whatever shape the provider sent.

@@ -135,7 +135,12 @@ const manifest = { name: "Baltazar Mail for Gmail™", version: "0.18.0" };
 const flows = [];
 const CID = "123456789012-abc123def456ghi789.apps.googleusercontent.com";   // the user's own client
 let silentOk = false, silentDown = "", silentRefusal = "", tokens = 0;
+let silentGate = null;     // what a silent flow waits for before it answers: a promise a test opens, or one that never settles
 let pressed = null;        // { reject: the browser's message } or { fragment: Google's answer } for the next interactive flow
+// The tests' clock: the real one, moved on by skew where a test has time pass.
+let skew = 0;
+const realNow = Date.now;
+Date.now = () => realNow() + skew;
 const area = o => ({ get: async k => ({ [k]: o[k] }), set: async x => Object.assign(o, x), remove: async k => { delete o[k]; } });
 globalThis.chrome = {
   storage: { session: area(store), local: area(local) },
@@ -145,6 +150,7 @@ globalThis.chrome = {
     launchWebAuthFlow: async ({ url, interactive }) => {
       flows.push({ interactive, url });
       const u = new URL(url);
+      if (!interactive && silentGate) await silentGate;
       if (interactive && pressed?.reject) throw new Error(pressed.reject);
       if (interactive && pressed?.fragment) return `https://extid.chromiumapp.org/#${pressed.fragment}&state=${u.searchParams.get("state")}`;
       if (!interactive && silentDown) throw new Error(silentDown);
@@ -161,9 +167,12 @@ const gm = createGmail({ mime: { listParts, extract } });
 const mock = gm.state;
 const fetched = [];        // { at, url } of every request, for the pacing of background work
 let before = null;         // (method, url, body, headers) -> an answer of its own, or null for the mock's
+let hang = null;           // (method, url) -> true for a request that gets no answer until its deadline ends it
 globalThis.fetch = async (url, init = {}) => {
   fetched.push({ at: Date.now(), url: String(url) });
   const method = init.method || "GET", headers = init.headers || {};
+  // (the deadline's own timer does not keep Node running, so a timer of this request's does)
+  if (hang?.(method, String(url))) return new Promise((_, no) => { const alive = setInterval(() => {}, 1000); init.signal.addEventListener("abort", () => { clearInterval(alive); no(init.signal.reason); }); });
   let body = init.body;
   if (body instanceof Blob) body = Buffer.from(await body.arrayBuffer()).toString("latin1");
   const r = before?.(method, String(url), body, headers) || gm.respond(method, String(url), body, headers);
@@ -241,31 +250,43 @@ const lastMod = () => modsOf().at(-1);
   const before = Object.fromEntries(r.folders.map(x => [x.id, x.highestModSeq]));
   mock.history.push({ id: "1001", labelsAdded: [{ message: { id: "p2", labelIds: ["Label_1", "STARRED"] }, labelIds: ["STARRED"] }] });
   mock.profile.historyId = "1001"; mock.nextHistory = 1002;
+  mock.batches.length = 0;
   const r2 = await api.folders();
   const after = Object.fromEntries(r2.folders.map(x => [x.id, x.highestModSeq]));
   ok(after.Label_1 !== before.Label_1 && after.ALL !== before.ALL && after.Label_2 === before.Label_2 && after.SENT === before.SENT, "history stamps the labels it names: " + JSON.stringify({ before, after }));
   ok(lastCall("GET", /^\/history$/).q.startHistoryId === "1000", "history is asked from the last id seen");
-  // a count change alone also stamps
+  ok(JSON.stringify(mock.batches) === '[["/labels/Label_1"]]', "only the labels the history names are counted: " + JSON.stringify(mock.batches));
+  // a mailbox in which nothing happened costs the labels and the history, and no count
+  mock.calls.length = 0; mock.batches.length = 0;
+  const idle = await api.folders();
+  ok(mock.calls.map(c => c.path).sort().join() === "/history,/labels" && mock.batches.length === 0 && JSON.stringify(idle.folders) === JSON.stringify(r2.folders), "an idle mailbox is two requests, and the folders stay as they were: " + mock.calls.map(c => c.path).join());
+  // a count that changed with no record of it is seen when every label is next counted, five minutes on
   mock.addMessage({ id: "s9", labels: ["SENT"], subject: "Subject s-9", from: "Me <me@gmail.com>" });
   const r3 = await api.folders();
-  ok(r3.folders.find(x => x.id === "SENT").highestModSeq !== after.SENT, "a changed count stamps the folder");
+  skew += 5 * 60e3;
+  mock.batches.length = 0;
+  const r3b = await api.folders();
+  ok(r3.folders.find(x => x.id === "SENT").highestModSeq === after.SENT && r3b.folders.find(x => x.id === "SENT").highestModSeq !== after.SENT && mock.batches.length === 1 && mock.batches[0].length === 10,
+    "a changed count stamps the folder once every label is counted again: " + JSON.stringify(mock.batches.map(b => b.length)));
   // a history Gmail no longer has stamps everything once
   mock.historyGone = true; mock.profile.historyId = "2000"; mock.nextHistory = 2001;
   const r4 = await api.folders();
   ok(r4.folders.every(x => /^2000:all/.test(String(x.highestModSeq))), "expired history stamps every folder: " + r4.folders[0].highestModSeq);
   mock.historyGone = false;
-  // a label whose counts Gmail refuses inside the batch keeps the counts it had, unstamped; one
-  // refused once is asked again
+  // a label whose counts Gmail refuses inside the batch keeps the counts it had, unstamped, and is
+  // asked for again the next time, though nothing names it then; one refused once is asked again
   const r5 = await api.folders();
+  skew += 5 * 60e3;
   mock.failItems = { status: 503, times: 99, match: /\/labels\/INBOX/ };
   const r6 = await api.folders();
   mock.failItems = { status: 429, times: 1, match: /\/labels\/INBOX/ };
+  mock.batches.length = 0;
   const r7 = await api.folders();
   const left = mock.failItems.times;
   mock.failItems = null;
   const [i5, i6, i7] = [r5, r6, r7].map(x => x.folders.find(f => f.id === "INBOX"));
   ok(i6.unread === i5.unread && i6.total === i5.total && i6.highestModSeq === i5.highestModSeq, "failed counts keep the last ones: " + JSON.stringify([i5, i6]));
-  ok(left === 0 && i7.unread === i5.unread && i7.total === i5.total, "a refused item is asked again: " + JSON.stringify(i7));
+  ok(left === 0 && i7.unread === i5.unread && i7.total === i5.total && mock.batches.every(b => b.join() === "/labels/INBOX"), "a refused item is asked again, and counts that did not come the next time: " + JSON.stringify([i7, mock.batches]));
 }
 // lists: rows in the client's shape, paged by offset over Gmail's tokens
 {
@@ -660,6 +681,111 @@ const lastMod = () => modsOf().at(-1);
   const ended = await api.setup.view();
   ok(ended.kind === "ended" && /me@gmail\.com/.test(ended.text), "a sign-in that ended names its account: " + JSON.stringify([ended.kind, ended.text]));
 }
+// Renewal: in its last ten minutes the token is renewed beside the requests, and none of them
+// waits; a request waits only for a token that has all but run out, and the client is told; a
+// silent flow that never answers is given up.
+{
+  const soon = () => new Promise(r => setTimeout(r, 20));
+  const leave = ms => { skew += store.gmToken.expires - Date.now() - ms; };      // the token has ms left
+  const said = [], unwatch = api.activity.watch(() => { const w = api.activity.waiting(); if (w) said.push(w.text); });
+  silentOk = true;
+  await api.bootstrap();
+  const old = store.gmToken.access_token;
+  said.length = 0;
+  leave(9 * 60e3);
+  let open;
+  silentGate = new Promise(r => { open = r; });
+  const n = flows.length;
+  mock.calls.length = 0;
+  const t0 = realNow(), r = await outcome(api.folders()), took = realNow() - t0;
+  ok(r.value?.folders.length > 0 && took < 1000 && flows.length === n + 1 && !flows.at(-1).interactive && store.gmToken.access_token === old && mock.calls.every(c => c.auth === `Bearer ${old}`) && !said.includes("renewing the Google sign-in"),
+    "a token in its last ten minutes is renewed beside the request, which does not wait: " + JSON.stringify({ e: r.e?.message, took, flows: flows.length - n, said }));
+  open(); silentGate = null;
+  for (let i = 0; i < 100 && store.gmToken.access_token === old; i++) await soon();
+  mock.calls.length = 0;
+  await api.folders();
+  const fresh = store.gmToken.access_token;
+  ok(fresh !== old && flows.length === n + 1 && mock.calls.length > 0 && mock.calls.every(c => c.auth === `Bearer ${fresh}`), "the renewed token takes its place, with no second flow: " + JSON.stringify({ fresh, flows: flows.length - n }));
+  // a renewal ahead of time that fails says nothing, changes nothing, and is tried again a minute on
+  leave(9 * 60e3);
+  silentDown = "Authorization page could not be loaded.";
+  const n2 = flows.length;
+  const a1 = await outcome(api.folders());
+  await soon();
+  const a2 = await outcome(api.folders());
+  const tried = flows.length - n2;
+  skew += 61e3;
+  const a3 = await outcome(api.folders());
+  await soon();
+  silentDown = "";
+  ok(a1.value && a2.value && a3.value && tried === 1 && flows.length === n2 + 2 && store.gmToken.access_token === fresh, "a failed renewal ahead of time is silent, and tried again after a minute: " + JSON.stringify({ e: (a1.e || a2.e || a3.e)?.message, tried, flows: flows.length - n2 }));
+  // under a minute left: the token is not used, the request waits for the renewal, and says so
+  leave(30e3);
+  silentGate = new Promise(r => { open = r; });
+  const waited = outcome(api.folders());
+  await soon();
+  const w = api.activity.waiting();
+  open(); silentGate = null;
+  const rw = await waited;
+  ok(w?.text === "renewing the Google sign-in" && rw.value?.folders.length > 0 && store.gmToken.access_token !== fresh && !api.activity.waiting(), "a request waits for the renewal of a token that has run out, and the wait is told: " + JSON.stringify({ w, e: rw.e?.message }));
+  // a silent flow that never answers
+  const whole = api.TIMEOUTS.renew;
+  api.TIMEOUTS.renew = 150;
+  silentGate = new Promise(() => {});
+  mock.fail = { status: 401, times: 1 };
+  const th = realNow(), rh = await outcome(api.folders()), hung = realNow() - th;
+  silentGate = null; api.TIMEOUTS.renew = whole;
+  ok(rh.e && !(rh.e instanceof api.NotSignedIn) && /could not be reached \(no answer within/.test(rh.e.message) && hung < 3000 && local.gmAccount === "me@gmail.com", "a silent flow with no answer is given up as a renewal that never reached Google: " + JSON.stringify({ name: rh.e?.name, message: rh.e?.message, hung }));
+  const rh2 = await outcome(api.folders());
+  ok(rh2.value?.folders.length > 0 && store.gmToken?.access_token, "and the next call renews: " + (rh2.e?.message || store.gmToken?.access_token));
+  unwatch();
+}
+// What a request waits for is told and kept for the report; a read, or a change of labels, with no
+// answer is asked a second time, and a send never is.
+{
+  const windowStart = Math.floor(Date.now() / 1000) - 58;
+  mock.fail = { status: 403, times: 1, body: { error: { code: 403, errors: [{ reason: "rateLimitExceeded" }], status: "PERMISSION_DENIED", message: "Quota exceeded", details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RATE_LIMIT_EXCEEDED", metadata: { quota_limit_value: "6000", window_start_time: String(windowStart) } }] } } };
+  const seen = [], unwatch = api.activity.watch(() => { const w = api.activity.waiting(); if (w) seen.push({ ...w }); });
+  const rq = await outcome(api.list("INBOX", 3, 0));
+  unwatch();
+  const limit = seen.find(x => x.text === "Gmail's request limit is reached");
+  ok(rq.value?.messages.length === 3 && limit && Math.abs(limit.until - (windowStart + 60) * 1000) < 1500 && !api.activity.waiting() && /waited +Gmail's request limit is reached/.test(api.activity.report()),
+    "a call held for Gmail's minute is a wait with its end, kept for the report: " + JSON.stringify({ e: rq.e?.message, seen }));
+  const first = api.TIMEOUTS.first, slow = api.TIMEOUTS.slow, batchMs = api.TIMEOUTS.batch, perMB = api.TIMEOUTS.perMB;
+  const once = re => { let n = 0; hang = (method, url) => re.test(url) && n++ === 0; };
+  const asked = (from, re) => fetched.slice(from).filter(x => re.test(x.url)).length;
+  // a list whose first request gets no answer
+  api.TIMEOUTS.first = 300; api.TIMEOUTS.slow = 50;
+  once(/\/messages\?/);
+  let from = fetched.length;
+  const listing = outcome(api.list("INBOX", 3, 0));
+  await new Promise(r => setTimeout(r, 150));
+  const late = api.activity.waiting();
+  const rl = await listing;
+  ok(rl.value?.messages.length === 3 && asked(from, /\/messages\?/) === 2 && late?.text === "no answer from Gmail yet" && !late.until && !api.activity.waiting(), "a read with no answer is told as late, given up early and asked again: " + JSON.stringify({ e: rl.e?.message, asked: asked(from, /\/messages\?/), late }));
+  // a star, which goes in a batch of label changes
+  api.TIMEOUTS.slow = slow;
+  const starred = mock.messages.get("m1").labelIds.includes("STARRED");
+  once(/\/batch\//);
+  from = fetched.length;
+  const rs = await outcome(api.setStarred(["m1"], !starred));
+  hang = null;
+  ok(rs.value?.ok.join() === "m1" && asked(from, /\/batch\//) === 2 && mock.messages.get("m1").labelIds.includes("STARRED") === !starred, "a change of labels with no answer is asked again: " + JSON.stringify({ e: rs.e?.message, asked: asked(from, /\/batch\//) }));
+  await api.setStarred(["m1"], starred);
+  // a send has the one deadline, and one request
+  api.TIMEOUTS.batch = 300; api.TIMEOUTS.perMB = 0;
+  once(/\/upload\//);
+  from = fetched.length;
+  const sent = await outcome(api.send({ csid: "c-hang", from: { name: "Me", email: "me@gmail.com" }, to: [{ name: "", email: "ann@x.com" }], cc: [], bcc: [], subject: "No answer", html: "<p>hi</p>", files: [], refs: [], inline: [] }));
+  hang = null;
+  Object.assign(api.TIMEOUTS, { first, slow, batch: batchMs, perMB });
+  ok(sent.e instanceof api.Timeout && /may still have been sent/.test(sent.e.message) && asked(from, /\/upload\//) === 1, "a send with no answer is not asked again: " + JSON.stringify({ e: sent.e?.message, asked: asked(from, /\/upload\//) }));
+  // the report: a line that sums it up, then a line a request, its ids left out
+  api.activity.note("GET /messages/1a212c40a0245247/attachments/ANGjdJ8w_x-y0", 7, 200);
+  const lines = api.activity.report().split("\n");
+  ok(/^\d+ requests, the slowest \d+ ms; \d+ waits, \d+ s in all, the longest \d+ ms$/.test(lines[0]) && /^\d\d:\d\d:\d\d +7 ms  200 +GET \/messages\/\*\/attachments\/\*$/.test(lines.at(-1)) && lines.some(l => /no answer +GET \/messages$/.test(l)) && lines.length <= 301,
+    "the report sums up, and names no id: " + JSON.stringify([lines[0], lines.at(-1), lines.length]));
+}
 // Paging to the exact end of a list, a search in All Mail, and a send that Gmail answers with a
 // server error after it was sent.
 {
@@ -715,6 +841,21 @@ const lastMod = () => modsOf().at(-1);
     "a list with one new row keeps its kept rows: " + top.messages.map(x => x.id).slice(0, 4).join() + ` (${top.messages.length})`);
   for (let i = 0; i < 5000; i++) mock.messages.delete(`k${i}`);
   mock.messages.delete("knew");
+  // A refusal that names a lower limit than the pace was set for lowers the pace to it: what went
+  // without a wait before then takes its minute. (The timers every request sets would move this
+  // clock on by themselves, so they are set to nothing.)
+  const { slow, first } = api.TIMEOUTS;
+  api.TIMEOUTS.slow = 0; api.TIMEOUTS.first = 0;
+  const any = [...mock.messages.keys()].find(id => !mock.messages.get(id).labelIds.includes("DRAFT"));
+  const spend = async () => { const t = now; for (let i = 0; i < 130; i++) await api.body(any); return now - t; };
+  now += 61e3;
+  const free = await spend();
+  mock.fail = { status: 429, times: 1, body: { error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded", errors: [{ reason: "rateLimitExceeded" }],
+    details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RATE_LIMIT_EXCEEDED", metadata: { quota_limit_value: "600", window_start_time: String(Math.floor(now / 1000) - 59) } }] } } };
+  await api.body(any);
+  const paced = await spend();
+  Object.assign(api.TIMEOUTS, { slow, first });
+  ok(free < 5000 && paced >= 55e3, "a lower limit named in a refusal lowers the pace: " + JSON.stringify({ free, paced }));
   globalThis.setTimeout = realTimeout;
 }
 console.log(fail ? `${fail} FAIL` : "PASS");

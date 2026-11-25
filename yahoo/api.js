@@ -6,9 +6,9 @@ import { listParts, extract } from "./mime.js";
 import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, failure, freshFailure, recent, RETRY_FAILED } from "./cache.js";
 import { clean, fieldAtom } from "./query.js";
-import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
+import { ApiError, TIMEOUTS, Timeout, deadlined, activity, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
 
-export { ApiError, TIMEOUTS, Timeout, normalizeFolders, isMessageId };
+export { ApiError, TIMEOUTS, Timeout, activity, normalizeFolders, isMessageId };
 
 const ORIGIN = "https://mail.yahoo.com";
 const BATCH = ORIGIN + "/c/ws/v3/batch";

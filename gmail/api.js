@@ -15,9 +15,9 @@ import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, rememberUntil } from "./cache.js";
 import { clean, fieldAtom } from "./query.js";
 import { esc } from "./text.js";
-import { ApiError, TIMEOUTS, Timeout, deadlined, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
+import { ApiError, TIMEOUTS, Timeout, deadlined, activity, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
 
-export { NotSignedIn, ApiError, TIMEOUTS, Timeout, normalizeFolders, isMessageId };
+export { NotSignedIn, ApiError, TIMEOUTS, Timeout, activity, normalizeFolders, isMessageId };
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
@@ -155,33 +155,53 @@ export const setup = {
 // Ends the sign-in at Google, then forgets everything learnt about the mailbox.
 export async function signOut() {
   await revoke();
-  historyId = null; labelList = []; draftsLoadedAt = 0;
-  for (const m of [modseq, lastCounts, knownCounts, labelName, labelsOf, rowCache, draftOf, knownDrafts, cursors, partRefs, bytesCache, thumbCache, inlineCache, originals]) m.clear();
+  historyId = null; labelList = []; draftsLoadedAt = 0; countedAt = 0; mailboxTotal = 0;
+  for (const m of [modseq, lastCounts, knownCounts, owed, labelName, labelsOf, rowCache, draftOf, knownDrafts, cursors, partRefs, bytesCache, thumbCache, inlineCache, originals]) m.clear();
 }
 
 // ---------- transport ----------
 // cap: the pace the request keeps; the user's own requests are counted while they run, so
 // background work can stand aside (see quota).
 // Every request has a deadline (TIMEOUTS), past which it fails as a Timeout.
+// twice: a request that may be asked twice (a read, or a change of labels, which made twice is
+// made once). The first time it is given up when no answer has begun within TIMEOUTS.first, so
+// one that went down a connection that has died (a computer back from sleep, a network that
+// changed) is asked again soon on a new one, where it would else wait the whole deadline out.
 const fetchTimed = deadlined("Gmail");
-async function timed(what, url, init, ms, read, cap = FOREGROUND) {
-  const mine = cap !== BACKGROUND;
+async function timed(what, url, init, ms, read, cap = FOREGROUND, twice = false) {
+  const mine = cap !== BACKGROUND, how = { quiet: !mine };
   if (mine) { foregroundBusy++; lastForeground = Date.now(); }
-  try { return await fetchTimed(what, url, init, ms, read); }
-  finally { if (mine) { foregroundBusy--; lastForeground = Date.now(); } }
+  try {
+    if (twice && ms > TIMEOUTS.first) {
+      try { return await fetchTimed(what, url, init, ms, read, { ...how, first: TIMEOUTS.first }); }
+      catch (e) { if (!(e instanceof Timeout && e.early)) throw e; }
+    }
+    return await fetchTimed(what, url, init, ms, read, how);
+  } finally { if (mine) { foregroundBusy--; lastForeground = Date.now(); } }
+}
+// What a call of the user's waits for, in the words the client shows (activity.wait); background
+// work waits unseen.
+const SAYS = { limit: "Gmail's request limit is reached", pace: "keeping under Gmail's request limit", again: "Gmail is busy, asking again" };
+async function pause(ms, says = null) {
+  if (!(ms > 0)) return;
+  const done = says ? activity.wait(says, Date.now() + ms) : null;
+  try { await sleep(ms); } finally { done?.(); }
 }
 
 // Quota: a Google Cloud project gives each user 6,000 units a minute by default (Gmail's documents
 // say 15,000; a project gets what its quota page shows), and Gmail also refuses a user's requests
 // that come too fast or too many at once. Every call is paced under a sliding minute: what the user
-// does, and all calls together, may use up to FOREGROUND. Background work (the address-book build)
-// keeps far below that and out of the way: at most BACKGROUND a minute of its own,
-// BACKGROUND_BATCH rows to a batch, one request every BACKGROUND_GAP, and none while a request of
-// the user's runs or for YIELD after one, so it never comes in bursts and nothing the user does
-// waits behind it.
-const FOREGROUND = 5500, BACKGROUND = 750;
+// does, and all calls together, may use up to FOREGROUND, or the same share of a lower limit once
+// a refusal of Gmail's has named one (allowance), so the same refusal does not come every minute.
+// Background work (the address-book build) keeps far below that and out of the way: at most
+// BACKGROUND a minute of its own, BACKGROUND_BATCH rows to a batch, one request every
+// BACKGROUND_GAP, and none while a request of the user's runs or for YIELD after one, so it never
+// comes in bursts and nothing the user does waits behind it. A call of the user's that has to
+// wait, for the pace or for the minute of a refusal to end, is a wait the client tells of.
+const FOREGROUND = 5500, BACKGROUND = 750, GRANTED = 6000;
 const BACKGROUND_BATCH = 10, BACKGROUND_GAP = 4000, YIELD = 2000;
 const spent = [];            // [time, units, background] of the calls of the last minute, oldest first
+let allowance = FOREGROUND;  // what all calls together may use a minute
 let blockedUntil = 0;        // Gmail refused one of the user's calls for quota: nothing goes before its minute is over
 let backgroundUntil = 0;     // Gmail refused background work for quota: only background work waits
 let foregroundBusy = 0, lastForeground = 0, lastBackground = 0;
@@ -190,7 +210,7 @@ async function quota(units, cap = FOREGROUND) {
   for (;;) {
     const now = Date.now();
     const until = background ? Math.max(blockedUntil, backgroundUntil, lastBackground + BACKGROUND_GAP, lastForeground + YIELD) : blockedUntil;
-    if (now < until) { await sleep(until - now); continue; }
+    if (now < until) { await pause(until - now, background ? null : SAYS.limit); continue; }
     if (background && foregroundBusy) { await sleep(250); continue; }
     while (spent.length && now - spent[0][0] >= 60000) spent.shift();
     // how long until enough of this spending is a minute old for the call to fit under limit
@@ -200,16 +220,20 @@ async function quota(units, cap = FOREGROUND) {
       for (const [t, u] of list) { at = t; over -= u; if (over <= 0) break; }
       return at + 60000 - now + 50;
     };
-    const ms = Math.max(wait(spent, FOREGROUND), background ? wait(spent.filter(s => s[2]), BACKGROUND) : 0);
+    const ms = Math.max(wait(spent, allowance), background ? wait(spent.filter(s => s[2]), Math.min(BACKGROUND, allowance)) : 0);
     if (!ms) { spent.push([now, units, background]); if (background) lastBackground = now; return; }
-    await sleep(ms);
+    await pause(ms, background ? null : SAYS.pace);
   }
 }
 // A refusal for quota names the minute it counted in (ErrorInfo window_start_time, in seconds):
-// how long until that minute is over, or 0 for a refusal that does not say.
+// how long until that minute is over, or 0 for a refusal that does not say. The limit it names
+// (quota_limit_value, units a minute), when lower than the one the pace was set for, lowers the
+// allowance to the same share of it.
 function quotaWait(doc) {
   const info = (doc?.error?.details || []).find(d => d?.metadata?.window_start_time);
   if (!info) return 0;
+  const limit = Number(info.metadata.quota_limit_value);
+  if (limit > 0 && limit < GRANTED) allowance = Math.min(allowance, Math.max(1, Math.floor(limit * FOREGROUND / GRANTED)));
   return Math.min(61000, Math.max(1000, (Number(info.metadata.window_start_time) + 60) * 1000 - Date.now() + 500));
 }
 // The pause before asking again after a refusal. A quota refusal of background work holds
@@ -242,7 +266,10 @@ function addQuery(url, query) {
 async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
   // once: a request that may have taken effect though it failed (a send) is asked again only when
   // Gmail refused it before doing anything (a rate limit), never after a server error
-  const { query = null, json = null, body = null, type = null, base = API, timeout = TIMEOUTS.batch, units = 1, cap = FOREGROUND, once = false } = opts;
+  // twice: asked again when no answer begins (see timed): a read, unless it has a deadline longer
+  // than a batch's (an attachment's bytes), or a change the caller says is safe to repeat
+  const { query = null, json = null, body = null, type = null, base = API, timeout = TIMEOUTS.batch, units = 1, cap = FOREGROUND, once = false, twice = method === "GET" && timeout <= TIMEOUTS.batch } = opts;
+  const background = cap === BACKGROUND;
   await quota(units, cap);
   const t = await getToken();
   const url = new URL(base + path);
@@ -252,13 +279,13 @@ async function call(method, path, opts = {}, tries = { auth: true, again: 3 }) {
   if (json != null) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(json); }
   else if (body != null) { headers["Content-Type"] = type; payload = body; }
   const what = `${method} ${path}`;
-  const { resp, body: text } = await timed(what, url, { method, headers, body: payload }, timeout, r => r.text(), cap);
+  const { resp, body: text } = await timed(what, url, { method, headers, body: payload }, timeout, r => r.text(), cap, twice);
   if (resp.status === 401 && tries.auth) { await forget(); await getToken({ force: true }); return call(method, path, opts, { ...tries, auth: false }); }
   if (resp.status === 401) { await forget(); throw new NotSignedIn(); }
   let doc = null;
   if (text) { try { doc = JSON.parse(text); } catch { doc = null; } }
   if (retriable(resp.status, doc) && tries.again > 0 && !(once && resp.status >= 500)) {
-    await sleep(pauseFor(resp, doc, tries.again, cap === BACKGROUND));
+    await pause(pauseFor(resp, doc, tries.again, background), background ? null : SAYS.again);
     return call(method, path, opts, { ...tries, again: tries.again - 1 });
   }
   // a token without the mail permission (left unticked on Google's consent page, or withdrawn since)
@@ -286,21 +313,27 @@ async function batch(reqs, units = 5, cap = FOREGROUND) {
     }
     todo = todo.filter(k => out[k].status === 0 || retriable(out[k].status, out[k].json));
     if (!todo.length || left === 0) return out;
-    await sleep(Math.max(...todo.map(k => pauseFor(null, out[k].json, left, background))));
+    await pause(Math.max(...todo.map(k => pauseFor(null, out[k].json, left, background))), background ? null : SAYS.again);
   }
 }
+// A change of a message's labels made twice is made once, so a batch of reads and such changes
+// may be asked twice (see timed).
+const repeats = r => r.method === "GET" || (r.method === "POST" && /^\/messages\/[^/]+\/modify$/.test(r.path));
 async function batchOnce(reqs, units, cap, tries = { auth: true, again: 3 }) {
   if (!reqs.length) return [];
+  const background = cap === BACKGROUND;
   await quota(units * reqs.length, cap);
   const t = await getToken();
   const boundary = `batch_${crypto.randomUUID()}`;
   const body = encodeBatch(reqs, boundary);
-  const { resp, body: text } = await timed("batch", BATCH_URL, { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": `multipart/mixed; boundary=${boundary}` }, body }, TIMEOUTS.batch, r => r.text(), cap);
+  // what the record of requests says of it: how many, and the first of them
+  const what = `batch of ${reqs.length}: ${reqs[0].method} ${reqs[0].path}`;
+  const { resp, body: text } = await timed(what, BATCH_URL, { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": `multipart/mixed; boundary=${boundary}` }, body }, TIMEOUTS.batch, r => r.text(), cap, reqs.every(repeats));
   if (resp.status === 401 && tries.auth) { await forget(); await getToken({ force: true }); return batchOnce(reqs, units, cap, { ...tries, auth: false }); }
   if (resp.status === 401) { await forget(); throw new NotSignedIn(); }
   if (!resp.ok && tries.again > 0) {
     let doc = null; try { doc = JSON.parse(text); } catch { doc = null; }
-    if (retriable(resp.status, doc)) { await sleep(pauseFor(resp, doc, tries.again, cap === BACKGROUND)); return batchOnce(reqs, units, cap, { ...tries, again: tries.again - 1 }); }
+    if (retriable(resp.status, doc)) { await pause(pauseFor(resp, doc, tries.again, background), background ? null : SAYS.again); return batchOnce(reqs, units, cap, { ...tries, again: tries.again - 1 }); }
   }
   if (!resp.ok) throw new ApiError(`batch: HTTP ${resp.status} ${text.slice(0, 160)}`, { status: resp.status, error: text.slice(0, 300) });
   const m = (resp.headers.get("content-type") || "").match(/boundary="?([^";]+)"?/);
@@ -345,40 +378,53 @@ let historyId = null;
 const modseq = new Map();
 const lastCounts = new Map();       // label id -> "total/unread" last reported, to notice a change
 const knownCounts = new Map();      // label id -> the last counts Gmail answered
-async function noteHistory(ids, current) {
-  const stampAll = h => { for (const id of ids) modseq.set(id, `${h}:all`); };
-  if (!historyId) { historyId = current; stampAll(historyId); return; }
+let countedAt = 0;                  // when every label's counts were last read
+let mailboxTotal = 0;               // the profile's count of all messages, as last read
+const owed = new Set();             // the labels whose counts were asked for and did not come
+const COUNT_EVERY = 5 * 60e3;
+// What the history holds since the last look: { dirty, latest } with the labels its records name
+// (All Mail with any record), and unnamed when a record tells of a change without the labels of
+// its message, so any label may have changed; { reset } when there is no last look, with gone
+// when that is because Gmail no longer holds the history.
+async function changes() {
+  if (!historyId) return { reset: true };
   try {
     const dirty = new Set();
-    let token = null, latest = historyId;
+    let token = null, latest = historyId, unnamed = false;
     do {
       const r = await call("GET", "/history", { query: { startHistoryId: historyId, maxResults: PAGE_MAX, pageToken: token }, units: 2 });
       for (const h of r.history || []) {
+        let told = false;
         for (const k of ["messagesAdded", "messagesDeleted", "labelsAdded", "labelsRemoved"]) for (const x of h[k] || []) {
+          told = true;
+          if (!Array.isArray(x.message?.labelIds)) unnamed = true;
           for (const l of x.message?.labelIds || []) dirty.add(l);
           for (const l of x.labelIds || []) dirty.add(l);
           if (x.message?.id && x.message.labelIds) labelsOf.set(x.message.id, x.message.labelIds);
           if (k === "messagesDeleted" && x.message?.id) { rowCache.delete(x.message.id); labelsOf.delete(x.message.id); }
         }
+        if (!told) unnamed = true;
         dirty.add(ALL);
       }
       if (r.historyId) latest = r.historyId;
       token = r.nextPageToken || null;
     } while (token);
-    for (const l of dirty) modseq.set(l, latest);
-    historyId = latest;
+    return { dirty, latest, unnamed };
   } catch (e) {
     if (!isGone(e)) throw e;
-    // what changed meanwhile is not known, so no kept labels or rows are trusted
-    historyId = current;
-    stampAll(historyId);
-    rowCache.clear(); labelsOf.clear();
+    return { reset: true, gone: true };
   }
 }
 
+// The folder list. The labels and the history are asked together, and then the counts of the
+// labels the history names, with the profile when anything changed; a mailbox in which nothing
+// happened costs those two requests and no count. Every label is counted the first time, after a
+// history Gmail no longer holds or a change that does not name its labels, and every COUNT_EVERY,
+// which catches a count that changed with no record of it; a label not counted yet is counted
+// when it first shows, and one whose counts did not come is asked again the next time.
 export async function folders() {
   const t0 = performance.now();
-  const [r, p] = await Promise.all([call("GET", "/labels"), profile()]);
+  const [r, seen] = await Promise.all([call("GET", "/labels"), changes()]);
   labelList = r.labels || [];
   labelName.clear();
   const shown = [];
@@ -387,13 +433,28 @@ export async function folders() {
     labelName.set(l.id, l.name);
     shown.push(l);
   }
-  const counts = await batch(shown.map(l => ({ method: "GET", path: `/labels/${l.id}`, query: { fields: "id,messagesTotal,messagesUnread" } })), 1);
-  const ids = [...shown.map(l => l.id), ALL];
-  await noteHistory(ids, p.historyId);
-  const list = shown.map((l, i) => {
-    // a label whose counts did not come keeps the ones it had, which is no change
-    const got = counts[i].status === 200 && counts[i].json;
-    if (got) knownCounts.set(l.id, got);
+  const whole = !!seen.reset || seen.unnamed || Date.now() - countedAt >= COUNT_EVERY;
+  const asked = whole ? shown : shown.filter(l => seen.dirty.has(l.id) || owed.has(l.id) || !knownCounts.has(l.id));
+  const [counts, p] = await Promise.all([
+    batch(asked.map(l => ({ method: "GET", path: `/labels/${l.id}`, query: { fields: "id,messagesTotal,messagesUnread" } })), 1),
+    whole || seen.dirty.size ? profile() : null,
+  ]);
+  if (whole) countedAt = Date.now();
+  if (p) mailboxTotal = p.messagesTotal || 0;
+  if (seen.reset) {
+    historyId = p.historyId;
+    for (const id of [...shown.map(l => l.id), ALL]) modseq.set(id, `${historyId}:all`);
+    // what changed meanwhile is not known, so no kept labels or rows are trusted
+    if (seen.gone) { rowCache.clear(); labelsOf.clear(); }
+  } else {
+    for (const l of seen.dirty) modseq.set(l, seen.latest);
+    historyId = seen.latest;
+  }
+  const answer = new Map(asked.map((l, i) => [l.id, counts[i]]));
+  const list = shown.map(l => {
+    // a label whose counts did not come, or were not asked for, keeps the ones it had, which is no change
+    const a = answer.get(l.id), got = a?.status === 200 && a.json;
+    if (got) { knownCounts.set(l.id, got); owed.delete(l.id); } else if (a) owed.add(l.id);
     const c = knownCounts.get(l.id) || {};
     const key = `${c.messagesTotal}/${c.messagesUnread}`;
     if (got && lastCounts.get(l.id) !== key) { lastCounts.set(l.id, key); modseq.set(l.id, `${modseq.get(l.id) || 0}+${key}`); }
@@ -401,7 +462,7 @@ export async function folders() {
     return { id: l.id, name: labelName.get(l.id), types, unread: c.messagesUnread || 0, total: c.messagesTotal || 0, highestModSeq: modseq.get(l.id) || 0, acctId: "1" };
   });
   labelName.set(ALL, "All Mail");
-  list.push({ id: ALL, name: "All Mail", types: ["ARCHIVE"], unread: 0, total: p.messagesTotal || 0, highestModSeq: modseq.get(ALL) || 0, acctId: "1" });
+  list.push({ id: ALL, name: "All Mail", types: ["ARCHIVE"], unread: 0, total: mailboxTotal, highestModSeq: modseq.get(ALL) || 0, acctId: "1" });
   return { folders: normalizeFolders(list), ms: Math.round(performance.now() - t0) };
 }
 
@@ -477,7 +538,7 @@ export async function emptyFolder(id) {
 export async function markFolderRead(id) {
   const t0 = performance.now();
   const params = id === ALL ? { q: "is:unread" } : { labelIds: [id, "UNREAD"], ...(isSpamOrTrash(id) ? { includeSpamTrash: true } : {}) };
-  const n = await eachPage(params, ids => call("POST", "/messages/batchModify", { json: { ids, removeLabelIds: ["UNREAD"] }, units: 50 }));
+  const n = await eachPage(params, ids => call("POST", "/messages/batchModify", { json: { ids, removeLabelIds: ["UNREAD"] }, units: 50, twice: true }));
   return { result: null, changed: n, ms: Math.round(performance.now() - t0) };
 }
 
@@ -823,7 +884,7 @@ async function modify(ids, add, remove) {
   const ok = [];
   for (let i = 0; i < ids.length; i += 1000) {
     const part = ids.slice(i, i + 1000);
-    try { await call("POST", "/messages/batchModify", { json: { ids: part, addLabelIds: add, removeLabelIds: remove }, units: 50 }); }
+    try { await call("POST", "/messages/batchModify", { json: { ids: part, addLabelIds: add, removeLabelIds: remove }, units: 50, twice: true }); }
     catch (e) { if (!ok.length) throw e; return { ms: Math.round(performance.now() - t0), ok, failed: ids.slice(i) }; }
     for (const id of part) { const l = labelsOf.get(id); if (l) labelsOf.set(id, [...new Set([...l.filter(x => !remove.includes(x)), ...add])]); }
     ok.push(...part);

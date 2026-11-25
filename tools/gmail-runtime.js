@@ -429,6 +429,30 @@ const { FX } = require("./gmail-mock.js");
   await page.waitForTimeout(500);
   results.newMail = { title: await page.title(), unread: [...gmail.messages.values()].filter(m => m.labelIds.includes("INBOX") && m.labelIds.includes("UNREAD")).length, dotted: dotted.slice(0, 22), listed: await page.locator("#rows .row .sb", { hasText: "Fresh mail" }).count(), history: gmail.calls.filter(c => c.path === "/history").length > 0 };
 
+  // Gmail refuses a request for the quota of its minute: the status bar says what is waited for
+  // and how long, an action tried meanwhile says it too, and a click on the time at the right
+  // copies the session's requests and waits, with nothing of the mail in them
+  const statusSays = () => page.locator("#st-msg").textContent();
+  const starDone = () => page.waitForFunction(() => /^(un)?starred 1 message/.test(document.getElementById("st-msg").textContent), null, { timeout: 15000 }).catch(() => {});
+  await page.locator("#rows .row", { hasText: "Fresh mail" }).click();
+  await page.waitForTimeout(3000);                 // the message is marked read, and its action is over
+  await page.evaluate(() => { window.copied = []; navigator.clipboard.writeText = async t => { window.copied.push(t); }; });
+  gmail.fail = { status: 429, times: 1, body: { error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded", errors: [{ reason: "rateLimitExceeded" }],
+    details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RATE_LIMIT_EXCEEDED", metadata: { quota_limit_value: "6000", window_start_time: String(Math.floor(Date.now() / 1000) - 54) } }] } } };
+  await page.locator("#list").focus(); await page.keyboard.press("s");
+  await page.waitForSelector("#st-wait:not(.hidden)", { timeout: 5000 }).catch(() => {});
+  results.waits = { said: await page.locator("#st-wait").textContent() };
+  await page.keyboard.press("u");
+  results.waits.busy = await statusSays();
+  await starDone();
+  await page.waitForFunction(() => document.getElementById("st-wait").classList.contains("hidden"), null, { timeout: 5000 }).catch(() => {});
+  Object.assign(results.waits, { done: await statusSays(), hidden: await page.locator("#st-wait").isHidden(), unread: gmail.messages.get("m99").labelIds.includes("UNREAD") });
+  await page.locator("#st-lat").click();
+  await page.waitForFunction(() => window.copied.length > 0, null, { timeout: 3000 }).catch(() => {});
+  Object.assign(results.waits, { copied: (await page.evaluate(() => window.copied))[0] || "", copiedSaid: await statusSays() });
+  await page.locator("#list").focus(); await page.keyboard.press("s");
+  await starDone();
+
   // A sender's style sheet loses the rules that read the message (an attribute selector, :has()),
   // also inside a media query, and a sheet without any stays as written; a string that would end
   // the style element once the browser has written the sheet back ends nothing. The remote
@@ -612,6 +636,11 @@ const { FX } = require("./gmail-mock.js");
   expect(results.ab.learned > 0 && results.ab.listed > 0 && !results.ab.note && results.ab.section === 0 && results.ab.signOut && /^Baltazar Mail for Gmail™ \d+\.\d+\.\d+$/.test(results.ab.version), "the book once built is listed by Contacts without the notice, and Settings has the sign-out button: " + JSON.stringify(results.ab));
   const nm = results.newMail;
   expect(nm.title === `(${nm.unread}) Baltazar Mail for Gmail™` && nm.unread >= 1 && nm.dotted === "data:image/png;base64," && nm.listed === 1 && nm.history, "new mail through history: " + JSON.stringify(nm));
+  const wt = results.waits;
+  expect(/^Gmail's request limit is reached, \d+ s more$/.test(wt.said) && /^busy: Gmail's request limit is reached, \d+ s more$/.test(wt.busy) && /^(un)?starred 1 message/.test(wt.done) && wt.hidden && !wt.unread,
+    "the status bar says what Gmail is waited for, an action tried meanwhile says it too and is not done, and the wait ends: " + JSON.stringify({ ...wt, copied: undefined }));
+  expect(/^Baltazar Mail for Gmail™ \d+\.\d+\.\d+\n[^\n]+\nRequests and waits up to \d\d:\d\d:\d\d: \d+ requests, the slowest \d+ ms; \d+ waits, /.test(wt.copied) && /waited +Gmail's request limit is reached/.test(wt.copied) && !/@|Subject|Fresh/.test(wt.copied) && /^copied this session's requests and waits/.test(wt.copiedSaid),
+    "a click on the time copies the session's requests and waits, with nothing of the mail in them: " + JSON.stringify([wt.copiedSaid, wt.copied.slice(0, 400)]));
   const cs = results.css;
   expect(cs.sheets.length === 2 && !/\[|:has\(/.test(cs.sheets[0]) && /\.keep\b/.test(cs.sheets[0]) && /@media screen \{\s*\.kept-in-media/.test(cs.sheets[0]) && !/<\/style/i.test(cs.sheets[0]) && cs.broke === 0 && cs.kept === "rgb(1, 2, 3)" &&
     cs.sheets[1] === ".plain{color:#123456}/* as written */", "a sender's style sheet keeps only rules that do not read the message: " + JSON.stringify([cs.sheets, cs.broke, cs.kept]));

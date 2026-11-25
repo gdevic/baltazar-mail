@@ -312,7 +312,11 @@ input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px);
 /* the texts give way to the buttons, and the send countdown keeps the middle of what is left */
 #st-msg, #st-undo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #st-undo { flex: 1; text-align: center; }
-#st-lat { flex: none; }
+/* what the mail service is waited for, which the status line beside it gives way to */
+#st-wait { flex: none; white-space: nowrap; color: var(--accent); }
+/* the last request's time; a click copies the session's requests */
+#st-lat { flex: none; cursor: pointer; }
+#st-lat:hover { color: var(--fg); }
 
 #signin { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; }
 #signin-fail { max-width: 560px; text-align: center; }

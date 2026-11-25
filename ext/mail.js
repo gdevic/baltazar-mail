@@ -112,6 +112,36 @@ const status = (msg, ms) => { saidAt = Date.now(); $("st-msg").textContent = msg
 // once what it last said has been there long enough to read, and does not count as said itself.
 const SAID_FOR = 4000;
 const statusQuietly = msg => { if (Date.now() - saidAt >= SAID_FOR) $("st-msg").textContent = msg; };
+// What the mail service is waited for. The adapter tells what holds its requests up (api.activity:
+// a sign-in being renewed, the service's limit on requests, an answer that is late), and the
+// status bar says it beside the status line for as long as it lasts, with the seconds left where
+// the end is known and the seconds passed where not. A wait too short to read (under WAIT_SAID,
+// with less than that left) is not said. waitNote(true) says any wait there is, for an action
+// that could not start because of one.
+const WAIT_SAID = 1000;
+function waitNote(any = false) {
+  const w = api.activity?.waiting(), now = Date.now();
+  if (!w || (!any && now - w.since < WAIT_SAID && w.until - now < WAIT_SAID)) return "";
+  return w.until ? `${w.text}, ${Math.max(1, Math.ceil((w.until - now) / 1000))} s more` : `${w.text} (${Math.round((now - w.since) / 1000)} s)`;
+}
+let waitTicker = 0;
+function showWait() {
+  const note = waitNote(), el = $("st-wait");
+  if (el.textContent !== note) el.textContent = note;
+  el.classList.toggle("hidden", !note);
+  if (api.activity?.waiting()) waitTicker ||= setInterval(showWait, 500);
+  else { clearInterval(waitTicker); waitTicker = 0; }
+}
+api.activity?.watch(showWait);
+// The time at the right of the status bar is the last request's. A click copies what the adapter
+// kept of this session's requests and waits (when, how long, how each ended, what it was, with no
+// message, address or subject in it), under the version and the browser, to tell what was slow.
+$("st-lat").onclick = async () => {
+  if (!api.activity) return;
+  const report = [`${APP} ${chrome.runtime.getManifest().version}`, navigator.userAgent, `Requests and waits up to ${new Date().toTimeString().slice(0, 8)}: ${api.activity.report()}`].join("\n");
+  try { await navigator.clipboard.writeText(report); status("copied this session's requests and waits, to paste into a report"); }
+  catch { status("could not copy to the clipboard"); }
+};
 const folderType = f => f ? (SYSTEM_ORDER.find(t => f.types?.includes(t)) || null) : null;
 // System folders of the primary account (the one holding the mailbox's own Inbox, folder 1 at
 // Yahoo); linked accounts bring an Inbox, Sent and so on of their own.
@@ -1707,12 +1737,13 @@ function bumpFolder(id, dTotal, dUnread) {
 }
 
 // ---------- serialisation ----------
-// All mutations, undo and redo run one at a time; repeats while busy are dropped, not queued.
+// All mutations, undo and redo run one at a time; repeats while busy are dropped, not queued, and
+// the status line says what the one that runs is waiting for, where the adapter tells (waitNote).
 // Each one makes list loads already in flight stale, so they cannot undo its changes; a folder's
 // first page among them is loaded again afterwards, or the folder would stay empty.
 let busy = false;
 async function run(fn) {
-  if (busy) { status("busy, try again in a moment"); return; }
+  if (busy) { const why = waitNote(true); status(why ? `busy: ${why}` : "busy, try again in a moment"); return; }
   const firstPage = state.loading;
   busy = true; ++state.listToken; updateToolbar();
   const refreshing = state.refreshing;       // a refresh in flight, which this makes stale

@@ -140,7 +140,7 @@
     <div id="c-suggest" class="hidden"></div>
   </section>
   <div id="notice" class="hidden" role="alert"><div id="notice-text"></div><button id="notice-copy" class="hidden" title="Copy the error, version and browser, for a bug report">Copy details</button><button id="notice-close" title="Dismiss" aria-label="Dismiss">×</button></div>
-  <footer id="status"><span id="st-msg"></span><span id="st-undo"></span><span id="st-acts"><button data-act="undo" title="Undo (z)" disabled>Undo</button><button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button><button id="st-hist" title="Undo history (y)" aria-label="Undo history" aria-haspopup="listbox" aria-controls="history" aria-expanded="false" disabled>▾</button></span><span id="st-lat"></span></footer>
+  <footer id="status"><span id="st-msg"></span><span id="st-wait" class="hidden"></span><span id="st-undo"></span><span id="st-acts"><button data-act="undo" title="Undo (z)" disabled>Undo</button><button data-act="redo" title="Redo (Shift+Z)" disabled>Redo</button><button id="st-hist" title="Undo history (y)" aria-label="Undo history" aria-haspopup="listbox" aria-controls="history" aria-expanded="false" disabled>▾</button></span><span id="st-lat" title="How long the last request took. Click to copy this session's requests and waits, for a report of what was slow"></span></footer>
 </div>
 <div id="signin" class="hidden">
   <h1 id="signin-title">Baltazar Mail</h1>
@@ -285,6 +285,7 @@
     <p>Right-click a folder and choose Show attachments to list every attachment of its mail in place of its messages; click an attachment to see its message, or its type badge to open the attachment as well, and press Esc to go back to the messages. Tick Subfolders to include the attachments of its subfolders; the folder keeps that choice on this computer.</p>
     <p>Right-click the attachments under a message, or a folder's attachments, to download them all in one ZIP file, or only the selected ones: Ctrl-click to select them, and in a folder's attachments also Shift-click, x or Ctrl+A. A ZIP file holds at most 100 files and 100 MB.</p>
     <p>Contacts lists everyone in your mail under People, Others and Hidden: select people to write to them, see their mail, or pin, hide, rename or delete them; right-click Contacts to export or import the list.</p>
+    <p>When your mail service makes the app wait, the status bar says what for and how long. If the app seems slow, click the time at the right end of the status bar: it copies a list of this session's requests, how long each took and what was waited for, to send with a report. The list holds no message, address or subject.</p>
   </div>
 </div>
 <script src="vendor/purify.min.js"></script>

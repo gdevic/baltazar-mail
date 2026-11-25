@@ -3,6 +3,14 @@
 // silently (prompt=none, which succeeds while the browser holds a Google session) and kept in
 // session storage, so a reload does not ask again. Only signIn() may open Google's window.
 //
+// No request waits for a renewal while the token it has still works. In its last RENEW_AHEAD the
+// token is renewed beside the requests, which go on using it, and the new one takes its place
+// when Google has answered; a renewal ahead of time that fails says nothing, and is tried again
+// after AHEAD_GAP, unless Google refused it. Requests wait for a renewal only once the token has
+// less than SPARE left, or after a 401, and the client is told that they do (activity.wait). The
+// browser's silent flow has no deadline of its own, so one that has not answered within
+// TIMEOUTS.renew is given up as a renewal that never reached Google.
+//
 // The flow goes through an OAuth client registered with Google: the user's own, whose Client ID
 // the sign-in page keeps in local storage until it is replaced, else the one the build carries in
 // the manifest's oauth2 block (a release carries none). Without either, no window opens.
@@ -24,12 +32,14 @@
 // made), the token is held in memory, and the next press of the button confirms it without
 // opening Google's window again.
 
+import { TIMEOUTS, activity } from "./adapter.js";
+
 const SCOPE = "https://mail.google.com/";
 const AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const REVOKE = "https://oauth2.googleapis.com/revoke";
 const PROFILE = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const KEY = "gmToken", ACCOUNT = "gmAccount", CLIENT = "gmClientId";
-const RENEW_AHEAD = 5 * 60e3, HELD_AHEAD = 60e3;
+const RENEW_AHEAD = 10 * 60e3, SPARE = 60e3, AHEAD_GAP = 60e3, HELD_AHEAD = 60e3;
 
 // why: the reason, when there is more to say than that nobody is signed in; code: what went
 // wrong, for the sign-in page; google: the error Google's answer named, if any; held: a token is
@@ -42,8 +52,15 @@ let token = null;       // { access_token, expires, email }, or { email } once t
 let held = null;        // { access_token, expires }: a token from Google whose account is not confirmed yet
 let pending = null, pendingInteractive = false;
 let epoch = 0;          // counts sign-outs: a flow begun before one does not sign back in
+let aheadAt = 0;        // when a renewal ahead of time last began
+let aheadRefused = "";  // the token Google refused to renew ahead of time, which is not tried again
 
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+// p, or a failure when it has not settled within ms.
+const answered = (p, ms) => new Promise((ok, no) => {
+  const t = setTimeout(() => no(new Error(`no answer within ${Math.round(ms / 1000)} s`)), ms);
+  p.then(v => { clearTimeout(t); ok(v); }, e => { clearTimeout(t); no(e); });
+});
 
 // The OAuth client a sign-in goes through: { id, own }, own when it is the user's, set up on the
 // sign-in page; id is "" when there is none.
@@ -88,8 +105,10 @@ async function flow(interactive, email) {
   if (!id) throw new NotSignedIn("no Google client is set up for this copy", "setup");
   const { url, state } = authUrl(id, interactive, email);
   let redirect;
-  try { redirect = await chrome.identity.launchWebAuthFlow({ url, interactive }); }
-  catch (e) {
+  try {
+    const asked = chrome.identity.launchWebAuthFlow({ url, interactive });
+    redirect = await (interactive ? asked : answered(asked, TIMEOUTS.renew));
+  } catch (e) {
     const why = String(e?.message || e);
     if (interactive) {
       // the browser's words for a window closed by the user, and for a page that would not load
@@ -134,9 +153,36 @@ export async function account() {
 }
 
 // The token to use now. interactive: ask the user (the sign-in button only). force: renew even
-// if the stored one has time left (after a 401). Callers that ask at the same time share one
-// flow, except that an interactive request waits for a silent one to settle, then runs its own.
+// if the stored one has time left (after a 401). The stored token is answered at once while it
+// works, and renewed beside the caller in its last RENEW_AHEAD; a caller that has to wait for a
+// silent renewal is a wait the client can tell of.
 export async function getToken({ interactive = false, force = false } = {}) {
+  if (!interactive && !force) {
+    const t = await usable();
+    if (t) { renewAhead(t); return t; }
+  }
+  const done = interactive ? null : activity.wait("renewing the Google sign-in");
+  try { return await renewed({ interactive, force }); } finally { done?.(); }
+}
+
+// The stored token, while it is the signed-in account's and has more than SPARE left.
+const works = (t, want) => !!want && !!t?.access_token && same(t.email, want) && t.expires - Date.now() > SPARE;
+async function usable() {
+  if (!token) token = (await chrome.storage.session.get(KEY))[KEY] || null;
+  return works(token, await account()) ? token : null;
+}
+// Renews a token in its last RENEW_AHEAD while the requests go on using it. A failure changes
+// nothing: the token is used until SPARE, and the renewal a request then waits for reports it.
+function renewAhead(t) {
+  if (t.expires - Date.now() > RENEW_AHEAD || pending || aheadRefused === t.access_token || Date.now() - aheadAt < AHEAD_GAP) return;
+  aheadAt = Date.now();
+  renewed({ force: true }).catch(e => { if (e instanceof NotSignedIn) aheadRefused = t.access_token; });
+}
+
+// A token from Google's flow, or the stored one when it works and none is forced. Callers that
+// ask at the same time share one flow, except that an interactive request waits for a silent one
+// to settle, then runs its own.
+async function renewed({ interactive = false, force = false } = {}) {
   if (pending && (pendingInteractive || !interactive)) return pending;
   if (pending) await pending.catch(() => {});
   const began = epoch;
@@ -146,7 +192,7 @@ export async function getToken({ interactive = false, force = false } = {}) {
     if (!interactive) {
       want = await account();
       if (!want) throw new NotSignedIn();
-      if (!force && token?.access_token && same(token.email, want) && token.expires - Date.now() > RENEW_AHEAD) return token;
+      if (!force && works(token, want)) return token;
     }
     const t = interactive && held?.expires - Date.now() > HELD_AHEAD ? held : await flow(interactive, want);
     const email = await confirmed(t, interactive);

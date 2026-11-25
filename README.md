@@ -21,6 +21,7 @@ Everything a mail client does, and:
 - **Undo for everything:** several levels of undo and redo for mailbox actions and Contacts, an undo history that takes back an older action alone, and undo-send.
 - **Tracking pictures removed** from every message, and **tracking removed from links** when you switch it on.
 - **A new-mail dot** on the tab and the toolbar button, handy for a pinned tab.
+- **Says what it is waiting for:** when your mail service is slow or limits requests, the status bar says why and for how long, and one click copies a list of request times for a report.
 - **Keyboard shortcuts** throughout; press `?` in the app.
 
 [docs/features.md](docs/features.md) describes every feature, and what differs in the Gmail edition.
