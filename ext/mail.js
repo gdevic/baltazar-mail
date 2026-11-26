@@ -107,9 +107,10 @@ const state = {
 
 // ---------- helpers ----------
 let saidAt = 0;                  // when the status line last said something (ms)
-const status = (msg, ms) => { saidAt = Date.now(); $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
+const status = (msg, ms) => { if (msg) saidAt = Date.now(); $("st-msg").textContent = msg; if (ms != null) $("st-lat").textContent = `${ms} ms`; };
 // A running count (the Contacts build, a step a second for minutes) takes the status line only
 // once what it last said has been there long enough to read, and does not count as said itself.
+// A cleared line has nothing to read, so the count takes it at once.
 const SAID_FOR = 4000;
 const statusQuietly = msg => { if (Date.now() - saidAt >= SAID_FOR) $("st-msg").textContent = msg; };
 // What the mail service is waited for. The adapter tells what holds its requests up (api.activity:
@@ -1457,7 +1458,8 @@ async function renderMessage(m, r, how = "user") {
   viewer.renderStrip(r.message, r.attachments, id => state.openId === id);
   if (auto) { const inlined = await inlineImages(r.html, r); if (state.openId !== m.id) return; r.html = inlined; }
   showBody(auto);
-  status(plainSubject(h.subject).slice(0, 60), r.ms);
+  // the reader shows what is open; the status line drops what loading it said
+  status("", r.ms);
   clearTimeout(markReadTimer);
   if (settings.markReadSec != null && !m.flags?.read && !(how === "auto" && keptUnread.has(m.id))) {
     // In a hidden tab nobody has read it yet: the timer starts again once the tab is seen.
