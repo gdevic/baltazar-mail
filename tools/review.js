@@ -96,6 +96,18 @@ scenario("printing from Spam loads no remote image", async (h, expect) => {
   await p.close();
 }, { allow: /Content Security Policy|probe-|ERR_NAME_NOT_RESOLVED|status of 404/ });
 
+// The print dialog blocks the mail tab too, so the mail tab says why for as long as the print tab is open.
+scenario("the mail tab says it is paused while the print tab is open", async (h, expect) => {
+  await h.page.locator("#rows .row").nth(1).click(); await h.page.waitForTimeout(600);
+  const p = await printOpen(h);
+  const up = await h.page.locator("#printbox").isVisible();
+  await h.page.keyboard.press("?"); await h.page.keyboard.press("Escape"); await h.page.waitForTimeout(200);
+  const held = await h.page.locator("#printbox").isVisible(), help = await h.page.locator("#help").isVisible();
+  await p.close();
+  const gone = await h.page.waitForSelector("#printbox", { state: "hidden", timeout: 3000 }).then(() => true, () => false);
+  expect(up && held && !help && gone, "the notice is up with the print tab, takes no keys, and goes with the tab: " + JSON.stringify({ up, held, help, gone }));
+});
+
 scenario("a reply's quoted original loads no Yahoo-host image", async (h, expect) => {
   h.mock.patchBody = leakyIn("MSG1_");
   await h.page.locator("#rows .row").nth(1).click(); await h.page.waitForTimeout(600);

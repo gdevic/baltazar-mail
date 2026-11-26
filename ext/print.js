@@ -43,5 +43,10 @@ const BODY_CSS = ":host{display:block}img{max-width:100%;height:auto}blockquote{
   document.getElementById("print").onclick = () => print();
   const imgs = [...pages.querySelectorAll(".body")].flatMap(b => [...b.shadowRoot.querySelectorAll("img")]);
   await Promise.all(imgs.map(i => i.complete ? null : new Promise(r => { i.onload = i.onerror = r; setTimeout(r, 4000); })));
-  if (job.auto && !navigator.webdriver) print();
+  // The tab is there for the dialog: once it closes, printed or not, the tab closes too, since the
+  // mail tab stays covered until it does (mail.js, print).
+  if (job.auto && !navigator.webdriver) {
+    addEventListener("afterprint", () => chrome.tabs.getCurrent().then(t => t && chrome.tabs.remove(t.id)).catch(() => {}), { once: true });
+    print();
+  }
 })();

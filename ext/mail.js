@@ -1685,9 +1685,23 @@ async function printMessages() {
   // The hand-off goes through session storage, whose quota a large selection with images can pass.
   try { await chrome.storage.session.set({ [key]: { messages, images, auto: true } }); }
   catch (e) { notify(`Could not print ${plural(messages.length, "message")}: too much to hand to the print page at once. Try fewer.`, { detail: e.message, err: e, what: "print" }); return; }
-  await chrome.tabs.create({ url: chrome.runtime.getURL(`print.html?job=${encodeURIComponent(key)}`) });
+  // While the print dialog is open Chrome blocks the renderer process of the page that opened it,
+  // and every page of the extension shares that process, so this one stops too. A blocked page
+  // draws nothing, and neither does a tab in the background, so the reason goes up, and is painted,
+  // before the print tab takes over. It stays until that tab is closed, which it does by itself
+  // once the dialog closes (print.js); as its opener, this tab is where the browser goes back to.
+  $("printbox").classList.remove("hidden");
+  $("printbox-box").focus();
+  if (!document.hidden) await Promise.race([new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))), new Promise(r => setTimeout(r, 200))]);
+  try {
+    const self = await chrome.tabs.getCurrent().catch(() => null);
+    printTab = (await chrome.tabs.create({ url: chrome.runtime.getURL(`print.html?job=${encodeURIComponent(key)}`), openerTabId: self?.id })).id;
+  } catch (e) { $("printbox").classList.add("hidden"); chrome.storage.session.remove(key); handleError(e, "print"); return; }
   status(`print: ${plural(messages.length, "message")}`);
 }
+// The print tab now open, if any: the notice that this page is paused goes when it closes.
+let printTab = null;
+chrome.tabs.onRemoved.addListener(id => { if (id === printTab) { printTab = null; $("printbox").classList.add("hidden"); } });
 
 // ---------- local model updates ----------
 function applyFlags(ids, flags) {
@@ -2562,7 +2576,7 @@ async function doSearch(term, everywhere = false) {
 // + - 0 zoom what the reader's place shows: a contact's recent messages in Contacts, else the message.
 const zoomPane = dir => state.view.kind === "contacts" && !compose.isOpen() ? zoomContact(dir) : zoomMessage(dir);
 let pendingG = false;
-const modals = ["help", "settings", "movebox", "promptbox"];
+const modals = ["help", "settings", "movebox", "promptbox", "printbox"];
 // On a Mac, shortcuts shown as Ctrl+X are labelled as the Command key the user presses.
 const IS_MAC = /^mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
 function macLabels() {
@@ -2587,7 +2601,7 @@ function onKey(e) {
       e.preventDefault();
       if (openModal === "movebox") closeMovePicker();
       else if (openModal === "promptbox") promptDone?.();
-      else $(openModal).classList.add("hidden");
+      else if (openModal !== "printbox") $(openModal).classList.add("hidden");   // the print notice goes only with the print tab
     }
     return;
   }

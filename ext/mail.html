@@ -237,6 +237,14 @@
     <div id="prompt-buttons"><button id="prompt-cancel">Cancel</button><button id="prompt-ok">OK</button></div>
   </div>
 </div>
+<!-- Up while a print tab is open: its print dialog blocks this page too (mail.js, print). No
+     buttons, since nothing here can be clicked while the dialog is open. -->
+<div id="printbox" class="hidden">
+  <div id="printbox-box" role="alertdialog" aria-modal="true" aria-labelledby="print-title" aria-describedby="print-text" tabindex="-1">
+    <div id="print-title">Printing in another tab</div>
+    <div id="print-text">Mail is paused while the print page is open. Print or cancel there to continue.</div>
+  </div>
+</div>
 <div id="help" class="hidden">
   <div id="help-box">
     <b>Keyboard shortcuts</b>

@@ -70,7 +70,7 @@ const folders = [
     window.chrome = { storage: { session: area("s:"), local: area("l:") }, runtime: { getURL: p => p, getManifest: () => ({ version: "0.14.0" }) },
       management: { getSelf: async () => ({ installType: localStorage.getItem("installType") || "development" }) },
       action: { setIcon: async d => { (window.iconCalls ||= []).push(d); } },
-      tabs: { getCurrent: async () => ({ id: 7 }), update: async (id, p) => { (window.tabUpdates ||= []).push([id, p]); } } };
+      tabs: { getCurrent: async () => ({ id: 7 }), update: async (id, p) => { (window.tabUpdates ||= []).push([id, p]); }, onRemoved: { addListener() {} } } };
   });
   await page.route("https://mail.yahoo.com/**", async route => {
     const url = route.request().url();

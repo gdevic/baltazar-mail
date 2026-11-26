@@ -136,6 +136,9 @@ body.dragging iframe { pointer-events: none; }
 #prompt-input { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; padding: 4px 8px; font: inherit; }
 #prompt-err { color: var(--accent); min-height: 1.2em; font-size: calc(12 * var(--fu)); }
 #prompt-buttons { display: flex; justify-content: flex-end; gap: 6px; }
+#printbox { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 80; }
+#printbox-box { background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; width: 380px; max-width: calc(100vw - 32px); padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; outline: none; }
+#print-title { font-weight: 600; }
 #move-list div { padding: 2px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #move-list div.kb, #move-list div:hover { background: var(--sel); }
 #st-undo { color: var(--fg2); }
