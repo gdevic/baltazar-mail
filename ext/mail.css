@@ -420,6 +420,9 @@ input.p-name { display: block; box-sizing: border-box; width: calc(100% + 10px);
 #c-palette .pal-default { display: block; width: 100%; margin-bottom: 6px; text-align: left; font-size: calc(12 * var(--fu)); }
 #c-palette .sw { display: inline-block; width: 20px; height: 20px; margin: 2px; border: 1px solid rgba(0,0,0,.25); border-radius: 3px; cursor: pointer; vertical-align: top; }
 #c-palette .sw:hover { outline: 2px solid var(--sel-line); }
+#c-symbols { position: fixed; z-index: 45; background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; padding: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.35); display: grid; grid-template-columns: repeat(4, 32px); gap: 2px; }
+#c-symbols button { width: 32px; min-width: 0; height: 30px; padding: 0; font-size: calc(16 * var(--fu)); line-height: 1; }
+#c-symbols .sym-line { grid-column: 1 / -1; width: 100%; height: 0; margin: 3px 0; border: 0; border-top: 1px solid var(--line); }
 #c-editor img { max-width: 100%; height: auto; }
 /* The editor fills the composer and grows with its text, quoted original included. The picture
    tools are positioned in its scrolled content, so they move with the text. */

@@ -16,6 +16,7 @@ import * as history from "./history.js";
 import { arrange } from "./thread.js";
 import { drawGuide, drawHelp, focusStep, rich, pageLink, copyRow, copyText } from "./guide.js";
 import * as awake from "./awake.js";
+import * as symbols from "./symbols.js";
 
 const $ = id => document.getElementById(id);
 // The name the page shows: the adapter's title where it gives one, otherwise the extension's name
@@ -1436,6 +1437,7 @@ function setFrame(doc, bg = "#fff") {
 async function renderMessage(m, r, how = "user") {
   r.source = r.html;
   r.html = cleanHtml(r.html, r);
+  learnSymbols(m, r).catch(() => {});   // the symbol picker then learns less
   currentBody = r; readerRow = m;
   const h = r.message.headers || {};
   $("reader-empty").classList.add("hidden");
@@ -1487,6 +1489,18 @@ async function renderMessage(m, r, how = "user") {
     const arm = (ms = settings.markReadSec * 1000) => { clearTimeout(markReadTimer); markReadTimer = setTimeout(fire, ms); };
     arm();
   }
+}
+
+// The composer's symbol picker (symbols.js) offers the text symbols of mail with people the user
+// writes to, and of the user's own in Sent. A sender never written to (a newsletter, a shop) adds
+// nothing, and is turned away before the message is read for them.
+async function learnSymbols(m, r) {
+  const html = r.html, h = r.message.headers || {}, from = h.from?.[0]?.email, f = state.byId.get(m.folder?.id);
+  if (outOfMail(f)) return;
+  if (folderType(f) !== "SENT" && !(from && (await contacts.lookup(from))?.lastSent)) return;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("style, script").forEach(e => e.remove());
+  await symbols.note(m.id, `${h.subject || ""}\n${doc.body.textContent}`);
 }
 
 async function loadImages() {
@@ -2767,8 +2781,8 @@ function wireSettings() {
   $("density").onchange = () => { settings.rowPct = Math.min(150, Math.max(80, Math.round((Number($("density").value) || 100) / 5) * 5)); applySettings(); saveSettings(); };
   $("settings-close").onclick = () => openSettings(false);
   // A provider the extension signs in to itself (Gmail) can be signed out of here, after a
-  // confirmation, since it withdraws the permission at Google. The address book and the folders'
-  // Files choices go with the sign-in, and the page loads afresh, so nothing of the mailbox stays in memory; the sign-in
+  // confirmation, since it withdraws the permission at Google. The address book, the symbols learned
+  // from the mail and the folders' Files choices go with the sign-in, and the page loads afresh, so nothing of the mailbox stays in memory; the sign-in
   // panel then asks again.
   if (api.signOut) {
     $("signout").classList.remove("hidden");
@@ -2779,6 +2793,7 @@ function wireSettings() {
       if (!(await compose.close(true))) return;
       try { await api.signOut(); } catch (e) { handleError(e, "sign out"); return; }
       await contacts.clear().catch(() => {});
+      await symbols.forget();
       await chrome.storage.local.remove(CONTACTS_AFTER).catch(() => {});
       await files.clear();
       location.reload();

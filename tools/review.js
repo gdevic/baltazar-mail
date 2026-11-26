@@ -1526,7 +1526,7 @@ scenario("the list toolbar fits at 150% text", async ({ page }, expect) => {
 scenario("overlays sit above popovers, and help fits a short window", async ({ page }, expect) => {
   await page.setViewportSize({ width: 1200, height: 420 });
   const z = await page.evaluate(() => { const z = id => Number(getComputedStyle(document.getElementById(id)).zIndex) || 0;
-    return { over: Math.min(z("settings"), z("help"), z("movebox")), pop: Math.max(z("search-help"), z("card"), z("ctx"), z("c-suggest"), z("c-palette")) }; });
+    return { over: Math.min(z("settings"), z("help"), z("movebox")), pop: Math.max(z("search-help"), z("card"), z("ctx"), z("c-suggest"), z("c-palette"), z("c-symbols")) }; });
   await page.locator("#list").focus(); await page.keyboard.press("?"); await page.waitForTimeout(200);
   const h = await page.evaluate(() => { const b = document.getElementById("help-box"), r = b.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: innerHeight, scrolls: b.scrollHeight > b.clientHeight }; });
   expect(z.over > z.pop, "Settings, Help and Move cover popovers: " + JSON.stringify(z));
@@ -2398,6 +2398,35 @@ scenario("every formatting tool does what it says, and can be undone", async ({ 
   expect(!/color/.test(colour), "the default colour removes the colour: " + colour);
   expect(indent, "Enter in an indent stays indented");
   expect(on && off, "the bold button shows bold at the caret: " + JSON.stringify({ on, off }));
+});
+
+// The picker keeps text symbols from the user's own mail and from people the user writes to (the
+// Inbox's senders here were never written to, so what they use is not kept), and a symbol pasted
+// on its own, newest first.
+scenario("the symbol picker inserts at the caret, and keeps text symbols from mail the user exchanges and from pastes", async ({ page, mock }, expect) => {
+  mock.patchBody = (id, m, body) => { if (id.startsWith("MSG2_")) body.html += "<p>Costs ½ ≈ 🔥 ━━</p>"; else if (id.startsWith("MSG1_")) body.html += "<p>Brand™</p>"; };
+  await folder(page, "Sent"); await page.locator("#rows .row").first().click(); await page.waitForTimeout(800);
+  await folder(page, "Inbox"); await page.locator("#rows .row").first().click(); await page.waitForTimeout(800);
+  await page.locator("#list").focus(); await page.keyboard.press("c"); await page.waitForSelector("#compose:not(.hidden)");
+  await page.locator("#c-editor").focus(); await page.keyboard.press("Control+Home"); await page.keyboard.type("Done ");
+  // pastes: one symbol alone is kept; a letter, or a symbol among other text, is not
+  for (const t of ["№", "é", "x ‰"]) await page.locator("#c-editor").evaluate((e, t) => { const d = new DataTransfer(); d.setData("text/plain", t); e.dispatchEvent(new ClipboardEvent("paste", { clipboardData: d, bubbles: true, cancelable: true })); }, t);
+  await page.click('[data-cmd="symbol"]'); await page.waitForSelector("#c-symbols:not(.hidden)");
+  const pop = await page.evaluate(async () => {
+    const p = document.getElementById("c-symbols"), own = [...p.querySelectorAll(".sym-line ~ [data-s]")].map(b => b.dataset.s);
+    return { fixed: p.querySelectorAll("[data-s]").length - own.length, own, stored: (await chrome.storage.local.get("symbols")).symbols };
+  });
+  await page.locator('#c-symbols [data-s="☑"]').click();
+  const put = { text: await page.locator("#c-editor").evaluate(e => e.textContent.includes("Done ☑︎")), closed: await page.locator("#c-symbols").isHidden() };
+  await page.keyboard.press("Control+z");
+  const undone = await page.locator("#c-editor").evaluate(e => !e.textContent.includes("☑"));
+  await page.click('[data-cmd="symbol"]'); await page.waitForSelector("#c-symbols:not(.hidden)");
+  await page.keyboard.press("Escape");
+  const esc = { pop: await page.locator("#c-symbols").isHidden(), compose: await page.locator("#compose").isVisible() };
+  const want = ["№", "≈", "½"].join();
+  expect(pop.fixed === 16 && pop.own.join() === want && pop.stored?.join() === want, "16 fixed symbols, then the paste and the text symbols of the user's own mail, newest first and stored: " + JSON.stringify(pop));
+  expect(put.text && put.closed && undone, "a symbol goes in at the caret in text style, and Ctrl+Z takes it back: " + JSON.stringify({ ...put, undone }));
+  expect(esc.pop && esc.compose, "Esc closes the picker, not the composer: " + JSON.stringify(esc));
 });
 
 scenario("font choices show one name and carry a fallback", async ({ page, calls }, expect) => {

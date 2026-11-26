@@ -3,6 +3,7 @@ import { sniffImage, dataUrl } from "./bytes.js";
 import * as contacts from "./contacts.js";
 import { inlineStyles } from "./quotestyle.js";
 import { esc, noBidi } from "./text.js";
+import * as symbols from "./symbols.js";
 
 // Compose panel: new message, reply, reply all, forward, or editing a draft.
 // Owns its DOM under #compose; talks to the rest of the app through the hooks given to init().
@@ -152,7 +153,18 @@ export function init(h) {
   $("c-size").onchange = picked("c-size", v => setFontSize(Number(v)));
   document.addEventListener("selectionchange", () => { if (isOpen() && draft?.html && $("c-editor").contains(getSelection().anchorNode)) { syncFontControls(); syncToolStates(); } });
   for (const b of $("c-toolbar").querySelectorAll("button[data-pal]")) { b.onmousedown = e => e.preventDefault(); b.onclick = e => { e.preventDefault(); togglePalette(b); }; }
-  document.addEventListener("mousedown", e => { if (!e.target.closest("#c-palette") && !e.target.closest("[data-pal]")) hidePalette(); });
+  document.addEventListener("mousedown", e => {
+    if (!e.target.closest("#c-palette") && !e.target.closest("[data-pal]")) hidePalette();
+    if (!e.target.closest("#c-symbols") && !e.target.closest('[data-cmd="symbol"]')) hideSymbols();
+  });
+  // A symbol goes in where the caret or selection was when the popup opened.
+  $("c-symbols").onmousedown = e => e.preventDefault();
+  $("c-symbols").onclick = e => {
+    const b = e.target.closest("[data-s]"); if (!b) return;
+    hideSymbols(); restoreRange(); exec("insertText", symbols.textStyle(b.dataset.s));
+  };
+  // A symbol pasted on its own anywhere in the composer joins the picker's own symbols.
+  c.addEventListener("paste", e => { symbols.pasted(e.clipboardData?.getData("text/plain")); });
   $("c-imgfile").onchange = () => { insertImages([...$("c-imgfile").files]); $("c-imgfile").value = ""; };
   const ed = $("c-editor");
   ed.addEventListener("paste", e => {
@@ -190,7 +202,8 @@ export function init(h) {
   c.addEventListener("drop", e => { c.classList.remove("drop"); if (e.dataTransfer.files.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } });
   c.addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); send(); }
-    else if (e.key === "Escape") { e.preventDefault(); close(); }
+    // Esc closes a popup of the toolbar first, then the composer
+    else if (e.key === "Escape") { e.preventDefault(); if (popupOpen()) { hidePalette(); hideSymbols(); } else close(); }
     else if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveNow(); }
     // the browser's zoom keys zoom the message being written, not the tab
     else if ((e.ctrlKey || e.metaKey) && ["=", "+", "-", "0"].includes(e.key)) { e.preventDefault(); hooks.zoomMessage(e.key === "0" ? 0 : e.key === "-" ? -1 : 1); }
@@ -390,7 +403,7 @@ export function applyZoom() {
 }
 
 function setMode(html) {
-  unpick();
+  unpick(); hidePalette(); hideSymbols();
   draft.html = html;
   $("c-mode").value = html ? "html" : "text";
   $("c-editor").classList.toggle("hidden", !html);
@@ -528,6 +541,23 @@ function togglePalette(btn) {
 }
 function hidePalette() { $("c-palette").classList.add("hidden"); }
 
+// ---------- symbols ----------
+// The fixed symbols, and under a line the user's own (symbols.js), each shown as it goes in.
+async function toggleSymbols() {
+  const pop = $("c-symbols");
+  if (!pop.classList.contains("hidden")) { hideSymbols(); return; }
+  saveRange();
+  const own = await symbols.custom();
+  const cell = (c, name = "") => `<button tabindex="-1" data-s="${esc(c)}"${name ? ` title="${esc(name)}"` : ""}>${esc(symbols.textStyle(c))}</button>`;
+  pop.innerHTML = symbols.FIXED.map(([c, name]) => cell(c, name)).join("") +
+    (own.length ? `<hr class="sym-line">${own.map(c => cell(c)).join("")}` : "");
+  const r = $("c-toolbar").querySelector('[data-cmd="symbol"]').getBoundingClientRect();
+  pop.style.left = Math.min(r.left, innerWidth - 160) + "px"; pop.style.top = (r.bottom + 2) + "px";
+  pop.classList.remove("hidden");
+}
+function hideSymbols() { $("c-symbols").classList.add("hidden"); }
+const popupOpen = () => !$("c-palette").classList.contains("hidden") || !$("c-symbols").classList.contains("hidden");
+
 // A command without a value gets none: insertHorizontalRule takes its value as the new rule's id.
 function exec(cmd, arg) {
   const ed = $("c-editor"); ed.focus();
@@ -623,6 +653,7 @@ function format(cmd) {
   if (cmd === "code") { exec("formatBlock", caretIn("pre") ? "div" : "pre"); return; }
   if (cmd === "removeFormat") { exec("removeFormat"); clearInline(); return; }
   if (cmd === "image") { $("c-imgfile").click(); return; }
+  if (cmd === "symbol") { toggleSymbols(); return; }
   exec(cmd);
 }
 
