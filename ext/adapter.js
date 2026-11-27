@@ -63,14 +63,75 @@ export const activity = {
   },
 };
 
+// ---------- the connection ----------
+// A request the browser could not make at all (fetch's TypeError before any answer: no network, a
+// network that changed, a computer just back from sleep) did not get through. While nothing gets
+// through, the connection is lost (link.lost: since when, else 0); any request that gets through
+// ends that. A request that may be asked twice is asked again while the connection is lost: as
+// soon as the browser says the network is back or another request gets through, else after a
+// pause that grows to PAUSE_MAX, for up to LOST_FOR from when the connection was lost; the client
+// is told of that wait meanwhile. Past LOST_FOR, or for a request that may not be asked twice, it
+// fails as Offline, which the client tells as the network's doing, not an error of its own. One
+// that keeps failing while others get through is not the connection's: its own error stands.
+// link.waits: false while the client has nothing on screen to tell a wait in (its start), so a
+// request that does not get through fails as Offline at once.
+export const LOST_FOR = 60000;
+const PAUSE_MAX = 5000;
+export class Offline extends Error {
+  constructor(provider) {
+    const offline = globalThis.navigator?.onLine === false;
+    super(offline ? "this computer is offline" : `${provider} cannot be reached`);
+    this.name = "Offline"; this.offline = offline;
+  }
+}
+let lostSince = 0, lastThrough = 0, asking = 0, lostWait = null;
+const linkWatchers = new Set(), wakers = new Set();
+const wake = () => { for (const w of [...wakers]) w(); };
+globalThis.addEventListener?.("online", wake);
+export const link = {
+  waits: true,
+  get lost() { return lostSince; },
+  watch(fn) { linkWatchers.add(fn); return () => linkWatchers.delete(fn); },
+};
+const linkTell = () => { for (const fn of [...linkWatchers]) { try { fn(); } catch { /* a watcher's own trouble */ } } };
+function gotThrough() { lastThrough = Date.now(); if (lostSince) { lostSince = 0; linkTell(); } wake(); }
+function notThrough() { if (!lostSince) { lostSince = Date.now(); linkTell(); } }
+function pauseFor(ms) {
+  return new Promise(ok => { const done = () => { clearTimeout(t); wakers.delete(done); ok(); }; const t = setTimeout(done, ms); wakers.add(done); });
+}
+// The one wait told of while requests are being asked again.
+function askingAgain(provider) { if (!asking++) lostWait = activity.wait(`no connection to ${provider}, asking again`, 0, { since: lostSince }); }
+function doneAsking() { if (!--asking) { lostWait?.(); lostWait = null; } }
+class Unsent extends Error { constructor(cause) { super(cause.message); this.cause = cause; } }
+
 // The provider's fetch: fetch plus reading the body, both inside the deadline. read(resp) returns
 // the body; a deadline that passes is a Timeout naming the provider. A request still unanswered
 // after TIMEOUTS.slow is a wait the client can tell of, until its answer begins to come (a large
 // attachment being received is no wait for an answer), unless it is quiet (work nobody waits
-// for). first: the request is given up, as a Timeout that is early, when no answer has begun
-// within that time, which a caller that can ask again uses to leave a dead connection soon; an
-// answer that has begun has the whole deadline to arrive. Every request is noted when it ends.
-export const deadlined = provider => async (what, url, init, ms, read, { quiet = false, first = 0 } = {}) => {
+// for). again: the request may be asked twice (a read), so it is asked again while the connection
+// is lost (see above). first, for such a request: it is given up, the first time, when no answer
+// has begun within that time, and asked again at once, which leaves a dead connection soon; an
+// answer that has begun has the whole deadline to arrive. Every try is noted when it ends.
+export const deadlined = provider => async (what, url, init, ms, read, { quiet = false, again = false, first = 0 } = {}) => {
+  let failed = 0, told = false;
+  try {
+    for (let n = 0; ; n++) {
+      try { return await ask(provider, what, url, init, ms, read, quiet, again && !n ? first : 0); }
+      catch (e) {
+        if (e instanceof Timeout && e.early) continue;
+        if (!(e instanceof Unsent)) throw e;
+        notThrough();
+        failed ||= Date.now();
+        if (again && lastThrough > failed) throw e.cause;
+        const left = lostSince + LOST_FOR - Date.now();
+        if (!again || !link.waits || left <= 0) throw new Offline(provider);
+        if (!told) { told = true; askingAgain(provider); }
+        await pauseFor(Math.min(left, PAUSE_MAX, 500 * 2 ** n));
+      }
+    }
+  } finally { if (told) doneAsking(); }
+};
+async function ask(provider, what, url, init, ms, read, quiet, first) {
   const whole = AbortSignal.timeout(ms), early = first > 0 && first < ms ? new AbortController() : null;
   const signal = early ? AbortSignal.any([whole, early.signal]) : whole, t0 = Date.now();
   let late = null, how = "failed";
@@ -78,17 +139,20 @@ export const deadlined = provider => async (what, url, init, ms, read, { quiet =
   const hurry = early ? setTimeout(() => early.abort(), first) : 0;
   const answered = () => { clearTimeout(slow); clearTimeout(hurry); late?.(); late = null; };
   try {
-    const resp = await fetch(url, { ...init, signal });
-    answered();
+    let resp;
+    try { resp = await fetch(url, { ...init, signal }); }
+    catch (e) { if (e instanceof TypeError && !signal.aborted) { how = "unsent"; throw new Unsent(e); } throw e; }
+    answered(); gotThrough();
     const body = await read(resp);
     how = resp.status;
     return { resp, body };
   } catch (e) {
+    if (e instanceof Unsent) throw e;
     const gaveUp = !!early?.signal.aborted, out = gaveUp || (whole.aborted && e.name === "TimeoutError");
     if (out) how = "no answer";
     throw out ? Object.assign(new Timeout(provider, what, gaveUp ? first : ms), { early: gaveUp }) : e;
   } finally { answered(); activity.note(what, Date.now() - t0, how); }
-};
+}
 
 // Every folder with a string id, a name and a types list, whatever shape the provider sent.
 export function normalizeFolders(list) {

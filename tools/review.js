@@ -1581,14 +1581,60 @@ scenario("the dark reader does not flash white between messages", async ({ page 
 }, { settings: { theme: "dark" } });
 
 // ---------- start-up ----------
+// With nothing on screen yet, the start page says at once that it is the connection, not the app,
+// and counts down to the next try, with no report to copy.
 scenario("starting offline says why and recovers by itself", async ({ page, mock }, expect) => {
-  const shown = { panel: await page.locator("#signin-fail").isVisible(), app: await page.locator("#app").isVisible(), text: await page.locator("#fail-text").textContent() };
-  expect(shown.panel && !shown.app && /Could not load your mailbox\. Yahoo could not be reached/.test(shown.text), "an offline start shows the reason: " + JSON.stringify(shown));
+  const shown = { panel: await page.locator("#signin-fail").isVisible(), app: await page.locator("#app").isVisible(), text: await page.locator("#fail-text").textContent(),
+    note: await page.locator("#fail-note").textContent(), copy: await page.locator("#fail-copy").isVisible() };
+  expect(shown.panel && !shown.app && /Could not load your mailbox\. No connection to Yahoo: the network or Yahoo is not answering\./.test(shown.text) &&
+    /^Nothing is wrong with the app or your mail\. Trying again in 1[0-5] s\.$/.test(shown.note) && !shown.copy, "an offline start shows the reason: " + JSON.stringify(shown));
   mock.offline = false;
   await page.evaluate(() => window.dispatchEvent(new Event("online")));
   await page.waitForSelector("#rows .row", { timeout: 10000 }).catch(() => {});
   expect(await page.locator("#app").isVisible() && await page.locator("#rows .row").count() > 0 && await page.locator("#signin").isHidden(), "coming online loads the mailbox");
 }, { mock: { offline: true }, noWait: true, allow: /start|ERR_INTERNET_DISCONNECTED|Failed to fetch/ });
+
+// A connection lost for a moment (a computer back from sleep, a network that changed) holds a read
+// up, with the status bar saying why and nothing told as an error: the message opens once a
+// request gets through.
+scenario("a message opened while the connection is lost opens once it is back, with no error", async ({ page, mock }, expect) => {
+  const before = await page.locator("#r-subject").textContent();
+  mock.offline = true;
+  await page.locator("#rows .row").nth(1).click();
+  await page.waitForTimeout(1800);
+  const during = { wait: await page.locator("#st-wait").textContent(), shown: await page.locator("#st-wait").isVisible(), notice: await notice(page) };
+  mock.offline = false;
+  await page.waitForFunction(b => !document.getElementById("reader-head").classList.contains("hidden") && document.getElementById("r-subject").textContent !== b, before, { timeout: 8000 }).catch(() => {});
+  const after = { subject: await page.locator("#r-subject").textContent(), wait: await page.locator("#st-wait").isVisible(), notice: await notice(page) };
+  expect(during.shown && /^no connection to Yahoo, asking again \(\d+ s\)$/.test(during.wait) && !during.notice, "the status bar says the connection is lost, and nothing is an error: " + JSON.stringify(during));
+  expect(after.subject !== before && !after.wait && !after.notice, "the message opens by itself once the connection is back: " + JSON.stringify(after));
+}, { allow: /ERR_INTERNET_DISCONNECTED/ });
+
+// Past a minute without a connection, one notice says it is the network's doing and not the app's,
+// counts down to a try every 15 seconds, and once a try gets through it goes, and the message that
+// could not be opened opens.
+scenario("a connection lost for a minute is told as the network's, tried every 15 seconds, and what failed loads once it is back", async ({ page, mock }, expect) => {
+  await page.clock.install();
+  await page.reload(); await page.waitForSelector("#rows .row", { timeout: 15000 });
+  const before = await page.locator("#r-subject").textContent();
+  mock.offline = true;
+  await page.locator("#rows .row").nth(1).click();
+  await page.waitForTimeout(1000);
+  await page.clock.fastForward(61000); await page.waitForTimeout(800);
+  const down = { notice: await notice(page), info: await page.locator("#notice").evaluate(n => n.classList.contains("info")), copy: await page.locator("#notice-copy").isVisible(),
+    reader: await page.locator("#reader-empty").textContent() };
+  await page.clock.fastForward(5000); await page.waitForTimeout(300);
+  const counted = await notice(page);
+  mock.offline = false;
+  await page.clock.fastForward(10500);
+  await page.waitForFunction(b => !document.getElementById("reader-head").classList.contains("hidden") && document.getElementById("r-subject").textContent !== b, before, { timeout: 8000 }).catch(() => {});
+  const back = { notice: await notice(page), subject: await page.locator("#r-subject").textContent() };
+  expect(/^No connection to Yahoo: the network or Yahoo is not answering\. Nothing is wrong with the app or your mail\. Trying again in 1[45] s\. Try now$/.test(down.notice) && down.info && !down.copy,
+    "a minute on, one calm notice says it is the connection, and when it tries again: " + JSON.stringify(down));
+  expect(down.reader === "No connection to Yahoo: the network or Yahoo is not answering. The message opens by itself once the connection is back.", "the reader says so too: " + down.reader);
+  expect(/Trying again in (9|10) s\./.test(counted), "the notice counts down: " + counted);
+  expect(!back.notice && back.subject !== before, "the try that gets through clears the notice and opens the message: " + JSON.stringify(back));
+}, { allow: /ERR_INTERNET_DISCONNECTED|Blocked script execution in 'about:blank'/ });
 
 scenario("folders failing after sign-in can be retried, and polling starts", async ({ page, calls, mock }, expect) => {
   const shown = { panel: await page.locator("#signin-fail").isVisible(), text: await page.locator("#fail-text").textContent() };

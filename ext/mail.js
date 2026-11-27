@@ -197,6 +197,7 @@ function notify(text, { info = false, key = null, err = null, what = "", detail 
   noticeReport = err ? errorReport(what, err) : "";
   $("notice-copy").classList.toggle("hidden", !noticeReport);
   $("notice").classList.remove("hidden");
+  return tech;
 }
 function clearNotice(key) { if (key === noticeKey) $("notice").classList.add("hidden"); }
 function errorReport(what, e) {
@@ -226,18 +227,74 @@ const FAILED = {
   "delete folder": "Could not delete the folder.", empty: "Could not empty the folder.", "mark all read": "Could not mark the folder read.",
   "sign out": "Could not sign out.", files: "Could not list the folder's attachments.",
 };
-// A request that never reached the mail service fails with the browser's bare "Failed to fetch".
-const cause = e => e instanceof TypeError && /fetch/i.test(e.message) ? `${api.PROVIDER.name} could not be reached; check the connection.` : e.message;
+// A lost connection (api.Offline) in words: no network at all, or one the provider does not answer
+// over. A request the browser could not make while others got through is not the connection's.
+const noConnection = e => e.offline ? "No connection: this computer is offline." : `No connection to ${api.PROVIDER.name}: the network or ${api.PROVIDER.name} is not answering.`;
+const cause = e => e instanceof api.Offline ? noConnection(e) : e instanceof TypeError && /fetch/i.test(e.message) ? `The request could not be made (${e.message}).` : e.message;
 
-// Errors that mean "no session" show the sign-in panel; others a notice, or with quiet (a
-// background check that simply runs again) only the status line. A quiet one goes to the console
-// as information: the browser's extension page lists console errors and warnings as the
-// extension's own, and a dropped connection or a computer waking from sleep is neither.
-function handleError(e, what, { quiet = false } = {}) {
+// Errors that mean "no session" show the sign-in panel; a lost connection its own notice (see
+// offline), with again to load once it is back what could not be loaded; others a notice, or with
+// quiet (a background check that simply runs again) only the status line. A quiet one, and a lost
+// connection, go to the console as information: the browser's extension page lists console errors
+// and warnings as the extension's own, and a dropped connection or a computer waking from sleep is
+// neither.
+function handleError(e, what, { quiet = false, again = null } = {}) {
   if (e instanceof api.NotSignedIn) { showSignIn(e); return; }
+  if (e instanceof api.Offline) { console.info(what, e); offline(e, what, again); return; }
   if (quiet) { console.info(what, e); status(`${what}: ${cause(e)}`); }
   else { console.error(what, e); notify(FAILED[what] || `Something went wrong (${what}).`, { detail: cause(e), err: e, what }); }
 }
+
+// ---------- the connection ----------
+// A read that does not get through is asked again by the adapter for a minute (api.link), while the
+// status bar says so. Past that, or when what the user did could not be sent, it fails as
+// api.Offline: the network's doing, not the app's, and said so in one notice, which tries again
+// every RETRY_EVERY (and at once when the browser says the network is back, or on Try now) and
+// counts down to it. What could not be loaded meanwhile (the list, the open message) is loaded
+// again once a request gets through, and the notice goes.
+const RETRY_EVERY = 15000;
+const NOTHING_WRONG = "Nothing is wrong with the app or your mail.";
+const reloads = new Map();        // what could not be loaded: the function that loads it again
+let lostAt = 0, tryTimer = 0, tryDue = 0, tryTicker = 0, offlineWords = null;
+// The count to the next try, in the notice and on the start page, whichever says it.
+const tryWords = () => `${NOTHING_WRONG} ${tryDue ? `Trying again in ${Math.max(1, Math.ceil((tryDue - Date.now()) / 1000))} s.` : "Trying again now."}`;
+function tickTries() {
+  if (offlineWords && noticeKey === "offline") offlineWords.textContent = tryWords();
+  if (startOffline) $("fail-note").textContent = tryWords();
+}
+function countTries(due) {
+  tryDue = due; tickTries();
+  if (!tryTicker) tryTicker = setInterval(tickTries, 1000);
+}
+function offline(e, what, again) {
+  if (again) reloads.set(what, again);
+  // what the user did and could not be done; a load is done again by itself, so it is not named
+  const failed = again || what === "poll" ? "" : FAILED[what] || "";
+  if (!lostAt || noticeKey !== "offline" || failed) {
+    const text = failed ? `${failed} ${noConnection(e)}` : noConnection(e);
+    offlineWords = notify(text, { info: true, key: "offline", detail: tryWords(), action: { label: "Try now", run: tryConnection } });
+    status(text);
+  }
+  if (!lostAt) { lostAt = Date.now(); nextTry(); }
+}
+function nextTry() { clearTimeout(tryTimer); tryTimer = setTimeout(tryConnection, RETRY_EVERY); countTries(Date.now() + RETRY_EVERY); }
+// A mail check is the try: once it gets through, connected() loads again what could not be loaded.
+async function tryConnection() {
+  if (!lostAt || !tryDue) return;
+  clearTimeout(tryTimer); countTries(0);
+  await poll();
+  if (lostAt) nextTry();
+}
+function connected() {
+  if (!lostAt) return;
+  lostAt = 0; tryDue = 0; clearTimeout(tryTimer); clearInterval(tryTicker); tryTicker = 0;
+  clearNotice("offline");
+  status(`connected to ${api.PROVIDER.name} again`);
+  const again = [...reloads.values()]; reloads.clear();
+  for (const f of again) f();
+  pollNow();
+}
+api.link?.watch(() => { if (!api.link.lost) connected(); });
 
 // ---------- folders ----------
 function renderFolders() {
@@ -779,7 +836,8 @@ async function loadList(mode = "fresh", focusId = null, { told = mode !== "refre
       if (prevView.kind === "contacts") showPeoplePane(true);
       renderFolders(); renderList();
     }
-    handleError(e, v.kind === "conversation" ? "conversation" : "list");
+    // with no connection, a list still the one shown is loaded once there is one
+    handleError(e, v.kind === "conversation" ? "conversation" : "list", { again: () => { if (state.view === v) loadList(mode, focusId, { told }); } });
     return;
   }
   if (token !== state.listToken) { stillDirty(); return; }
@@ -1376,7 +1434,13 @@ async function openMessage(m, how = "user") {
   status("fetching body...");
   let r;
   // a failure for a message the user has left meanwhile is no news about the one now open
-  try { r = await api.body(m.id); } catch (e) { if (api.isGone(e)) { messageGone(m.id); return; } if (state.openId === m.id) showReaderError(e, "fetching the message"); return; }
+  try { r = await api.body(m.id); }
+  catch (e) {
+    if (api.isGone(e)) { messageGone(m.id); return; }
+    // with no connection, the message opens once there is one, if it is still the one to show
+    if (state.openId === m.id) showReaderError(e, "fetching the message", () => { if (state.openId === m.id && !compose.isOpen()) openMessage(m, how); });
+    return;
+  }
   if (state.openId !== m.id) return;
   try { await renderMessage(m, r, how); } catch (e) { showReaderError(e, "rendering the message"); }
 }
@@ -1389,11 +1453,11 @@ function messageGone(id) {
   loadList("refresh").finally(() => status("that message no longer exists; the list was refreshed"));
 }
 
-function showReaderError(e, what) {
-  handleError(e, what);
+function showReaderError(e, what, again = null) {
+  handleError(e, what, { again });
   if (e instanceof api.NotSignedIn) return;
   currentBody = null; readerRow = null;      // the previous message must not come back on a redraw, or print
-  $("reader-empty").textContent = `Error ${what}: ${e.message}`;
+  $("reader-empty").textContent = e instanceof api.Offline ? `${noConnection(e)} The message opens by itself once the connection is back.` : `Error ${what}: ${e.message}`;
   $("reader-empty").classList.remove("hidden");
   $("reader-head").classList.add("hidden");
   $("r-body").classList.add("hidden");
@@ -3015,20 +3079,26 @@ async function pressSignIn() {
 }
 
 // The mailbox could not be loaded (offline, the service down): the reason is shown on a page of
-// its own, since the app and its notice bar are hidden, and loading is tried again by itself.
-let startRetry = null, startReport = "", starting = false;
+// its own, since the app and its notice bar are hidden, and loading is tried again by itself:
+// every 30 seconds, or with no connection every RETRY_EVERY, counted down, and at once when the
+// browser says the network is back. No connection is the network's doing, so it has no report.
+let startRetry = null, startReport = "", starting = false, startOffline = false;
+const FAIL_NOTE = "Trying again by itself every 30 seconds and when the connection returns.";
 function showStartError(e) {
-  console.error("start", e);
+  startOffline = e instanceof api.Offline;
+  if (startOffline) console.info("start", e); else console.error("start", e);
   state.signedIn = false;
   startPolling();
   const tech = Object.assign(document.createElement("span"), { className: "tech", textContent: cause(e) });
   $("fail-text").replaceChildren(FAILED.start, " ", tech);
-  startReport = errorReport("start", e);
+  startReport = startOffline ? "" : errorReport("start", e);
+  $("fail-copy").classList.toggle("hidden", startOffline);
   $("signin-none").classList.add("hidden"); $("signin-fail").classList.remove("hidden");
   $("signin").classList.remove("hidden");
   $("app").classList.add("hidden");
   clearTimeout(startRetry);
-  startRetry = setTimeout(start, 30000);
+  startRetry = setTimeout(start, startOffline ? RETRY_EVERY : 30000);
+  if (startOffline) countTries(Date.now() + RETRY_EVERY); else $("fail-note").textContent = FAIL_NOTE;
 }
 const startFailed = () => !$("signin-fail").classList.contains("hidden") && !$("signin").classList.contains("hidden");
 window.addEventListener("online", () => { if (startFailed()) start(); });
@@ -3037,6 +3107,7 @@ async function start() {
   if (starting) return;
   starting = true;
   clearTimeout(startRetry);
+  if (startOffline) countTries(0);
   try { await startUp(); } finally { starting = false; }
 }
 async function startUp() {
@@ -3048,16 +3119,23 @@ async function startUp() {
   await loadSettings();
   applyLayout(); syncSettingsForm();
   // a failure page of an earlier try stays up while this one waits, until it succeeds
-  if (!startFailed()) $("signin").classList.add("hidden");
+  const again = startFailed();
+  if (!again) $("signin").classList.add("hidden");
+  // nothing is on screen yet to tell a wait for the connection in: no request waits for it
+  api.link.waits = false;
   try {
     const s = await api.bootstrap();
-    $("signin").classList.add("hidden");
+    if (!again) $("signin").classList.add("hidden");
     $("account").textContent = s.email;
     // the address book belongs to one account; another one signed in starts it afresh
     if (s.email) await contacts.useAccount(s.email).catch(() => {});
     await files.useAccount(s.email);
-    $("app").classList.remove("hidden");
+    if (!again) $("app").classList.remove("hidden");
     await loadFolders();
+    $("signin").classList.add("hidden"); $("app").classList.remove("hidden");
+    startOffline = false;
+    if (!lostAt) { clearInterval(tryTicker); tryTicker = 0; }
+    api.link.waits = true;
     state.signedIn = true;
     startPolling();
     applyAwake();

@@ -12,6 +12,8 @@ Body: `multipart/form-data` with a single field `batchJson` containing the JSON 
 
 A `wssid` expires. A batch call sent with an expired one answers HTTP 400 with a top-level error `{"code":"EC-4003","details":{"wssid":"<token>"},"requestId":"<uuid>"}`, seen on the first call from a tab that had sat open overnight while the computer slept. What the token in `details` is (a replacement, or the one sent) is not verified; reading `mailWssid` from the mail.yahoo.com page again gives one that works. A session Yahoo™ no longer accepts answers a top-level `EC-4008`, and the same re-read recovers it unless the browser is signed out.
 
+A batch whose requests only read (every one `GET`, no files) may be asked twice, as may the sign-in page and a message's source. Such a request is given up when no answer has begun within 12 seconds (`TIMEOUTS.first`) and asked once more with the whole deadline, so one that went down a dead connection (a computer back from sleep, a network that changed) costs seconds and not the minute. One the browser could not make at all (`Failed to fetch`) is asked again while nothing gets through, as soon as the network is back, for up to a minute from when the connection was lost; past that, and for a change at once, it fails as `Offline`, which the client tells as the connection's doing. A change is never asked again, since it may have been made though its answer was lost.
+
 ## Batch envelope
 
 ```json

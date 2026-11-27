@@ -6,9 +6,9 @@ import { listParts, extract } from "./mime.js";
 import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, failure, freshFailure, recent, RETRY_FAILED } from "./cache.js";
 import { clean, fieldAtom } from "./query.js";
-import { ApiError, TIMEOUTS, Timeout, deadlined, activity, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
+import { ApiError, TIMEOUTS, Timeout, Offline, link, deadlined, activity, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
 
-export { ApiError, TIMEOUTS, Timeout, activity, normalizeFolders, isMessageId };
+export { ApiError, TIMEOUTS, Timeout, Offline, link, activity, normalizeFolders, isMessageId };
 
 const ORIGIN = "https://mail.yahoo.com";
 const BATCH = ORIGIN + "/c/ws/v3/batch";
@@ -143,7 +143,7 @@ async function readSession(force) {
     const stored = (await chrome.storage.session.get("ymSession")).ymSession;
     if (stored && Date.now() - stored.at < 6 * 3600e3) return (session = stored);
   }
-  const { body } = await timed("sign-in page", ORIGIN + "/", { credentials: "include", cache: "no-store" }, TIMEOUTS.page, r => r.text());
+  const { body } = await timed("sign-in page", ORIGIN + "/", { credentials: "include", cache: "no-store" }, TIMEOUTS.page, r => r.text(), { again: true, first: TIMEOUTS.first });
   const values = parseBootstrap(body);
   if (!values) throw new NotSignedIn();
   session = { ...values, at: Date.now() };
@@ -159,6 +159,8 @@ const uuid = () => crypto.randomUUID();
 async function batch(name, requests, retry = true, files = [], headers = {}) {
   return attempt(name, requests, files, headers, { auth: retry, rules: retry });
 }
+// A batch that only reads may be asked twice (see deadlined).
+const reads = r => r.method === "GET" && (r.requests || []).every(reads);
 async function attempt(name, requests, files, headers, tries) {
   const s = await bootstrap();
   const fill = r => ({ payloadType: "embedded", ...r, uri: r.uri.replaceAll("<mb>", s.mailboxId), ...(r.requests ? { requests: r.requests.map(fill) } : {}) });
@@ -169,8 +171,9 @@ async function attempt(name, requests, files, headers, tries) {
   const qs = new URLSearchParams({ name, appId: s.appId, wssid: s.wssid, ymreqid: uuid(), nonblocking: "true" });
   const t0 = performance.now();
   const bytes = (files || []).reduce((n, f) => n + (f.size || 0), 0);
+  const again = !files?.length && requests.every(reads);
   const { resp, body: text } = await timed(name, `${BATCH}?${qs}`, { method: "POST", body: fd, credentials: "include", headers },
-    TIMEOUTS.batch + Math.ceil(bytes / 1048576) * TIMEOUTS.perMB, r => r.text());
+    TIMEOUTS.batch + Math.ceil(bytes / 1048576) * TIMEOUTS.perMB, r => r.text(), { again, first: TIMEOUTS.first });
   const ms = Math.round(performance.now() - t0);
   if ((resp.status === 401 || resp.status === 403) && tries.auth) {
     await forgetSession();
@@ -288,7 +291,7 @@ export async function rawMessage(msgId, retry = true) {
   const s = await bootstrap();
   const qs = new URLSearchParams({ appId: s.appId, wssid: s.wssid, ymreqid: uuid() });
   const { resp, body } = await timed("message source", `${JWS}/ws/v3/mailboxes/@.id==${s.mailboxId}/messages/@.id==${msgId}/content/rawplaintext?${qs}`,
-    { credentials: "include" }, TIMEOUTS.raw, r => r.arrayBuffer());
+    { credentials: "include" }, TIMEOUTS.raw, r => r.arrayBuffer(), { again: true });
   if ((resp.status === 401 || resp.status === 403) && retry) {
     await forgetSession();
     await bootstrap(true);

@@ -15,9 +15,9 @@ import { sniffImage, dataUrl } from "./bytes.js";
 import { remember, rememberUntil } from "./cache.js";
 import { clean, fieldAtom } from "./query.js";
 import { esc } from "./text.js";
-import { ApiError, TIMEOUTS, Timeout, deadlined, activity, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
+import { ApiError, TIMEOUTS, Timeout, Offline, link, deadlined, activity, normalizeFolders, isMessageId, checkIds, refsFrom } from "./adapter.js";
 
-export { NotSignedIn, ApiError, TIMEOUTS, Timeout, activity, normalizeFolders, isMessageId };
+export { NotSignedIn, ApiError, TIMEOUTS, Timeout, Offline, link, activity, normalizeFolders, isMessageId };
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
@@ -164,20 +164,16 @@ export async function signOut() {
 // background work can stand aside (see quota).
 // Every request has a deadline (TIMEOUTS), past which it fails as a Timeout.
 // twice: a request that may be asked twice (a read, or a change of labels, which made twice is
-// made once). The first time it is given up when no answer has begun within TIMEOUTS.first, so
-// one that went down a connection that has died (a computer back from sleep, a network that
-// changed) is asked again soon on a new one, where it would else wait the whole deadline out.
+// made once). It is asked again while the connection is lost (see deadlined), and the first time
+// it is given up when no answer has begun within TIMEOUTS.first, so one that went down a
+// connection that has died (a computer back from sleep, a network that changed) is asked again
+// soon on a new one, where it would else wait the whole deadline out.
 const fetchTimed = deadlined("Gmail");
 async function timed(what, url, init, ms, read, cap = FOREGROUND, twice = false) {
-  const mine = cap !== BACKGROUND, how = { quiet: !mine };
+  const mine = cap !== BACKGROUND;
   if (mine) { foregroundBusy++; lastForeground = Date.now(); }
-  try {
-    if (twice && ms > TIMEOUTS.first) {
-      try { return await fetchTimed(what, url, init, ms, read, { ...how, first: TIMEOUTS.first }); }
-      catch (e) { if (!(e instanceof Timeout && e.early)) throw e; }
-    }
-    return await fetchTimed(what, url, init, ms, read, how);
-  } finally { if (mine) { foregroundBusy--; lastForeground = Date.now(); } }
+  try { return await fetchTimed(what, url, init, ms, read, { quiet: !mine, again: twice, first: TIMEOUTS.first }); }
+  finally { if (mine) { foregroundBusy--; lastForeground = Date.now(); } }
 }
 // What a call of the user's waits for, in the words the client shows (activity.wait); background
 // work waits unseen.
