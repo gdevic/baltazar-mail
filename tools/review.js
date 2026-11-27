@@ -2112,11 +2112,13 @@ scenario("the quoted original is part of the reply and can be answered inline", 
 });
 
 scenario("a quote from Spam keeps its images out of the app but sends them", async ({ page, calls, mock }, expect) => {
-  // also the addresses that hide behind an inline part: a srcset whose first candidate is cid:,
-  // a picture's source, and SVG painting and clipping attributes
+  // also the addresses a picture loads from besides its src: a srcset, a picture's source, and SVG
+  // painting and clipping attributes; a part that could not be inlined (cid:) cannot be shown, so
+  // it gives way to its alt text
   const T = n => `https://ecp.yusercontent.com/t-q${n}.png`;
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
   mock.patchBody = (id, m, body) => { if (id.startsWith("MSG6_")) body.html = `<p>Spam text</p><img src="${T("uote")}" width="5" height="5"><div style="width:9px;height:9px;background:url(${T("bg")})">b</div>` +
-    `<img alt="" src="cid:logo@spam" srcset="cid:logo@spam 0.25x, ${T("set")} 1x"><picture><source srcset="cid:a@spam 0.25x, ${T("source")} 1x"><img alt="" src="cid:a@spam"></picture>` +
+    `<img alt="" src="${PNG}" srcset="${T("set0")} 0.25x, ${T("set")} 1x"><picture><source srcset="${T("source0")} 0.25x, ${T("source")} 1x"><img alt="" src="${PNG}"></picture><img alt="lost-logo" src="cid:logo@spam">` +
     `<svg width="20" height="20"><rect width="10" height="10" fill="url(${T("fill")}#p)" mask="url(${T("mask")}#m)" clip-path="url(${T("clip")}#c)"/></svg>`; };
   await folder(page, "Spam");
   await page.locator("#rows .row").first().click(); await page.waitForTimeout(600);
@@ -2127,8 +2129,9 @@ scenario("a quote from Spam keeps its images out of the app but sends them", asy
   await page.waitForFunction(() => document.getElementById("st-msg").textContent.startsWith("sent"), null, { timeout: 8000 }).catch(() => {});
   const html = msgOf(calls.filter(c => c.name === "messages.saveAndSend").pop())?.simpleBody?.html || "";
   expect(!loaded.length, "no image of the Spam quote loads while writing: " + JSON.stringify(loaded));
-  expect(/src="https:\/\/ecp\.yusercontent\.com\/t-quote\.png"/.test(html) && /url\(https:\/\/ecp\.yusercontent\.com\/t-qbg\.png\)/.test(html) && /srcset="cid:logo@spam 0\.25x, https:\/\/ecp\.yusercontent\.com\/t-qset\.png 1x"/.test(html) &&
+  expect(/src="https:\/\/ecp\.yusercontent\.com\/t-quote\.png"/.test(html) && /url\(https:\/\/ecp\.yusercontent\.com\/t-qbg\.png\)/.test(html) && /srcset="https:\/\/ecp\.yusercontent\.com\/t-qset0\.png 0\.25x, https:\/\/ecp\.yusercontent\.com\/t-qset\.png 1x"/.test(html) &&
     /fill="url\(https:\/\/ecp\.yusercontent\.com\/t-qfill\.png#p\)"/.test(html) && !/data-held/.test(html), "the sent quote has them back: " + html.slice(0, 900));
+  expect(html.includes("lost-logo") && !html.includes("cid:logo@spam"), "a part that could not be inlined is its alt text: " + html.slice(0, 900));
 });
 
 scenario("the font size box sets the size it shows", async ({ page }, expect) => {
@@ -2429,6 +2432,37 @@ scenario("the symbol picker inserts at the caret, and keeps text symbols from ma
   expect(pop.fixed === 16 && pop.own.join() === want && pop.stored?.join() === want, "16 fixed symbols, then the paste and the text symbols of the user's own mail, newest first and stored: " + JSON.stringify(pop));
   expect(put.text && put.closed && undone, "a symbol goes in at the caret in text style, and Ctrl+Z takes it back: " + JSON.stringify({ ...put, undone }));
   expect(esc.pop && esc.compose, "Esc closes the picker, not the composer: " + JSON.stringify(esc));
+});
+
+// Formatted text from another app is cleaned as the editor's other HTML is, and keeps only the
+// pictures the page can show: a chat app's emoji picture gives way to its character, and nothing
+// loads from an address the page's policy refuses.
+scenario("formatted text pasted or dropped keeps only the pictures the composer can show", async ({ page, cspViolations, mock }, expect) => {
+  await newMessage(page);
+  await page.locator("#c-editor").focus(); await page.keyboard.press("Control+Home"); await page.keyboard.type("Hi ");
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+  const chat = `<html><body><!--StartFragment--><span class="selectable-text" style="position:fixed;top:0;color:rgb(1, 2, 3)">Bok <img alt="🇭🇷" class="emoji" src="https://web.whatsapp.com/emoji/v1/16/0/2/single/w/40/01f1ed_01f1f7.png" style="background-image:url(https://web.whatsapp.com/sprite.png)"></span>` +
+    `<img src="https://example.com/track.gif" width="1" height="1"><img src="https://ecp.yusercontent.com/t-paste.png" srcset="https://example.com/big.png 2x" width="5" height="5"><img src="${PNG}" alt="dot">` +
+    `<div style="background:url(https://example.com/bg.png) red">box</div><!--EndFragment--></body></html>`;
+  const send = (type, html) => page.locator("#c-editor").evaluate((e, [type, html]) => {
+    const d = new DataTransfer(); d.setData("text/html", html); d.setData("text/plain", "plain");
+    const r = e.getBoundingClientRect();
+    e.dispatchEvent(type === "paste" ? new ClipboardEvent("paste", { clipboardData: d, bubbles: true, cancelable: true })
+      : new DragEvent("drop", { dataTransfer: d, bubbles: true, cancelable: true, clientX: r.right - 4, clientY: r.bottom - 4 }));
+  }, [type, html]);
+  await send("paste", chat); await page.waitForTimeout(300);
+  const pasted = await page.locator("#c-editor").evaluate(e => ({ text: e.textContent, html: e.innerHTML, imgs: [...e.querySelectorAll("img")].map(i => i.getAttribute("src").slice(0, 30)) }));
+  await page.keyboard.press("Control+z");
+  const undone = await page.locator("#c-editor").evaluate(e => !e.textContent.includes("Bok") && e.textContent.includes("Hi"));
+  await send("drop", '<p>star <img alt="★" src="https://example.com/star.png"></p>'); await page.waitForTimeout(300);
+  const dropped = await page.locator("#c-editor").evaluate(e => ({ text: e.textContent, imgs: e.querySelectorAll("img").length }));
+  const refused = cspViolations.filter(v => /whatsapp|example\.com/.test(v));
+  expect(/Hi\sBok 🇭🇷/.test(pasted.text) && !pasted.text.includes("plain"), "the emoji picture is its character, and the formatted text is what goes in: " + JSON.stringify(pasted.text));
+  expect(pasted.imgs.join() === ["https://ecp.yusercontent.com/t", PNG.slice(0, 30)].join() && !/srcset|example\.com|whatsapp/.test(pasted.html), "only the pictures the page can show stay, without addresses it cannot: " + pasted.html);
+  expect(!/position|selectable-text|class="emoji"|initial/.test(pasted.html) && /color: rgb\(1, 2, 3\)/.test(pasted.html) && /background: (none )?red/.test(pasted.html), "the cleaning of the editor's HTML applies, and the formatting stays: " + pasted.html);
+  expect(undone, "Ctrl+Z takes the paste back");
+  expect(dropped.text.includes("star ★") && !dropped.imgs, "a drop is cleaned as a paste is: " + JSON.stringify(dropped));
+  expect(!refused.length && !mock.images.some(i => /example|whatsapp/.test(i.url)), "nothing is loaded from where the page may not: " + JSON.stringify(refused));
 });
 
 scenario("font choices show one name and carry a fallback", async ({ page, calls }, expect) => {

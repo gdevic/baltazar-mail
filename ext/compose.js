@@ -167,14 +167,27 @@ export function init(h) {
   c.addEventListener("paste", e => { symbols.pasted(e.clipboardData?.getData("text/plain")); });
   $("c-imgfile").onchange = () => { insertImages([...$("c-imgfile").files]); $("c-imgfile").value = ""; };
   const ed = $("c-editor");
+  // A picture pasted goes in as one; formatted text is cleaned like any other HTML put into the
+  // editor (insertSafe). Plain text needs no cleaning.
   ed.addEventListener("paste", e => {
     const imgs = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
-    if (imgs.length) { e.preventDefault(); insertImages(imgs); }
+    if (imgs.length) { e.preventDefault(); insertImages(imgs); return; }
+    const html = e.clipboardData?.getData("text/html");
+    if (html) { e.preventDefault(); insertSafe(html); }
   });
-  // Dropped on the editor: images go inline at the drop point, anything else is attached.
+  // Text dragged within the editor is already clean, and moves as the browser moves it.
+  let ownDrag = false;
+  ed.addEventListener("dragstart", () => { ownDrag = true; });
+  ed.addEventListener("dragend", () => { ownDrag = false; });
+  // Dropped on the editor: images go inline at the drop point, anything else is attached, and
+  // formatted text from elsewhere is cleaned as a paste is.
   ed.addEventListener("drop", e => {
     const all = [...(e.dataTransfer?.files || [])];
-    if (!all.length) return;
+    if (!all.length) {
+      const html = !ownDrag && e.dataTransfer?.getData("text/html");
+      if (html) { e.preventDefault(); placeCaretAt(e.clientX, e.clientY); insertSafe(html); }
+      return;
+    }
     e.preventDefault(); e.stopPropagation(); c.classList.remove("drop");
     const imgs = all.filter(f => f.type.startsWith("image/")), rest = all.filter(f => !f.type.startsWith("image/"));
     if (imgs.length) { placeCaretAt(e.clientX, e.clientY); insertImages(imgs); }
@@ -924,6 +937,62 @@ function releaseImages(root) {
   }
 }
 
+// The editor keeps only pictures the app's page can show: those stored in the message (data:) and
+// those on the edition's image hosts (api.IMAGE_SRC, which the page's policy lets load). Any other
+// could not be seen while writing yet would be sent, so a picture gives way to its alt text (the
+// character itself, for emoji that chat apps and web pages draw as pictures), and any other address
+// something would load a picture from is dropped. A reference within the text (url(#id)) loads
+// nothing and stays.
+const IMAGE_HOSTS = api.IMAGE_SRC.split(/\s+/).map(s => s.match(/^([a-z][a-z0-9+.-]*:)(?:\/\/(\*\.)?([^/]+))?$/i)).filter(Boolean);
+function canShow(src) {
+  const v = String(src ?? "").trim();
+  if (/^data:/i.test(v)) return true;
+  let u; try { u = new URL(v); } catch { return false; }
+  return IMAGE_HOSTS.some(([, scheme, sub, host]) => u.protocol === scheme.toLowerCase() &&
+    (!host || (sub ? u.hostname.endsWith(`.${host.toLowerCase()}`) : u.hostname === host.toLowerCase())));
+}
+// Addresses in a CSS value as the browser reads it, so escapes are already resolved.
+const cssAddresses = v => [...v.matchAll(/url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)\s]*))\s*\)/gi)].map(m => m[1] ?? m[2] ?? m[3])
+  .concat(/image-set\(/i.test(v) ? [...v.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m => m[1]) : []);
+const cssShown = v => cssAddresses(v).every(a => a.startsWith("#") || canShow(a));
+// A srcset's addresses, read as the browser reads them: an address runs to the next space (a data:
+// address holds commas), and its size runs to the next comma.
+function srcsetAddresses(v) {
+  const out = [];
+  for (let s = v; (s = s.replace(/^[\s,]+/, ""));) {
+    const a = s.match(/^\S+/)[0]; s = s.slice(a.length);
+    out.push(a.replace(/,+$/, ""));
+    if (!a.endsWith(",")) s = s.replace(/^[^,]*/, "");
+  }
+  return out;
+}
+let cssProbe = null;
+function keepShown(root) {
+  cssProbe ||= document.createElement("i");
+  // a picture already held back (a restored draft) is judged by the address it will have
+  for (const img of root.querySelectorAll("img")) if (!canShow(img.getAttribute("src") ?? img.getAttribute(`${HELD}src`))) img.replaceWith(img.getAttribute("alt") || "");
+  for (const el of root.querySelectorAll("*")) {
+    // none, where the property takes it, keeps a shorthand such as background whole
+    for (const p of [...el.style || []]) if (!cssShown(el.style.getPropertyValue(p))) {
+      el.style.setProperty(p, "none");
+      if (!cssShown(el.style.getPropertyValue(p))) el.style.removeProperty(p);
+    }
+    if (el.getAttribute("style") === "") el.removeAttribute("style");
+    for (const a of IMAGE_ATTRS) {
+      const v = el.getAttribute(a); if (v == null || a === "style") continue;
+      let shown;
+      if (CSS_ATTRS.includes(a)) { cssProbe.style.cssText = ""; cssProbe.style.setProperty(a, v); shown = cssShown(cssProbe.style.getPropertyValue(a)); }
+      else if (a === "srcset") shown = srcsetAddresses(v).every(canShow);
+      else if (a === "href" || a === "xlink:href") shown = el.namespaceURI !== "http://www.w3.org/2000/svg" || el.localName === "a" || v.trim().startsWith("#") || canShow(v);
+      else shown = canShow(v);
+      if (!shown) el.removeAttribute(a);
+    }
+  }
+}
+
+// Formatted text pasted or dropped goes in at the caret, cleaned as the editor's other HTML is.
+function insertSafe(html) { exec("insertHTML", editorSafe(html, { images: draft.images })); }
+
 function editorSafe(html, { images = true } = {}) {
   const frag = globalThis.DOMPurify.sanitize(html, { RETURN_DOM_FRAGMENT: true, SANITIZE_NAMED_PROPS: true,
     FORBID_TAGS: ["style", "link", "meta", "form", "input", "button", "textarea", "select", "option"], FORBID_ATTR: ["id", "name", "ping"] });
@@ -939,6 +1008,7 @@ function editorSafe(html, { images = true } = {}) {
     for (const p of ["position", "z-index", "inset", "top", "right", "bottom", "left"]) el.style.removeProperty(p);
     if (!el.getAttribute("style")?.trim()) el.removeAttribute("style");
   }
+  keepShown(frag);
   if (!images) holdImages(frag);
   const box = document.createElement("div");
   box.appendChild(frag);
