@@ -1298,8 +1298,10 @@ scenario("a folder delete Yahoo refuses while its list lags is tried again", asy
   await page.locator("#folder-list .folder").first().click(); await page.waitForTimeout(400);
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await page.waitForTimeout(800);
   page.once("dialog", d => d.accept());
-  await menuOf(page, folderRow(page, "Lag")); await pickMenu(page, "Delete"); await page.waitForTimeout(3500);
-  const gone = !(await folderRow(page, "Lag").count()), notice = await page.locator("#notice").isVisible();
+  await menuOf(page, folderRow(page, "Lag")); await pickMenu(page, "Delete");
+  // the list is redrawn once the second try is answered, which a slow runner takes seconds for
+  const gone = await folderRow(page, "Lag").waitFor({ state: "detached", timeout: 8000 }).then(() => true, () => false);
+  const notice = await page.locator("#notice").isVisible();
   expect(JSON.stringify(ops) === JSON.stringify([["refused", "95"], ["delete", "95"]]) && gone && !notice, "the second try deletes it, with no error shown: " + JSON.stringify({ ops, gone, notice }));
 }, { settings: { pollSec: 600 } });
 
