@@ -582,13 +582,16 @@ const lastMod = () => modsOf().at(-1);
   mock.fail = { status: 401, times: 2 };
   const r2 = await outcome(api.folders());
   ok(r2.e instanceof api.NotSignedIn, "a 401 that renewal cannot fix means signed out: " + r2.e?.name);
-  // a renewal that never reached Google is not a lost session: the browser's reason is kept, the account too
+  // a renewal that never reached Google is not a lost session but the connection's failure, the
+  // account kept (told at once here, as at the client's start, rather than after a minute's asking)
   silentOk = true; await api.bootstrap();
   silentDown = "Authorization page could not be loaded.";
   mock.fail = { status: 401, times: 1 };
+  api.link.waits = false;
   const rd = await outcome(api.folders());
+  api.link.waits = true;
   silentDown = "";
-  ok(rd.e && !(rd.e instanceof api.NotSignedIn) && /could not be reached.*could not be loaded/.test(rd.e.message) && local.gmAccount === "me@gmail.com", "a renewal Google never answered is an ordinary error with the reason: " + JSON.stringify({ name: rd.e?.name, message: rd.e?.message, local }));
+  ok(rd.e instanceof api.Offline && local.gmAccount === "me@gmail.com", "a renewal Google never answered is the connection's failure: " + JSON.stringify({ name: rd.e?.name, message: rd.e?.message, local }));
   const rd2 = await outcome(api.folders());
   ok(rd2.value?.folders.length > 0 && store.gmToken?.access_token, "the next call renews again and succeeds: " + (rd2.e?.message || store.gmToken?.access_token));
   // Google's refusal of a silent renewal is a lost session
@@ -733,9 +736,11 @@ const lastMod = () => modsOf().at(-1);
   api.TIMEOUTS.renew = 150;
   silentGate = new Promise(() => {});
   mock.fail = { status: 401, times: 1 };
+  api.link.waits = false;
   const th = realNow(), rh = await outcome(api.folders()), hung = realNow() - th;
+  api.link.waits = true;
   silentGate = null; api.TIMEOUTS.renew = whole;
-  ok(rh.e && !(rh.e instanceof api.NotSignedIn) && /could not be reached \(no answer within/.test(rh.e.message) && hung < 3000 && local.gmAccount === "me@gmail.com", "a silent flow with no answer is given up as a renewal that never reached Google: " + JSON.stringify({ name: rh.e?.name, message: rh.e?.message, hung }));
+  ok(rh.e instanceof api.Offline && hung < 3000 && local.gmAccount === "me@gmail.com", "a silent flow with no answer is given up as a renewal that never reached Google: " + JSON.stringify({ name: rh.e?.name, message: rh.e?.message, hung }));
   const rh2 = await outcome(api.folders());
   ok(rh2.value?.folders.length > 0 && store.gmToken?.access_token, "and the next call renews: " + (rh2.e?.message || store.gmToken?.access_token));
   unwatch();

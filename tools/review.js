@@ -1629,10 +1629,12 @@ scenario("a connection lost for a minute is told as the network's, tried every 1
   await page.clock.fastForward(10500);
   await page.waitForFunction(b => !document.getElementById("reader-head").classList.contains("hidden") && document.getElementById("r-subject").textContent !== b, before, { timeout: 8000 }).catch(() => {});
   const back = { notice: await notice(page), subject: await page.locator("#r-subject").textContent() };
-  expect(/^No connection to Yahoo: the network or Yahoo is not answering\. Nothing is wrong with the app or your mail\. Trying again in 1[45] s\. Try now$/.test(down.notice) && down.info && !down.copy,
+  // the count goes on in real time too, so a slow run sees it lower
+  const left = text => Number(/Trying again in (\d+) s\./.exec(text)?.[1] || 0);
+  expect(/^No connection to Yahoo: the network or Yahoo is not answering\. Nothing is wrong with the app or your mail\. Trying again in \d+ s\. Try now$/.test(down.notice) && left(down.notice) >= 10 && down.info && !down.copy,
     "a minute on, one calm notice says it is the connection, and when it tries again: " + JSON.stringify(down));
   expect(down.reader === "No connection to Yahoo: the network or Yahoo is not answering. The message opens by itself once the connection is back.", "the reader says so too: " + down.reader);
-  expect(/Trying again in (9|10) s\./.test(counted), "the notice counts down: " + counted);
+  expect(left(counted) >= 1 && left(counted) <= left(down.notice) - 5, "the notice counts down: " + JSON.stringify([down.notice, counted]));
   expect(!back.notice && back.subject !== before, "the try that gets through clears the notice and opens the message: " + JSON.stringify(back));
 }, { allow: /ERR_INTERNET_DISCONNECTED|Blocked script execution in 'about:blank'/ });
 

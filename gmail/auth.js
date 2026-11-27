@@ -23,8 +23,10 @@
 // A silent renewal fails in two ways that must not look alike. When Google answers it with a
 // refusal (login_required and the like, or a page that needs the user), the session is gone and
 // NotSignedIn sends the user to the sign-in panel. When Google was never reached (the page could
-// not be loaded, a timeout, a profile check the server failed), it is an ordinary Error carrying
-// the browser's reason, which the client reports like any connection failure and tries again.
+// not be loaded, or no answer came in time), the renewal is asked again while the connection is
+// lost, as a request is, and past that fails as the connection's (Offline), which the client tells
+// as the network's doing and tries again; one that fails while other requests get through is an
+// ordinary Error carrying the browser's reason. A profile check the server failed is one too.
 //
 // A sign-in that fails carries a code (NotSignedIn.code), which the sign-in page turns into a
 // sentence and a fix (setup.js, explain). When Google gave a token but the account could not be
@@ -32,7 +34,7 @@
 // made), the token is held in memory, and the next press of the button confirms it without
 // opening Google's window again.
 
-import { TIMEOUTS, activity } from "./adapter.js";
+import { TIMEOUTS, activity, deadlined, untilThrough, Unsent, Offline } from "./adapter.js";
 
 const SCOPE = "https://mail.google.com/";
 const AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -99,25 +101,33 @@ function authUrl(clientId, interactive, email) {
   return { url: `${AUTH}?${p}`, state };
 }
 
-// Runs the flow and reads the token out of the redirect's fragment.
-async function flow(interactive, email) {
+// Runs the flow and reads the token out of the redirect's fragment. ahead: a renewal beside
+// requests that still have a token, which does not wait for a lost connection.
+async function flow(interactive, email, ahead = false) {
   const { id } = await client();
   if (!id) throw new NotSignedIn("no Google client is set up for this copy", "setup");
   const { url, state } = authUrl(id, interactive, email);
   let redirect;
-  try {
-    const asked = chrome.identity.launchWebAuthFlow({ url, interactive });
-    redirect = await (interactive ? asked : answered(asked, TIMEOUTS.renew));
-  } catch (e) {
-    const why = String(e?.message || e);
-    if (interactive) {
+  if (interactive) {
+    try { redirect = await chrome.identity.launchWebAuthFlow({ url, interactive }); }
+    catch (e) {
+      const why = String(e?.message || e);
       // the browser's words for a window closed by the user, and for a page that would not load
       if (/did not approve/i.test(why)) throw new NotSignedIn(`Google's window was closed before the sign-in finished (${why})`, "closed");
       if (/could not be loaded|timed? ?out/i.test(why)) throw new NotSignedIn(`Google's sign-in page could not be loaded (${why})`, "unreachable");
       throw new NotSignedIn(`Google sign-in did not complete (${why})`, "window");
     }
-    if (/interaction|approve|not signed in/i.test(why)) throw new NotSignedIn(undefined, "session");
-    throw new Error(`Google's sign-in could not be reached (${why})`);
+  } else {
+    // a silent renewal that never reached Google is asked again while the connection is lost, as
+    // a request is (untilThrough), and past that is the connection's failure
+    redirect = await untilThrough("Gmail", async () => {
+      try { return await answered(chrome.identity.launchWebAuthFlow({ url, interactive }), TIMEOUTS.renew); }
+      catch (e) {
+        const why = String(e?.message || e);
+        if (/interaction|approve|not signed in/i.test(why)) throw new NotSignedIn(undefined, "session");
+        throw new Unsent(new Error(`Google's sign-in could not be reached (${why})`));
+      }
+    }, !ahead);
   }
   const q = new URLSearchParams(new URL(redirect).hash.slice(1));
   if (q.get("state") !== state) throw new NotSignedIn("the sign-in answer did not match the request", "answer");
@@ -133,11 +143,13 @@ async function flow(interactive, email) {
   return { access_token: access, expires: Date.now() + (Number(q.get("expires_in")) || 3600) * 1000 };
 }
 
+// The account a token is for, asked as any read is (see deadlined).
+const fetchTimed = deadlined("Gmail");
 async function profileEmail(access) {
-  const resp = await fetch(PROFILE, { headers: { Authorization: `Bearer ${access}` }, signal: AbortSignal.timeout(30000) });
-  if (resp.ok) return (await resp.json()).emailAddress || "";
+  const { resp, body } = await fetchTimed("account check", PROFILE, { headers: { Authorization: `Bearer ${access}` } }, 30000, r => r.text(), { again: true, first: TIMEOUTS.first });
   let doc = null;
-  try { doc = await resp.json(); } catch { /* no body to read */ }
+  try { doc = JSON.parse(body); } catch { /* no body to read */ }
+  if (resp.ok) return doc?.emailAddress || "";
   const why = resp.status === 403 ? refusal(doc) : "";
   if (why === "api-off") throw new NotSignedIn("Google signed you in, but the Gmail API is off in the project of this client", "api-off");
   if (why === "scope") throw new NotSignedIn("Google gave no permission to use Gmail", "scope");
@@ -176,13 +188,13 @@ async function usable() {
 function renewAhead(t) {
   if (t.expires - Date.now() > RENEW_AHEAD || pending || aheadRefused === t.access_token || Date.now() - aheadAt < AHEAD_GAP) return;
   aheadAt = Date.now();
-  renewed({ force: true }).catch(e => { if (e instanceof NotSignedIn) aheadRefused = t.access_token; });
+  renewed({ force: true, ahead: true }).catch(e => { if (e instanceof NotSignedIn) aheadRefused = t.access_token; });
 }
 
 // A token from Google's flow, or the stored one when it works and none is forced. Callers that
 // ask at the same time share one flow, except that an interactive request waits for a silent one
 // to settle, then runs its own.
-async function renewed({ interactive = false, force = false } = {}) {
+async function renewed({ interactive = false, force = false, ahead = false } = {}) {
   if (pending && (pendingInteractive || !interactive)) return pending;
   if (pending) await pending.catch(() => {});
   const began = epoch;
@@ -194,7 +206,7 @@ async function renewed({ interactive = false, force = false } = {}) {
       if (!want) throw new NotSignedIn();
       if (!force && works(token, want)) return token;
     }
-    const t = interactive && held?.expires - Date.now() > HELD_AHEAD ? held : await flow(interactive, want);
+    const t = interactive && held?.expires - Date.now() > HELD_AHEAD ? held : await flow(interactive, want, ahead);
     const email = await confirmed(t, interactive);
     if (epoch !== began) throw new NotSignedIn();
     if (want && !same(email, want)) throw new NotSignedIn(`Google renewed the sign-in for ${email}, not ${want}; sign in again`, "account");
@@ -219,7 +231,7 @@ async function confirmed(t, interactive) {
     if (e instanceof NotSignedIn && e.code === "api-off") { held = t; e.held = true; throw e; }
     if (interactive && !(e instanceof NotSignedIn)) {
       held = t;
-      const why = e instanceof TypeError ? `Google could not confirm the account (${e.message})` : e.message;
+      const why = e instanceof TypeError || e instanceof Offline ? `Google could not confirm the account (${e.message})` : e.message;
       throw Object.assign(new NotSignedIn(why, "unconfirmed"), { held: true });
     }
     if (t === held) held = null;

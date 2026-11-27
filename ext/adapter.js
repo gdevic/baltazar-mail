@@ -35,9 +35,10 @@ const noIds = what => String(what).replace(/[A-Za-z0-9_-]{10,}/g, w => /\d/.test
 const clock = at => new Date(at).toTimeString().slice(0, 8);
 export const activity = {
   // logged: whether the wait is kept for the report when it ends (one that a request's own entry
-  // tells of is not). since: when it began, where that was before it is told of.
-  wait(text, until = 0, { logged = true, since = Date.now() } = {}) {
-    const w = { text, since, until };
+  // tells of is not). since: when it began, where that was before it is told of. lead: the wait
+  // every other one then waits for (a lost connection), so it is the one told.
+  wait(text, until = 0, { logged = true, since = Date.now(), lead = false } = {}) {
+    const w = { text, since, until, lead };
     waits.add(w); tell();
     return () => {
       if (!waits.delete(w)) return;
@@ -46,10 +47,11 @@ export const activity = {
       tell();
     };
   },
-  // The wait to tell of: the one that ends last, or where none names its end, the oldest.
+  // The wait to tell of: a leading one, else the one that ends last, or where none names its end,
+  // the oldest.
   waiting() {
     const all = [...waits], timed = all.filter(w => w.until);
-    return (timed.length ? timed.reduce((a, b) => (b.until > a.until ? b : a)) : all[0]) || null;
+    return all.find(w => w.lead) || (timed.length ? timed.reduce((a, b) => (b.until > a.until ? b : a)) : all[0]) || null;
   },
   watch(fn) { watchers.add(fn); return () => watchers.delete(fn); },
   // A request that has ended: how is its HTTP status, or the words for a request with no answer.
@@ -70,11 +72,12 @@ export const activity = {
 // ends that. A request that may be asked twice is asked again while the connection is lost: as
 // soon as the browser says the network is back or another request gets through, else after a
 // pause that grows to PAUSE_MAX, for up to LOST_FOR from when the connection was lost; the client
-// is told of that wait meanwhile. Past LOST_FOR, or for a request that may not be asked twice, it
-// fails as Offline, which the client tells as the network's doing, not an error of its own. One
-// that keeps failing while others get through is not the connection's: its own error stands.
-// link.waits: false while the client has nothing on screen to tell a wait in (its start), so a
-// request that does not get through fails as Offline at once.
+// is told of that wait meanwhile, before any other. Past LOST_FOR, or for a request that may not
+// be asked twice, it fails as Offline, which the client tells as the network's doing, not an error
+// of its own. One that keeps failing while others get through is not the connection's: its own
+// error stands. link.waits: false while the client has nothing on screen to tell a wait in (its
+// start), so a request that does not get through fails as Offline at once. What reaches the
+// provider other than by fetch (Google's sign-in window) is asked the same way (untilThrough).
 export const LOST_FOR = 60000;
 const PAUSE_MAX = 5000;
 export class Offline extends Error {
@@ -100,25 +103,20 @@ function pauseFor(ms) {
   return new Promise(ok => { const done = () => { clearTimeout(t); wakers.delete(done); ok(); }; const t = setTimeout(done, ms); wakers.add(done); });
 }
 // The one wait told of while requests are being asked again.
-function askingAgain(provider) { if (!asking++) lostWait = activity.wait(`no connection to ${provider}, asking again`, 0, { since: lostSince }); }
+function askingAgain(provider) { if (!asking++) lostWait = activity.wait(`no connection to ${provider}, asking again`, 0, { since: lostSince, lead: true }); }
 function doneAsking() { if (!--asking) { lostWait?.(); lostWait = null; } }
-class Unsent extends Error { constructor(cause) { super(cause.message); this.cause = cause; } }
+// A try that did not get through; cause is the error it ends in when that is not the connection's.
+export class Unsent extends Error { constructor(cause) { super(cause.message); this.name = "Unsent"; this.cause = cause; } }
 
-// The provider's fetch: fetch plus reading the body, both inside the deadline. read(resp) returns
-// the body; a deadline that passes is a Timeout naming the provider. A request still unanswered
-// after TIMEOUTS.slow is a wait the client can tell of, until its answer begins to come (a large
-// attachment being received is no wait for an answer), unless it is quiet (work nobody waits
-// for). again: the request may be asked twice (a read), so it is asked again while the connection
-// is lost (see above). first, for such a request: it is given up, the first time, when no answer
-// has begun within that time, and asked again at once, which leaves a dead connection soon; an
-// answer that has begun has the whole deadline to arrive. Every try is noted when it ends.
-export const deadlined = provider => async (what, url, init, ms, read, { quiet = false, again = false, first = 0 } = {}) => {
+// attempt() asked until it gets through, while the connection is lost (see above): it throws
+// Unsent for a try that did not get through, and its answer, or any other error, ends the asking.
+// again: it may be asked twice.
+export async function untilThrough(provider, attempt, again) {
   let failed = 0, told = false;
   try {
     for (let n = 0; ; n++) {
-      try { return await ask(provider, what, url, init, ms, read, quiet, again && !n ? first : 0); }
+      try { const v = await attempt(); gotThrough(); return v; }
       catch (e) {
-        if (e instanceof Timeout && e.early) continue;
         if (!(e instanceof Unsent)) throw e;
         notThrough();
         failed ||= Date.now();
@@ -130,6 +128,23 @@ export const deadlined = provider => async (what, url, init, ms, read, { quiet =
       }
     }
   } finally { if (told) doneAsking(); }
+}
+
+// The provider's fetch: fetch plus reading the body, both inside the deadline. read(resp) returns
+// the body; a deadline that passes is a Timeout naming the provider. A request still unanswered
+// after TIMEOUTS.slow is a wait the client can tell of, until its answer begins to come (a large
+// attachment being received is no wait for an answer), unless it is quiet (work nobody waits
+// for). again: the request may be asked twice (a read), so it is asked again while the connection
+// is lost (see above). first, for such a request: it is given up, the first time, when no answer
+// has begun within that time, and asked again at once, which leaves a dead connection soon; an
+// answer that has begun has the whole deadline to arrive. Every try is noted when it ends.
+export const deadlined = provider => (what, url, init, ms, read, { quiet = false, again = false, first = 0 } = {}) => {
+  let early = again ? first : 0;
+  return untilThrough(provider, async () => {
+    const f = early; early = 0;
+    try { return await ask(provider, what, url, init, ms, read, quiet, f); }
+    catch (e) { if (e instanceof Timeout && e.early) return ask(provider, what, url, init, ms, read, quiet, 0); throw e; }
+  }, again);
 };
 async function ask(provider, what, url, init, ms, read, quiet, first) {
   const whole = AbortSignal.timeout(ms), early = first > 0 && first < ms ? new AbortController() : null;
